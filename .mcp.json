@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "archetype-portal": {
+      "type": "http",
+      "url": "${ARCHETYPE_PORTAL_URL}/mcp",
+      "headers": {
+        "Authorization": "Bearer ${ARCHETYPE_API_KEY}"
+      }
+    }
+  }
+}
