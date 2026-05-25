@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "test -n \"$ARCHETYPE_PORTAL_URL\" && test -n \"$ARCHETYPE_API_KEY\" || echo 'archetype-feature-validation: ARCHETYPE_PORTAL_URL and ARCHETYPE_API_KEY env vars are not set — portal calls will fail until they are configured.'"
+            "command": "test -f \"$CLAUDE_PLUGIN_DATA/auth.json\" || echo 'archetype: not connected. Run /archetype:validation to start the interactive login wizard.'"
           }
         ]
       }

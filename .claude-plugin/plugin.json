@@ -1,8 +1,15 @@
 {
-  "name": "archetype-feature-validation",
+  "name": "archetype",
   "description": "Plugin for Run Feature Validation Testing through Synthetic Archetype",
   "version": "0.0.1",
   "author": {
     "name": "Synthetic Archetype"
+  },
+  "mcpServers": {
+    "archetype-setup": {
+      "type": "stdio",
+      "command": "python3",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/setup-server.py"]
+    }
   }
 }
