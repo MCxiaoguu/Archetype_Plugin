@@ -181,8 +181,9 @@ whose raw events exceed 8 MB (Mongo 16 MB doc limit headroom).
 
 ```
 Archetype_Backend/
-├── api/routes_plugin.py            # blueprint, request validation, HTTP mapping
-├── services/plugin_run_service.py  # orchestration + result ingestion
+├── api/routes_plugin.py            # blueprint, request validation, HTTP mapping (new domain)
+├── services/plugin_run_service.py  # run orchestration + result ingestion (new domain)
+├── services/persona_service.py     # EXTENDED in place: replay-persona functions
 ├── services/replay/
 │   ├── __init__.py
 │   ├── ingest.py                   # store + validate sessions, pool hash
@@ -190,6 +191,11 @@ Archetype_Backend/
 │   └── fixtures.py                 # auto-seed loader
 └── data/dummy_replays/             # 3 handcrafted rrweb sessions (JSON)
 ```
+
+Reuse-first: new files exist only for the genuinely new replay domain and the
+plugin-run orchestration; persona persistence, LLM plumbing, result logging,
+analytics, finalization, and watchdog are all existing modules extended or
+called, never duplicated.
 
 `app.py` registers the blueprint in the existing list (silent-skip import
 pattern preserved).
@@ -229,10 +235,15 @@ click; backtrack = revisiting a previous `$pageview` href within the session.
 Digest renders each session's summary as compact prose (journey, dwell,
 friction moments, viewport/device hint) concatenated across the pool, capped
 ~2000 tokens. Passed as `user_description` to `generate_persona`. Persisted
-doc = full generator output + `{user_id, pool_id: null, source: "replay",
-replay_pool_hash, replay_session_ids, created_at}` into
-`Persona.user_personas` (direct insert; does not use `_persist_persona_doc`,
-which drops generator fields).
+via the existing `_persist_persona_doc`, **extended in place** with an opt-in
+`include_generator_fields: bool = False` parameter (default preserves current
+callers exactly) that additionally persists `generated_episodes`,
+`generated_chunks`, `self_description`, `browsing_habits`, `starting_mood`,
+`start_url` plus the provenance fields `{source: "replay", replay_pool_hash,
+replay_session_ids}` — fixing the known field-dropping gap at its source
+rather than adding a parallel insert path. The replay-persona functions
+(`build_digest`, `ensure_replay_persona`) live in `services/persona_service.py`,
+the canonical persona service.
 
 ### 3.4 Mongo data models (new/extended)
 

@@ -16,6 +16,7 @@
 - Both repos commit to `main`, small commits per task, message style: short imperative summary (see `git log`), trailer `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>`.
 - Endpoint tests use the dev auth bypass: env `DEV_MODE=1`, `FLASK_ENV` unset, identity via `X-User-Id` header (`infrastructure/auth/jwt_validator.py:25-43`).
 - Test user ids in Mongo-touching tests: prefix `plugintest-` + uuid, so cleanup is targeted; each test cleans up its own docs in teardown (delete by user_id).
+- **Reuse-first principle (applies to every task):** before writing a new module or function, READ the existing module that owns the responsibility and extend it in place — new files only for genuinely new domains (replay parsing is one; persona persistence is not). When extending a shared function, add opt-in parameters with defaults that preserve existing-caller behavior exactly. If you find yourself re-implementing something the backend already does (doc creation, LLM call plumbing, Mongo helpers), stop and wire the existing one instead.
 
 **Canonical DOM/URL vocabulary** (shared by fixtures ⇄ demo app ⇄ parser tests — single source of truth, do not improvise):
 - Base URL `http://localhost:8321/`; SPA-ish pageview hrefs: `/`, `/#plans`, `/#signup`.
@@ -228,19 +229,19 @@ Run: `cd BE && uv run python -m pytest _tests/test_replay_ingest.py -v` → FAIL
 
 - [ ] **Step 3: Green + commit** — `git add services/replay/ _tests/test_replay_ingest.py && git commit -m "replay ingestion service with auto-seed fixtures"`
 
-### Task 2.2: Replay-derived persona service (TDD, Mongo + real Gemini)
+### Task 2.2: Replay-derived persona functions (TDD, Mongo + real Gemini)
 
 **Files:**
-- Create: `BE/services/replay_persona_service.py`
+- Modify: `BE/services/persona_service.py` (the canonical persona service — extend in place, do NOT create a parallel service)
 - Test: `BE/_tests/test_replay_persona.py`
 
 - [ ] **Step 1: Failing tests** — (a) `build_digest(pool_docs) -> str`: pure; contains journey lines, rage-click and hesitation mentions, capped 8000 chars; (b) `ensure_replay_persona(user_id, target_url)`: uses `gemini_client` conftest fixture pattern (skips without `GEMINI_API_KEY`); first call generates + persists to `Persona.user_personas` with `source="replay"`, `replay_pool_hash`, `replay_session_ids`, and full generator fields (`generated_episodes` non-empty — asserts the §3.3 persistence-gap fix); second call returns the cached doc without regeneration (assert same `user_persona_id`; guard: monkeypatch-free — assert wall time of 2nd call < 5 s, far below a Gemini round-trip but tolerant of Atlas latency); after ingesting one more fixture session (pool hash changes), a third call regenerates (different `user_persona_id`). Teardown deletes persona + replay docs for the test user.
 
 Run: `cd BE && uv run python -m pytest _tests/test_replay_persona.py -v` → FAIL
 
-- [ ] **Step 2: Implement.** `ensure_replay_persona`: pool = `autoseed_if_empty` + `pool_for_user` → hash → lookup `user_personas` where `{user_id, source: "replay", replay_pool_hash: hash, isDeleted: {"$ne": True}}` → on miss call `persona.generator.generate_persona(user_description=digest, need=_infer_need(digest), start_url=target_url)` (keyword-only, §3.3; `_infer_need` returns the fallback string `"evaluate whether this product fits my workflow"` — YAGNI: no extra LLM call) → insert full dict + provenance fields directly (NOT `_persist_persona_doc`).
+- [ ] **Step 2: Implement** (both in `services/persona_service.py`). `ensure_replay_persona`: pool = `autoseed_if_empty` + `pool_for_user` → hash → lookup `user_personas` where `{user_id, source: "replay", replay_pool_hash: hash, isDeleted: {"$ne": True}}` → on miss call `persona.generator.generate_persona(user_description=digest, need=_infer_need(digest), start_url=target_url)` (keyword-only, §3.3; `_infer_need` returns the fallback string `"evaluate whether this product fits my workflow"` — YAGNI: no extra LLM call) → persist via `_persist_persona_doc`, **extended in place** with a new opt-in parameter `include_generator_fields: bool = False` (default preserves every existing caller byte-for-byte) that, when True, also persists `generated_episodes`, `generated_chunks`, `self_description`, `browsing_habits`, `starting_mood`, `start_url` — this fixes the known field-dropping gap at its source instead of adding a parallel insert path. Pass the provenance fields (`source="replay"`, `replay_pool_hash`, `replay_session_ids`) through `_persist_persona_doc`'s existing extras mechanism (or add them to the doc dict it builds when the new flag is on).
 
-- [ ] **Step 3: Green + commit** — `git commit -m "replay-derived persona service (LLM, pool-hash cached)"`
+- [ ] **Step 3: Green + regression guard + commit** — also run `uv run python -m pytest _tests/test_persona_service.py -v` (existing suite must stay green after the `_persist_persona_doc` extension). `git commit -m "replay-derived personas in persona_service (LLM, pool-hash cached)"`
 
 ### Task 2.3: Run assembly + result ingestion service (TDD, Mongo + Gemini)
 
