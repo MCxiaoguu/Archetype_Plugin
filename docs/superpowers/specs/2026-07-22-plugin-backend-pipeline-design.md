@@ -85,6 +85,7 @@ Response `201`:
 {
   "runId": "<test_id>",
   "sessionId": "plugin-a1b2c3d4e5f6",
+  "brief": "<natural-language mission briefing for the actor LLM: who you are, what you're testing, what good reporting looks like — authored server-side so actor guidance is centrally controlled>",
   "persona": {
     "personaId": "...", "name": "...", "story": "...",
     "personaCard": "<first-person seed-card text>",
@@ -150,7 +151,17 @@ analytics all keep working). `status: "aborted"` maps to test status
 and rollup → set test `status` (`completed`/`failed`), `progress: 100`,
 `completed_at`.
 
-Response `200`: `{ok: true, runId, testStatus, summary: {steps, findings, verdict}}`.
+Response `200`: `{ok: true, runId, testStatus, message: "<NL confirmation for
+the actor LLM: what was stored, what happens next, where results live>",
+summary: {steps, findings, verdict}}`.
+
+**LLM-consumer principle (applies to every `/api/plugin` response):** the
+caller is Claude inside the inner session, so responses carry natural-language
+fields (`brief`, `message`, per-scenario `expectedResult` prose, `conduct`
+rules) alongside structured JSON. The MCP tools render these NL fields
+verbatim in the tool result text; the plugin skills instruct Claude to treat
+them as authoritative guidance. Error bodies likewise include a plain
+`message` telling the actor what to do next.
 
 ### 2.3 `GET /api/plugin/runs/<run_id>`
 
