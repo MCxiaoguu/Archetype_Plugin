@@ -61,7 +61,10 @@ Pipeline inside the handler (`services/plugin_run_service.py`):
    `source == "replay"` and `replay_pool_hash` matches the current pool hash
    (sha256 over sorted `replay_session_id` + `ingested_at`). On miss: build a
    text digest of all behavior summaries → call the existing MVP generator
-   `persona/generator.py::generate_persona(user_description=digest)` (4 Gemini
+   `persona/generator.py::generate_persona(...)` (keyword-only signature; pass
+   `user_description=digest`, `need=<user intent inferred from the digest,
+   fallback "evaluate whether this product fits my workflow">`,
+   `start_url=<the run's target url>`) (4 Gemini
    calls, ~30–60 s) → persist the **full** generator output (including
    `generated_episodes`/`generated_chunks`, fixing the known persistence gap)
    plus `user_id`, `source: "replay"`, `replay_pool_hash`,
@@ -119,7 +122,7 @@ Request:
     {"seq": 1, "scenarioId": "SC-1", "actionText": "clicked Start free trial",
      "narration": "<persona-voice note>", "url": "...",
      "observationPageType": "landing", "success": true,
-     "error": null, "screenshotB64": "<optional, ≤1 MB, ≤10 total>"}
+     "error": null, "screenshotB64": "<optional, ≤1 MB, ≤6 total>"}
   ],
   "feedback": {
     "verdict": "pass" | "fail" | "mixed",
@@ -134,10 +137,14 @@ Request:
 ```
 
 Handler behavior: ownership + `sessionId` check → `409` if the test is already
-`completed` (idempotency guard) → write steps through the existing
+`completed`; a re-POST after `failed` is allowed and treated as a retry
+(previous session_log doc superseded) → write steps through the existing
 `simulation_core/log_result.py` helpers (`start_session_log` / `log_step` /
-`finalize_session_log`) so `session_log` docs are shaped exactly like notte
-runs (monitor snapshot + replay + analytics all keep working) → store
+`finalize_session_log`; pinned kwargs for the plugin path:
+`headless=False, record_video=False, video_format="none"`) so `session_log`
+docs are shaped exactly like notte runs (monitor snapshot + replay +
+analytics all keep working). `status: "aborted"` maps to test status
+`failed` with `error: "aborted by actor"` → store
 `feedback` on the test doc (`results.plugin_feedback`) and as
 `Archetype_Test.feedback` docs → best-effort `run_post_session_analytics(session_id)`
 and rollup → set test `status` (`completed`/`failed`), `progress: 100`,
@@ -302,8 +309,8 @@ Stable element ids are shared with the rrweb fixtures (§3.5).
 | Persona LLM failure (first run) | `502 persona_generation_failed`, run doc not created; retry safe |
 | Scenario LLM failure | deterministic template fallback (never blocks a run) |
 | Plugin dies mid-run | test stays `running`; existing watchdog sweeps stale tests |
-| Duplicate result POST | `409` after test completed |
-| Oversized payloads | per-screenshot 1 MB / 10-screenshot cap; 8 MB replay session cap |
+| Duplicate result POST | `409` after test completed; retry allowed after `failed` |
+| Oversized payloads | per-screenshot 1 MB / 6-screenshot cap (≈6 MB worst case, safe under Mongo's 16 MB doc limit alongside step text); 8 MB replay session cap |
 | Redis absent | unaffected (no event-bus dependency in this path) |
 | Analytics failure post-ingest | best-effort: results remain, `analyticsReady: false` |
 
@@ -312,8 +319,13 @@ Stable element ids are shared with the rrweb fixtures (§3.5).
 Backend (`_tests/`, repo conventions — real services, no mocks): parser unit
 tests (fixtures → expected summaries, pure); plugin-run service tests (tier 2
 Mongo + tier 1 Gemini); endpoint tests via Flask client with `DEV_MODE=1`
-X-User-Id bypass; result-ingestion round-trip asserting `session_log` shape
-compatibility (monitor snapshot builds from it).
+X-User-Id bypass (ensure `FLASK_ENV` is not `production` in the test env —
+the bypass is dual-gated); result-ingestion round-trip asserting
+`session_log` shape compatibility (monitor snapshot builds from it).
+
+Implementation should be phased so each phase is independently testable:
+parser + fixtures → replay/persona services + routes → plugin tools + skills
+→ demo app → E2E harness.
 
 End-to-end (the acceptance gate — `docs/GOAL_AND_TEST_CRITERIA.md` A1–A5,
 B1–B2, C; harness verified in `docs/E2E_HARNESS_NOTES.md`):
