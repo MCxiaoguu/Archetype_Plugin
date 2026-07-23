@@ -10,27 +10,40 @@ backend. Every step maps inline to the acceptance criteria in
 Source of the verified recipes: `docs/E2E_HARNESS_NOTES.md`. Do not invent
 alternatives to what it verified.
 
+**LLM-operator rule:** the operator is an LLM whose Bash tool RESETS shell
+state between calls and times out at 120 s by default (600 s max). Nothing
+persists — every Bash invocation must start by re-exporting `PL`/`BE` and
+re-sourcing `e2e/tmux.sh` (the preamble below). Every polling loop in this
+runbook is bounded to fit inside one invocation; if a bounded loop ends without
+finding its target, just re-run that block.
+
 ## Paths & names (fill `<sub>` / `<run_id>` at run time)
 
-- `PL`  = `/Users/hanyanggu/Personal_Files/Coding/Archetype_all/Archetype_Plugins`
-- `BE`  = `/Users/hanyanggu/Personal_Files/Coding/Archetype_all/Archetype_Core/Archetype_Backend`
-- tmux session name: `archetype-e2e` (helpers in `e2e/tmux.sh`)
-- Artifacts dir: `PL/e2e/artifacts/` (gitignored). **Create it first:**
-  `mkdir -p /Users/hanyanggu/Personal_Files/Coding/Archetype_all/Archetype_Plugins/e2e/artifacts`
+Preamble for EVERY Bash invocation (real shell variables, not placeholders):
+
+```bash
+PL=/Users/hanyanggu/Personal_Files/Coding/Archetype_all/Archetype_Plugins
+BE=/Users/hanyanggu/Personal_Files/Coding/Archetype_all/Archetype_Core/Archetype_Backend
+. "$PL/e2e/tmux.sh"
+```
+
+- tmux session name: `archetype-e2e` (helpers in `e2e/tmux.sh`, override via
+  `E2E_SESSION`)
+- Artifacts dir: `$PL/e2e/artifacts/` (gitignored). **Create it first:**
+  `mkdir -p "$PL/e2e/artifacts"`
 - `<sub>` = the Auth0 `sub` the wizard logs in as (the run's `user_id`).
   Get it from the backend log after login (the `/api/plugin/runs` request) or
-  from the created test doc's `user_id`.
+  from the created test doc's `user_id`. It is NOT the `sessionId` shown in the
+  inner session's report (that is the `plugin_session_id`).
 - `<run_id>` = the `runId` (`test_id`) printed in the inner session's `start_run`
   result / final report.
-
-Load the helpers once in the orchestrator shell: `. PL/e2e/tmux.sh`
 
 ## Expected timings (plan-level, watch for these)
 
 - Inner `start_run` (first for a fresh user) takes **60–90 s** — the backend
   generates the replay persona via Gemini. The MCP tool call timeout is **180 s**
   (`start_run` POSTs with `timeout=180`), so it should complete; if the inner
-  Claude times out the tool call anyway, pre-warm the persona once from `BE`
+  Claude times out the tool call anyway, pre-warm the persona once from `$BE`
   (`ensure_replay_persona`) before the run and note it here.
 - MCP connect ≈ 0.3 s; skill → ToolSearch → first tool call can take 15–40 s.
   Keep every phase timeout ≥ 120 s.
@@ -42,27 +55,26 @@ Load the helpers once in the orchestrator shell: `. PL/e2e/tmux.sh`
 ## Step 1 — Start backend + demo app with tailable logs  → B1, B2
 
 ```bash
-cd /Users/hanyanggu/Personal_Files/Coding/Archetype_all/Archetype_Core/Archetype_Backend \
-  && nohup uv run python app.py > /tmp/e2e_backend.log 2>&1 &
+cd "$BE" && nohup uv run python app.py > /tmp/e2e_backend.log 2>&1 &
 echo $! > /tmp/e2e_backend.pid
-sh /Users/hanyanggu/Personal_Files/Coding/Archetype_all/Archetype_Plugins/demo-app/serve.sh &
+sh "$PL/demo-app/serve.sh" &
 echo $! > /tmp/e2e_demo.pid
 # Wait ~10–12 s (Atlas index init), then confirm health:
 curl -s http://localhost:5001/health          # → {"status":"ok"}
 curl -s http://localhost:8321/ | grep -q 'id="cta-trial"' && echo "demo up"
 ```
 
-Monitor during the whole run (this is the **B2 "logs monitored" evidence**):
+Monitor during the whole run (this is the **B2 "logs monitored" evidence** —
+use a bounded peek per invocation, not a blocking `tail -f`):
 
 ```bash
-tail -f /tmp/e2e_backend.log | grep --line-buffered "/api/plugin"
+tail -n 100 /tmp/e2e_backend.log | grep "/api/plugin"
 ```
 
 At the end, capture excerpts for the record:
 
 ```bash
-grep "/api/plugin" /tmp/e2e_backend.log > \
-  /Users/hanyanggu/.../Archetype_Plugins/e2e/artifacts/backend_log_excerpt.txt
+grep "/api/plugin" /tmp/e2e_backend.log > "$PL/e2e/artifacts/backend_log_excerpt.txt"
 ```
 
 Do NOT `source .env` (unquoted `&` in the Mongo URI breaks zsh); `app.py` loads
@@ -71,7 +83,7 @@ it via dotenv. Redis/Celery are not needed for the actor flow. (Notes §3.)
 ## Step 2 — Preflight  → A3 (auth cleared), C (vision harness proven)
 
 ```bash
-bash /Users/hanyanggu/.../Archetype_Plugins/e2e/preflight.sh
+bash "$PL/e2e/preflight.sh"
 ```
 
 Must end `PREFLIGHT: all hard checks PASS`. It deletes stale
@@ -103,10 +115,11 @@ osascript -e 'tell app "Terminal" to activate'
 Fresh scratch cwd keeps project settings out and makes the trust dialog
 deterministic; `--debug-file` keeps the TUI clean for `e2e_idle` and gives a
 greppable MCP log. `ARCHETYPE_BACKEND_URL` points the plugin's MCP server at the
-local backend (notes §2, §4.1).
+local backend (notes §2, §4.1). (`$PL` expands in the OUTER shell before the
+text is sent to the inner pane — the inner shell never needs the variable.)
 
 ```bash
-e2e_send "mkdir -p /tmp/e2e_inner && cd /tmp/e2e_inner && ARCHETYPE_BACKEND_URL=http://localhost:5001 claude --plugin-dir /Users/hanyanggu/Personal_Files/Coding/Archetype_all/Archetype_Plugins --debug-file /tmp/e2e_inner_debug.log"
+e2e_send "mkdir -p /tmp/e2e_inner && cd /tmp/e2e_inner && ARCHETYPE_BACKEND_URL=http://localhost:5001 claude --plugin-dir $PL --debug-file /tmp/e2e_inner_debug.log"
 ```
 
 Sanity (optional): `grep archetype /tmp/e2e_inner_debug.log` →
@@ -129,12 +142,21 @@ if e2e_dialog | grep -q "trust this folder"; then e2e_keys Enter; fi
 e2e_send "/archetype:validation"          # no args ⇒ login flow
 ```
 
-Wait for the elicitation modal, then screenshot it (**A3 vision evidence**):
+Wait for the elicitation modal, then screenshot it (**A3 vision evidence**).
+Grep the VISIBLE pane (`e2e_pane` here reads scrollback too, which is fine for
+the modal because it stays on screen while open — but do NOT rely on
+`e2e_dialog` for "is the modal up NOW": it also matches dialogs already in
+scrollback, e.g. the Step-5 trust dialog):
 
 ```bash
-# poll until the modal is up:
-until e2e_dialog | grep -q "requests your input"; do sleep 3; done
-screencapture -x /Users/hanyanggu/.../Archetype_Plugins/e2e/artifacts/wizard.png
+# bounded poll (~60 s); if not found, re-run this block:
+for i in $(seq 1 20); do
+  tmux capture-pane -t archetype-e2e -p | grep -q "requests your input" && break
+  sleep 3
+done
+tmux capture-pane -t archetype-e2e -p | grep -q "requests your input" \
+  && screencapture -x "$PL/e2e/artifacts/wizard.png" \
+  || echo "modal not up yet — re-run this block"
 ```
 
 Extract the Auth0 verification URL from the pane and complete the approval:
@@ -154,10 +176,14 @@ e2e_pane            # ALWAYS re-capture before sending keys (timing-sensitive)
 e2e_keys Space Down Enter
 ```
 
-Confirm success:
+Confirm success (bounded ~40 s; re-run this block if not found yet):
 
 ```bash
-until e2e_pane | grep -q "Connected to Archetype"; do sleep 2; done
+for i in $(seq 1 20); do
+  e2e_pane | grep -q "Connected to Archetype" && break
+  sleep 2
+done
+e2e_pane | grep "Connected to Archetype" || echo "not confirmed yet — re-run"
 ls -l ~/.claude/plugins/data/archetype-*/auth.json     # exists, mode 0600 (-rw-------)
 ```
 
@@ -173,33 +199,36 @@ e2e_send "/archetype:validation \"test the signup flow\" url=http://localhost:83
 The inner session becomes the persona and drives Chrome on the demo app. While
 the pane shows activity, capture Chrome periodically (**A4 evidence** — genuine
 browser activity, not just tool logs). Bring Chrome frontmost first, because the
-attached tmux Terminal (Step 3) may cover it:
+attached tmux Terminal (Step 3) may cover it. Bounded to 5 captures (~100 s,
+fits the default 120 s Bash timeout); timestamp filenames survive the
+state-reset between invocations — **re-run this block until it prints
+`RUN FINISHED`**:
 
 ```bash
 open -a "Google Chrome"
-n=0
-while ! e2e_idle; do
+for i in $(seq 1 5); do
+  e2e_idle && break
   open -a "Google Chrome"
-  screencapture -x "/Users/hanyanggu/.../Archetype_Plugins/e2e/artifacts/chrome_$(printf '%02d' $n).png"
-  n=$((n+1)); sleep 20
+  screencapture -x "$PL/e2e/artifacts/chrome_$(date +%s).png"
+  sleep 20
 done
+e2e_idle && echo "RUN FINISHED" || echo "still running — re-run this block"
 ```
 
 When idle, save the final report pane text (**A5 payload cross-check input**):
 
 ```bash
-e2e_pane > /Users/hanyanggu/.../Archetype_Plugins/e2e/artifacts/final_report.txt
+e2e_pane > "$PL/e2e/artifacts/final_report.txt"
 ```
 
-Note the `runId` and `sessionId` from the report → `<run_id>` / `<sub>`.
+Note the `runId` from the report → `<run_id>`; `<sub>` comes from the backend
+log or the test doc's `user_id` (see Paths). The report's `sessionId` is the
+`plugin_session_id`, NOT the Auth0 sub — never feed it to `verify_backend.py`.
 
 ## Step 8 — Verify backend state  → B1, B2, A5
 
 ```bash
-cd /Users/hanyanggu/Personal_Files/Coding/Archetype_all/Archetype_Core/Archetype_Backend \
-  && uv run python \
-     /Users/hanyanggu/Personal_Files/Coding/Archetype_all/Archetype_Plugins/e2e/verify_backend.py \
-     --user-id <sub> --run-id <run_id>
+cd "$BE" && uv run python "$PL/e2e/verify_backend.py" --user-id <sub> --run-id <run_id>
 ```
 
 Must exit 0 with all `[1]..[5]` = PASS (`[INFO]` extraction is best-effort).
@@ -233,10 +262,7 @@ Artifacts are retained in `e2e/artifacts/` (gitignored). Between attempts, reset
 backend state and re-run from Step 1:
 
 ```bash
-cd /Users/hanyanggu/Personal_Files/Coding/Archetype_all/Archetype_Core/Archetype_Backend \
-  && uv run python \
-     /Users/hanyanggu/Personal_Files/Coding/Archetype_all/Archetype_Plugins/e2e/verify_backend.py \
-     --user-id <sub> --cleanup
+cd "$BE" && uv run python "$PL/e2e/verify_backend.py" --user-id <sub> --cleanup
 ```
 
 ---

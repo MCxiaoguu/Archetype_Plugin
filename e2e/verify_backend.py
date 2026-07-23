@@ -184,19 +184,33 @@ def verify(user_id: str, run_id: str) -> int:
 # --------------------------------------------------------------------------- #
 # CLEANUP
 # --------------------------------------------------------------------------- #
+_DELETE_FAILURES: list = []
+
+
 def _del(db: str, coll: str, query: dict, label: str) -> int:
-    """delete_many wrapper that tolerates an empty query (skip, count 0)."""
+    """delete_many wrapper that tolerates an empty query (skip, count 0).
+
+    Records failed deletes in _DELETE_FAILURES so cleanup() can exit non-zero
+    instead of silently claiming success.
+    """
     if not query:
         print(f"  {coll:<20} 0  ({label}: nothing to key on, skipped)")
         return 0
     ok, count = delete_many(db, coll, query)
-    flag = "" if ok else "  [delete_many reported failure]"
+    flag = ""
+    if not ok:
+        _DELETE_FAILURES.append(f"{db}.{coll}")
+        flag = "  [delete_many reported failure]"
     print(f"  {coll:<20} {count}  ({label}){flag}")
     return count
 
 
 def cleanup(user_id: str) -> int:
-    """Delete this user's docs across the pipeline collections; print counts."""
+    """Delete this user's docs across the pipeline collections; print counts.
+
+    Returns 0 on full success, 1 if any delete_many reported failure.
+    """
+    del _DELETE_FAILURES[:]
     print(f"CLEANUP  user_id={user_id}")
     print("-" * 68)
 
@@ -250,6 +264,10 @@ def cleanup(user_id: str) -> int:
     total += _del(TEST_DB, TEST_COLL, {"user_id": user_id}, "by user_id")
 
     print("-" * 68)
+    if _DELETE_FAILURES:
+        print(f"CLEANUP RESULT: deleted {total} doc(s) for user {user_id}, but "
+              f"delete_many FAILED for: {', '.join(_DELETE_FAILURES)}")
+        return 1
     print(f"CLEANUP RESULT: deleted {total} doc(s) total for user {user_id}")
     return 0
 

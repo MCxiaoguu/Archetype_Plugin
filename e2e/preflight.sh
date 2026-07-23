@@ -76,6 +76,8 @@ fi
 open -a Calculator 2>/dev/null
 sleep 2
 screencapture -x /tmp/e2e_sr_check.png 2>/dev/null
+# Quit Calculator so it can't cover Chrome during the A4 captures later.
+osascript -e 'quit app "Calculator"' 2>/dev/null
 echo "MANUAL STEP: orchestrator must visually Read /tmp/e2e_sr_check.png and confirm"
 echo "             the Calculator window is visible — file size is NOT authoritative"
 echo "             (wallpaper-only captures are full-size). If only wallpaper + menu"

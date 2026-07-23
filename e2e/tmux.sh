@@ -17,26 +17,26 @@
 # Requires bash (uses arrays and local). All helpers target one fixed session
 # name so the outer session's tmux target is unambiguous (notes §8 caution).
 
-SESSION="${SESSION:-archetype-e2e}"
+E2E_SESSION="${E2E_SESSION:-archetype-e2e}"
 
 # Start a detached session with a generous pane so dialogs/modals don't
 # truncate (notes §4.1: -x 220 -y 50). No-op if it already exists.
 e2e_start() {
-  if tmux has-session -t "$SESSION" 2>/dev/null; then
-    echo "e2e_start: session '$SESSION' already exists"
+  if tmux has-session -t "$E2E_SESSION" 2>/dev/null; then
+    echo "e2e_start: session '$E2E_SESSION' already exists"
     return 0
   fi
-  tmux new-session -d -s "$SESSION" -x 220 -y 50
-  echo "e2e_start: started session '$SESSION' (220x50)"
+  tmux new-session -d -s "$E2E_SESSION" -x 220 -y 50
+  echo "e2e_start: started session '$E2E_SESSION' (220x50)"
 }
 
 # Send literal text, let autocomplete settle, then submit with Enter.
 # The sleep 1 is VERIFIED necessary for slash commands (notes §4.3): the
 # typed-out command must win over the autocomplete menu before Enter.
 e2e_send() {
-  tmux send-keys -t "$SESSION" -l "$1"
+  tmux send-keys -t "$E2E_SESSION" -l "$1"
   sleep 1
-  tmux send-keys -t "$SESSION" Enter
+  tmux send-keys -t "$E2E_SESSION" Enter
 }
 
 # Send raw tmux key names (NOT literal text) for modal/dialog driving:
@@ -46,14 +46,14 @@ e2e_send() {
 e2e_keys() {
   local k
   for k in "$@"; do
-    tmux send-keys -t "$SESSION" "$k"
+    tmux send-keys -t "$E2E_SESSION" "$k"
   done
 }
 
 # Dump the pane with 200 lines of scrollback (notes §8: dialogs/results scroll
 # fast, never grep only the visible pane for history).
 e2e_pane() {
-  tmux capture-pane -t "$SESSION" -p -S -200
+  tmux capture-pane -t "$E2E_SESSION" -p -S -200
 }
 
 # Return 0 iff the pane looks IDLE (a turn has finished): an empty input
@@ -68,7 +68,7 @@ e2e_pane() {
 # ("· ↓ N tokens") and "esc to interrupt". We match those, not the glyph alone.
 e2e_idle() {
   local pane
-  pane="$(tmux capture-pane -t "$SESSION" -p)"
+  pane="$(tmux capture-pane -t "$E2E_SESSION" -p)"
   # Busy signals: the running token counter or the interrupt affordance.
   if printf '%s' "$pane" | grep -qE '·[[:space:]]*↓[[:space:]]*[0-9].*token|esc to interrupt'; then
     return 1
@@ -81,14 +81,19 @@ e2e_idle() {
 }
 
 # Return 0 iff a dialog/modal that needs operator keys is on screen, and print
-# which pattern matched so the caller can branch (notes §8). Searches
-# scrollback so a modal that just scrolled is still caught.
+# ALL distinct matched patterns so the caller can branch (notes §8). Searches
+# scrollback so a modal that just scrolled is still caught — which also means
+# matches may be STALE (e.g. the trust dialog stays in scrollback after it was
+# accepted). To ask "is dialog X up NOW", grep the visible pane instead:
+#   tmux capture-pane -t "$E2E_SESSION" -p | grep -q 'requests your input'
 e2e_dialog() {
-  local pane match
-  pane="$(tmux capture-pane -t "$SESSION" -p -S -200)"
-  match="$(printf '%s' "$pane" | grep -Eo 'requests your input|trust this folder|Do you want' | head -n 1)"
-  if [ -n "$match" ]; then
-    echo "e2e_dialog: matched '$match'"
+  local pane matches m
+  pane="$(tmux capture-pane -t "$E2E_SESSION" -p -S -200)"
+  matches="$(printf '%s' "$pane" | grep -Eo 'requests your input|trust this folder|Do you want' | sort -u)"
+  if [ -n "$matches" ]; then
+    printf '%s\n' "$matches" | while IFS= read -r m; do
+      echo "e2e_dialog: matched '$m'"
+    done
     return 0
   fi
   return 1
@@ -96,10 +101,10 @@ e2e_dialog() {
 
 # Kill the session (teardown). No-op if it's already gone.
 e2e_stop() {
-  if tmux has-session -t "$SESSION" 2>/dev/null; then
-    tmux kill-session -t "$SESSION"
-    echo "e2e_stop: killed session '$SESSION'"
+  if tmux has-session -t "$E2E_SESSION" 2>/dev/null; then
+    tmux kill-session -t "$E2E_SESSION"
+    echo "e2e_stop: killed session '$E2E_SESSION'"
   else
-    echo "e2e_stop: no session '$SESSION' to kill"
+    echo "e2e_stop: no session '$E2E_SESSION' to kill"
   fi
 }
