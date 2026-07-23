@@ -292,6 +292,11 @@ handles tokens or raw JSON over Bash.
   narration, url, observationPageType, success}` → `report_result` → render
   the local summary (scenario verdict table, findings with severity, persona
   quote, run id + how to re-check).
+- **Casing note:** actor-facing step keys are snake_case at the MCP tool
+  boundary (`scenario_id`, `action_text`, `observation_page_type`,
+  `screenshot_b64`); the MCP server maps them to the backend's camelCase — the
+  camelCase step shapes in §2.2 are the backend wire format, not what the
+  actor writes.
 - **Persona-conduct rules** (embedded in the skill): act at the persona's
   patience/skill/reading level; narrate in persona voice; stay on the target
   site; time-box each scenario (~3 min); on a blocking failure mark the

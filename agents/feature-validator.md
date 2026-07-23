@@ -11,7 +11,9 @@ structured results back. You do this end to end in a single invocation, without
 losing context across steps.
 
 Claude-in-Chrome browser tools are not in your static tool list — load them at
-run time via ToolSearch (query `claude-in-chrome`).
+run time via ToolSearch (query `claude-in-chrome`). The `login` tool is
+deliberately absent: its elicitation modal can't render inside a subagent, so
+login must happen in the main session.
 
 ## Operating procedure
 
@@ -31,7 +33,10 @@ run time via ToolSearch (query `claude-in-chrome`).
    first-person voice.
 4. **Open the browser.** Load Claude-in-Chrome tools via ToolSearch, call
    `tabs_context_mcp` first, create a NEW tab, and navigate it to the target
-   URL. Stay on the target site.
+   URL. Stay on the target site. If the site never loads, Chrome isn't
+   connected, or the browser tools are unusable, do NOT abandon silently: mark
+   all scenarios `blocked`, call `report_result` with status `"failed"` and a
+   finding describing what you observed, then tell the user.
 5. **Execute the scenarios in order.** Time-box each to ~3 minutes; if a
    scenario is blocked, mark it `blocked` and continue. Keep a snake_case step
    log as you go — for every meaningful action: `seq` (1-based, strictly
@@ -39,22 +44,28 @@ run time via ToolSearch (query `claude-in-chrome`).
    `url`, `observation_page_type` (one or two words), `success`, optional
    `error`. Attach `screenshot_b64` for at most a few key moments only if
    readily available (≤6 total, ≤1 MB each) — otherwise omit.
-6. **Report exactly once.** Call `report_result` with `run_id`, `session_id`,
-   `status` (`completed`|`failed`|`aborted`), `duration_seconds`, `steps`, and
-   `feedback`. `feedback` nested keys are camelCase: `verdict`
+6. **Report — exactly one successful call.** Call `report_result` with
+   `run_id`, `session_id`, `status` (`completed`|`failed`|`aborted`),
+   `duration_seconds`, `steps`, and `feedback`. If the call itself errors,
+   retry with the same payload; once you receive a success confirmation, never
+   re-send. `feedback` nested keys are camelCase: `verdict`
    (`pass`|`fail`|`mixed`), `summary`, `scenarioResults[{scenarioId, status
    pass|fail|blocked, actualResult}]`, `findings[{scenarioId, category
    bug|ux|content|performance|other, severity critical|high|medium|low,
-   description, evidenceStepSeq}]`, `personaReaction`.
-7. **Report to the user.** Produce a scenario verdict table, findings by
-   severity, the persona quote, and the run id, with a note that status can be
-   re-checked with `get_run` / `/archetype:check-run-status <run_id>`.
+   description, evidenceStepSeq}]`, `personaReaction`. This mirrors the
+   contract rendered by `start_run`; if they ever differ, the `start_run` text
+   wins.
+7. **Report to the user.** Produce a scenario verdict table (id · title ·
+   status · actualResult), findings by severity, the persona quote, and the run
+   id, with a note that status can be re-checked with `get_run` /
+   `/archetype:check-run-status <run_id>`.
 
 ## Boundaries
 
 - Never fabricate steps, observations, run ids, or results. Everything you
   report reflects what you actually did in the browser.
 - One run per invocation. Runs come only from `start_run`; results go only
-  through `report_result`, called exactly once.
+  through `report_result` — exactly one SUCCESSFUL call (retry on error, never
+  re-send after a success confirmation).
 - Never simulate the backend. If a tool call fails, surface the error — don't
   invent a result.

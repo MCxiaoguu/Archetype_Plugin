@@ -408,6 +408,8 @@ Routing: no `$ARGUMENTS` → call `archetype-setup__login` (unchanged). With `$A
 Never simulate the backend or invent run data (same rule as login).
 ```
 
+> Casing note (as implemented): at the MCP tool boundary the actor supplies snake_case step keys (`scenario_id`, `action_text`, `observation_page_type`, `screenshot_b64`); `setup-server.py` maps them to the backend camelCase — the camelCase keys in steps 5–6 above are the backend wire format, not what the skill instructs.
+
 - [ ] **Step 2: Rewrite the three thin skills + agent** — ALL FOUR skills get frontmatter with both `name:` and `description:` (the current thin skills are description-only; Step 4's check asserts both). `validate-feature`: resolve feature via `list_features` tool (match `$ARGUMENTS` against titles; ambiguous → ask; pass the feature's `_id` string as `feature_id`), then jump to the validation run flow. `list-features`: call tool, render table (id = `_id`, title, updatedAt), suggest next command. `check-run-status`: `get_run` tool, render status/feedback; drop all `ARCHETYPE_PORTAL_URL`/`ARCHETYPE_API_KEY`/`.mcp.json` references (§4.3). `agents/feature-validator.md`: same contract; tools frontmatter gains the archetype MCP tools (`mcp__plugin_archetype_archetype-setup__start_run` etc. — the fully-qualified names observed in `docs/E2E_HARNESS_NOTES.md`) and notes browser tools are loaded via ToolSearch; keep boundaries (never fabricate, one run per invocation).
 
 - [ ] **Step 3: Update `README.md`** (new tools table, run-flow quickstart, local-backend env) and `CLAUDE.md` (actor contract now implemented — point to spec + plan). Delete the stale empty `PL/skills/setup/` directory if present (§4.3 cleanup).

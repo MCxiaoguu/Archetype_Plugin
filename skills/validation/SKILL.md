@@ -101,6 +101,11 @@ The Claude-in-Chrome browser tools are deferred and must be loaded before use.
    an existing tab.
 4. Navigate that tab to the target URL.
 
+**Whole-run browser failure:** if the target site never loads, Chrome isn't
+connected, or the browser tools are unusable, do NOT abandon the run silently.
+Mark all scenarios `blocked`, call `report_result` with status `"failed"` and a
+finding describing exactly what you observed, then tell the user.
+
 ### 5. Execute the scenarios
 
 Work through each scenario **in order**, acting at the persona's
@@ -137,9 +142,15 @@ Conduct rules while acting:
 ### 6. Report results
 
 When you have worked through all scenarios (or exhausted them), call the
-`report_result` tool from the `archetype-setup` MCP server exactly ONCE with
-the full payload. Top-level keys are snake_case; the tool maps them to the
+`report_result` tool from the `archetype-setup` MCP server with the full
+payload. Make exactly one SUCCESSFUL call: if the call itself errors, you may
+retry with the same payload (on a "Not connected" error, run the **Login
+wizard** once first, then retry); but once you receive a success confirmation,
+never re-send. Top-level keys are snake_case; the tool maps them to the
 backend. The `feedback` object's nested keys are already camelCase.
+
+The shape below mirrors the contract rendered by `start_run`; if they ever
+differ, the `start_run` text wins.
 
 ```jsonc
 {
@@ -191,7 +202,8 @@ from the *product's* performance: `pass` (everything worked), `fail`
 
 After `report_result` succeeds, present a concise report to the user:
 
-- A **scenario verdict table**: scenario id · title · status (pass/fail/blocked).
+- A **scenario verdict table**: scenario id · title · status (pass/fail/blocked)
+  · actualResult (what actually happened, in a few words).
 - **Findings by severity** (critical first), each with category and a one-line
   description.
 - The **persona quote** (`personaReaction`) as a pull-quote.
@@ -205,5 +217,6 @@ After `report_result` succeeds, present a concise report to the user:
 
 - Never simulate the backend or invent run data. Runs come only from
   `start_run`; results go only through `report_result`.
-- Call `report_result` exactly once per run.
+- Exactly one SUCCESSFUL `report_result` call per run: retry on error, never
+  re-send after a success confirmation.
 - Everything you report must reflect what you actually did in the browser.
