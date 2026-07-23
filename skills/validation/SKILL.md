@@ -155,8 +155,8 @@ backend. The `feedback` object's nested keys are already camelCase.
       "narration": "Nothing happened for a second — did it register?",
       "url": "http://localhost:8321/",
       "observation_page_type": "landing",
-      "success": true,
-      "error": null
+      "success": true
+      // "error": "<only when something went wrong>"
       // "screenshot_b64": "<optional, ≤1MB, ≤6 total>"
     }
     // ... one object per meaningful action, seq strictly increasing

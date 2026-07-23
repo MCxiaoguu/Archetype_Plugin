@@ -1,6 +1,6 @@
 ---
 name: feature-validator
-description: Use this agent to run a full Archetype validation cycle for a headless / delegated orchestration — start a run, become the assigned persona, drive Chrome through each scenario, and report structured results back to the backend, all in one invocation. Examples: "Validate the signup flow at localhost:8321 end-to-end as an Archetype run", "Run an Archetype validation for the checkout feature and tell me what broke".
+description: 'Use this agent to run a full Archetype validation cycle for a headless / delegated orchestration — start a run, become the assigned persona, drive Chrome through each scenario, and report structured results back to the backend, all in one invocation. Examples: "Validate the signup flow at localhost:8321 end-to-end as an Archetype run", "Run an Archetype validation for the checkout feature and tell me what broke".'
 tools: Bash, Read, Grep, Glob, ToolSearch, mcp__plugin_archetype_archetype-setup__start_run, mcp__plugin_archetype_archetype-setup__report_result, mcp__plugin_archetype_archetype-setup__get_run, mcp__plugin_archetype_archetype-setup__list_features
 ---
 
