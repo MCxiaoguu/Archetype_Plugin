@@ -129,7 +129,9 @@ class StubState:
 
     def __init__(self) -> None:
         self.requests: list[dict] = []
-        # path-suffix -> (status, body). Matched by endswith so run-id paths work.
+        # path-substring -> (status, body). _dispatch matches by substring
+        # (`needle in path`), so needles like "/results" or "/api/plugin/runs"
+        # hit run-id paths too.
         self.error_overrides: dict[str, tuple[int, dict]] = {}
         self.lock = threading.Lock()
 
@@ -178,7 +180,7 @@ class Handler(BaseHTTPRequestHandler):
             }
         )
 
-        # Error overrides take precedence (matched by path suffix/substring).
+        # Error overrides take precedence (matched by path substring).
         with STATE.lock:
             overrides = dict(STATE.error_overrides)
         for needle, (status, payload) in overrides.items():
@@ -190,6 +192,9 @@ class Handler(BaseHTTPRequestHandler):
         self._reply(status, payload)
 
     def _canned(self, method: str, path: str) -> tuple[int, dict]:
+        # NOTE: ordering is load-bearing — the "/results" check must precede
+        # the "/api/plugin/runs" prefix check, or result POSTs (which live
+        # under /api/plugin/runs/<id>/results) would get RUN_RESPONSE instead.
         if path.endswith("/results"):
             return 200, RESULTS_RESPONSE
         if path.startswith("/api/plugin/runs") and method == "POST":
@@ -437,7 +442,29 @@ def case_4_report_result_happy(srv: ServerProc, data_dir: Path) -> None:
                 "success": True,
             }
         ],
-        "feedback": {"verdict": "mixed", "summary": "ok"},
+        # feedback is passed through untouched by the server, so its nested
+        # keys are camelCase already (per the contract start_run renders).
+        "feedback": {
+            "verdict": "mixed",
+            "summary": "ok",
+            "scenarioResults": [
+                {
+                    "scenarioId": "SC-1",
+                    "status": "pass",
+                    "actualResult": "Trial started after a sluggish delay.",
+                }
+            ],
+            "findings": [
+                {
+                    "scenarioId": "SC-1",
+                    "category": "performance",
+                    "severity": "medium",
+                    "description": "CTA takes ~900ms with no loading state.",
+                    "evidenceStepSeq": 1,
+                }
+            ],
+            "personaReaction": "That button felt broken for a second.",
+        },
     }
     result = call_tool(srv, "report_result", args)
 
@@ -458,6 +485,23 @@ def case_4_report_result_happy(srv: ServerProc, data_dir: Path) -> None:
     expect(step.get("actionText") == "clicked Start free trial", "action_text -> actionText")
     expect(step.get("observationPageType") == "landing", "observation_page_type -> observationPageType")
     expect(step.get("scenarioId") == "SC-1", "scenario_id -> scenarioId")
+    # feedback pass-through: nested camelCase keys must arrive verbatim
+    feedback = body.get("feedback") or {}
+    sc_results = feedback.get("scenarioResults")
+    expect(
+        isinstance(sc_results, list) and sc_results
+        and sc_results[0].get("scenarioId") == "SC-1"
+        and sc_results[0].get("status") == "pass"
+        and "actualResult" in sc_results[0],
+        f"feedback.scenarioResults must pass through camelCase, got {sc_results}",
+    )
+    findings = feedback.get("findings")
+    expect(
+        isinstance(findings, list) and findings
+        and findings[0].get("scenarioId") == "SC-1"
+        and findings[0].get("evidenceStepSeq") == 1,
+        f"feedback.findings must pass through camelCase, got {findings}",
+    )
     # run_id is a path param, must NOT appear in the body
     expect("runId" not in body and "run_id" not in body, "run_id must not be in body")
     assert_no_snake_case(body, "report_result body")

@@ -44,11 +44,15 @@ from typing import Any
 PROTOCOL_VERSION = "2025-06-18"
 SERVER_NAME = "archetype-setup"
 SERVER_VERSION = "0.3.0"
-TOOL_NAME = "login"
 
 # The synchronous run-assembly endpoint runs the persona/scenario LLM chain,
 # which the MCP server tolerates for up to ~90 s; give it generous headroom.
 RUN_TIMEOUT = 180
+
+# Result ingestion can carry multi-MB screenshot payloads; the default 15 s
+# risks a client-side timeout after the server already stored the results,
+# which would surface as a confusing 409 on retry.
+RESULT_TIMEOUT = 60
 
 # Standard hint appended to any auth-related failure so the actor knows the fix.
 LOGIN_HINT = "Run /archetype:validation to log in."
@@ -500,13 +504,19 @@ def handle_report_result(arguments: dict[str, Any]) -> dict[str, Any]:
         "sessionId": arguments.get("session_id"),
         "status": arguments.get("status"),
         "steps": [_map_step(s) for s in (arguments.get("steps") or [])],
+        # feedback is passed through untouched: its nested keys must already
+        # be camelCase (scenarioResults, evidenceStepSeq, ...) per the
+        # contract rendered by start_run's report_result guidance.
         "feedback": arguments.get("feedback") or {},
     }
     if arguments.get("duration_seconds") is not None:
         body["durationSeconds"] = arguments["duration_seconds"]
 
     status, resp = backend_post(
-        f"/api/plugin/runs/{run_id}/results", body, auth_token=token
+        f"/api/plugin/runs/{run_id}/results",
+        body,
+        auth_token=token,
+        timeout=RESULT_TIMEOUT,
     )
     if not (200 <= status < 300):
         return backend_error_text(status, resp)
