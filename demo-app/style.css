@@ -207,6 +207,7 @@ body {
 
 /* ---- Hero ---- */
 .hero {
+  position: relative;
   background: linear-gradient(135deg, var(--indigo) 0%, #7c3aed 100%);
   padding: 0;
   overflow: hidden;
