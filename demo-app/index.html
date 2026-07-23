@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Lumina Notes — Your second brain, beautifully organized</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <!-- Banner (injected by app.js) -->
+  <div id="banner" class="banner hidden" role="alert" aria-live="polite"></div>
+
+  <!-- Sticky Navigation -->
+  <nav class="nav">
+    <div class="nav-inner">
+      <a class="nav-brand" href="#">&#10022; Lumina Notes</a>
+      <ul class="nav-links">
+        <li><a class="nav-link" href="#features">Features</a></li>
+        <li><a class="nav-link" id="nav-plans" href="#plans">Plans &amp; More</a></li>
+        <li><a class="nav-link nav-signin" href="#signup">Sign in</a></li>
+      </ul>
+    </div>
+  </nav>
+
+  <!-- Hero -->
+  <section class="hero">
+    <div class="hero-inner">
+      <div class="hero-badge">Now with AI-powered linking</div>
+      <h1 class="hero-title">Your second brain,<br />beautifully organized</h1>
+      <p class="hero-sub">Capture ideas, connect thoughts, and recall anything — instantly. Lumina Notes keeps your knowledge structured so you never lose a thought again.</p>
+      <div class="hero-actions">
+        <button id="cta-trial" class="btn btn-primary btn-lg">Start free trial</button>
+        <a href="#features" class="btn btn-ghost btn-lg">See how it works</a>
+      </div>
+      <p class="hero-disclaimer">No credit card required &nbsp;·&nbsp; 14-day free Pro trial</p>
+    </div>
+    <div class="hero-visual" aria-hidden="true">
+      <div class="mock-card mc1">
+        <div class="mc-dot mc-dot--purple"></div>
+        <div class="mc-line long"></div>
+        <div class="mc-line medium"></div>
+        <div class="mc-line short"></div>
+      </div>
+      <div class="mock-card mc2">
+        <div class="mc-dot mc-dot--blue"></div>
+        <div class="mc-line medium"></div>
+        <div class="mc-line long"></div>
+      </div>
+      <div class="mock-card mc3">
+        <div class="mc-dot mc-dot--indigo"></div>
+        <div class="mc-line short"></div>
+        <div class="mc-line long"></div>
+        <div class="mc-line medium"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Features -->
+  <section class="features" id="features">
+    <div class="section-inner">
+      <h2 class="section-title">Everything your team needs</h2>
+      <p class="section-sub">Built for individuals and teams who take their thinking seriously.</p>
+      <div class="feature-grid">
+        <div class="feature-card">
+          <div class="feature-icon">&#9729;</div>
+          <h3>Instant Sync</h3>
+          <p>Your notes travel with you. Changes sync across all devices in under 200 ms — open your laptop and everything is already there.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">&#128269;</div>
+          <h3>Semantic Search</h3>
+          <p>Full-text and AI-powered semantic search across every note you've ever written. Find the idea you had three years ago in seconds.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">&#128101;</div>
+          <h3>Real-time Share</h3>
+          <p>Invite collaborators with a link. Edit together live, leave comments, and track every revision without cluttering your workspace.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Pricing -->
+  <section class="pricing" id="plans">
+    <div class="section-inner">
+      <h2 class="section-title">Simple, honest pricing</h2>
+      <p class="section-sub">Start free. Upgrade when you're ready.</p>
+      <div class="plans-grid">
+
+        <div class="plan-card">
+          <div class="plan-header">
+            <span class="plan-name">Free</span>
+            <div class="plan-price">
+              <span class="plan-amount">$0</span>
+              <span class="plan-period">/ mo</span>
+            </div>
+          </div>
+          <ul class="plan-features">
+            <li>50 notes</li>
+            <li>5 MB storage</li>
+            <li>Web access only</li>
+            <li>Community support</li>
+          </ul>
+          <a href="#signup" class="btn btn-outline btn-block">Get started free</a>
+        </div>
+
+        <div class="plan-card plan-card--featured">
+          <div class="plan-badge">Most popular</div>
+          <div class="plan-header">
+            <span class="plan-name">Pro</span>
+            <div class="plan-price">
+              <span class="plan-amount">$12</span>
+              <span class="plan-period">/ mo</span>
+            </div>
+            <span class="plan-billing">billed annually</span>
+          </div>
+          <ul class="plan-features">
+            <li>Unlimited notes</li>
+            <li>10 GB storage</li>
+            <li>All devices + offline</li>
+            <li>AI linking &amp; search</li>
+            <li>Priority support</li>
+          </ul>
+          <a href="#signup" class="btn btn-primary btn-block">Start free trial</a>
+        </div>
+
+        <div class="plan-card">
+          <div class="plan-header">
+            <span class="plan-name">Team</span>
+            <div class="plan-price">
+              <span class="plan-amount">$29</span>
+              <span class="plan-period">/ mo</span>
+            </div>
+            <span class="plan-billing">billed annually</span>
+          </div>
+          <ul class="plan-features">
+            <li>Everything in Pro</li>
+            <li>Up to 25 seats</li>
+            <li>Shared workspaces</li>
+            <li>Admin controls</li>
+            <li>SSO &amp; audit logs</li>
+            <li>Dedicated support</li>
+          </ul>
+          <a href="#signup" class="btn btn-outline btn-block">Contact sales</a>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- Signup -->
+  <section class="signup" id="signup">
+    <div class="section-inner section-inner--narrow">
+      <h2 class="section-title">Create your account</h2>
+      <p class="section-sub">Join thousands of teams already thinking better with Lumina Notes.</p>
+
+      <form id="signup-form" class="signup-form" novalidate>
+        <div class="form-group">
+          <label for="signup-name">Full name</label>
+          <input
+            id="signup-name"
+            type="text"
+            name="name"
+            placeholder="Ada Lovelace"
+            autocomplete="name"
+          />
+        </div>
+        <div class="form-group">
+          <label for="signup-email">Work email</label>
+          <input
+            id="signup-email"
+            type="email"
+            name="email"
+            placeholder="ada@company.com"
+            autocomplete="email"
+          />
+        </div>
+        <div class="form-group">
+          <label for="signup-password">Password</label>
+          <input
+            id="signup-password"
+            type="password"
+            name="password"
+            placeholder="Choose a password"
+            autocomplete="new-password"
+          />
+        </div>
+        <button id="signup-submit" type="submit" class="btn btn-primary btn-block btn-lg">Create account</button>
+        <p class="form-tos">By creating an account you agree to our <a href="#">Terms of Service</a> and <a href="#">Privacy Policy</a>.</p>
+      </form>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <div class="footer-inner">
+      <span class="footer-brand">&#10022; Lumina Notes</span>
+      <nav class="footer-links" aria-label="Footer navigation">
+        <a href="#">About</a>
+        <a href="#">Blog</a>
+        <a href="#">Careers</a>
+        <a href="#">Help</a>
+        <a href="#">Privacy</a>
+        <a href="#">Terms</a>
+      </nav>
+      <p class="footer-copy">&copy; 2026 Lumina Notes, Inc. All rights reserved.</p>
+    </div>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
