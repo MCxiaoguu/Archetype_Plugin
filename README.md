@@ -1,19 +1,35 @@
 # archetype
 
-Claude Code plugin that drives **feature validation runs** through the
-Synthetic Archetype web portal from inside your editor or terminal.
+Claude Code plugin that turns your session into the **actor** in the Synthetic
+Archetype pipeline: it fetches a persona-enriched instruction set from the
+Archetype backend, drives Chrome (via Claude-in-Chrome) through your product
+*as that persona*, and posts structured results back — so you get faithful,
+customer-like feedback on your work without leaving your editor or terminal.
 
 ## What it gives you
 
 | Component | Path | Purpose |
 | :--- | :--- | :--- |
-| Skill | `skills/validation/` | Main entrypoint — opens the login wizard or runs a validation |
-| Skill | `skills/validate-feature/` | Kick off a validation run for a specific feature |
-| Skill | `skills/list-features/` | Browse features available for validation |
+| Skill | `skills/validation/` | Main entrypoint — login wizard (no args) or the full actor run loop (with args) |
+| Skill | `skills/validate-feature/` | Feature-first entry: resolve a saved feature, then run the actor loop |
+| Skill | `skills/list-features/` | Browse the saved features available for validation |
 | Skill | `skills/check-run-status/` | Look up the status / results of a run |
-| Agent | `agents/feature-validator.md` | End-to-end orchestrator: select → run → monitor → triage |
-| MCP   | `archetype-setup` (stdio) — `scripts/setup-server.py` | Interactive Auth0 device-flow login wizard, declared inline in `plugin.json` |
+| Agent | `agents/feature-validator.md` | Headless orchestration of the same actor loop in one invocation |
+| MCP   | `archetype-setup` (stdio) — `scripts/setup-server.py` | The data plane: 5 tools between Claude and the backend, declared inline in `plugin.json` |
 | Hook  | `hooks/hooks.json` | Session-start sanity check for the auth state |
+
+### MCP tools (`archetype-setup`)
+
+The plugin never handles tokens or raw HTTP. Claude calls these five tools and
+reads their natural-language results.
+
+| Tool | Input | Backend | Purpose |
+| :--- | :--- | :--- | :--- |
+| `login` | `{}` | `/api/oauth/device/*` | Auth0 device-flow login (elicitation modal); caches the token |
+| `start_run` | `{goal?, feature_id?, url}` | `POST /api/plugin/runs` | Assemble a run; renders brief, persona card, scenarios, conduct rules, reporting contract |
+| `report_result` | `{run_id, session_id, status, duration_seconds?, steps, feedback}` | `POST /api/plugin/runs/<id>/results` | Ingest the actor's structured results; returns a confirmation summary |
+| `get_run` | `{run_id}` | `GET /api/plugin/runs/<id>` | Status / progress / feedback readback |
+| `list_features` | `{query?}` | `GET /api/features` | List the user's saved features (`_id` → `feature_id`) |
 
 ## Quick start
 
@@ -25,13 +41,19 @@ In Claude Code, type:
 
 With no argument, it runs the **login wizard** (Auth0 device flow — your
 browser pops open to the Archetype approval page; you approve; the
-plugin polls the backend and saves the access token locally). With an
-argument, it routes to a validation:
+plugin polls the backend and saves the access token locally). With
+arguments, it runs a full validation: it starts a run, becomes the assigned
+persona, drives Chrome through each scenario, and reports results back.
 
 ```
-/archetype:validation FEAT-184
-/archetype:validation validate the checkout flow
+/archetype:validation "test the signup flow" url=http://localhost:8321
+/archetype:validate-feature signup            # feature-first entry
+/archetype:list-features                        # browse saved features
+/archetype:check-run-status <run_id>            # check a run later
 ```
+
+Free text is the **goal**; a `url=<...>` token sets the target URL (required —
+you'll be asked for it if omitted).
 
 ## Dev quickstart — for handoff
 
@@ -100,14 +122,19 @@ The token lives at `~/.claude/plugins/data/archetype-<scope>/auth.json`
 | Pick up your changes in-session | `/reload-plugins` (no relaunch needed) |
 | Force the wizard to re-run from scratch | `rm ~/.claude/plugins/data/archetype-*/auth.json`, then `/archetype:validation` |
 | Watch MCP server logs | Already on stderr if you launched with `--debug` — lines prefixed `[archetype-setup]` |
-| Point at a local backend | `export ARCHETYPE_BACKEND_URL=http://localhost:5001` before launching |
+| Point at a local backend | `export ARCHETYPE_BACKEND_URL=http://localhost:5001` before launching (the MCP server inherits the CLI's environment) |
 | Override the HTTP User-Agent | `export ARCHETYPE_PLUGIN_USER_AGENT="custom/1.0"` (default: `archetype-claude-plugin/<version>`) |
 
 ## Configuration
 
-The wizard speaks to the Archetype backend at
+All five MCP tools speak to the Archetype backend at
 `https://api.syntheticarchetype.com` (override with the
-`ARCHETYPE_BACKEND_URL` env var).
+`ARCHETYPE_BACKEND_URL` env var — set it to `http://localhost:5001` for local
+backend development). Auth is the single device-flow Bearer scheme: the `login`
+tool caches the token at `${CLAUDE_PLUGIN_DATA}/auth.json`, and every other
+tool reads it from there and sends `Authorization: Bearer <token>`. There is no
+separate portal URL, API key, or `.mcp.json` config — device-flow Bearer is the
+single auth scheme.
 
 What the wizard does:
 
@@ -128,16 +155,20 @@ What the wizard does:
      access token to `${CLAUDE_PLUGIN_DATA}/auth.json` (mode `0600`).
 
 The token is sent as `Authorization: Bearer <token>` to every protected
-backend endpoint (`/api/features`, `/api/uat/...`, etc.).
+backend endpoint (`/api/plugin/runs`, `/api/features`, etc.).
 
 ### How it works under the hood
 
 The `archetype-setup` stdio MCP server (Python 3, stdlib only,
-`scripts/setup-server.py`) exposes a single `login` tool, declared
-inline in `plugin.json` under `mcpServers`. The validation skill calls
-the tool; the server sequences the cached-token check, the device-code
-request, the browser launch, the elicitation, the polling, and the
-on-disk save — all in one tool call.
+`scripts/setup-server.py`) is the data plane between Claude and the backend,
+declared inline in `plugin.json` under `mcpServers`. It exposes five tools
+(`login`, `start_run`, `report_result`, `get_run`, `list_features`; see the
+table above). The `login` tool sequences the cached-token check, the
+device-code request, the browser launch, the elicitation, the polling, and the
+on-disk save — all in one tool call. The four run tools carry the Bearer token,
+POST/GET the `/api/plugin` endpoints, and render each response's
+natural-language fields (brief, persona card, scenarios, confirmations) as tool
+text for the actor to follow.
 
 ## Local development reference
 

@@ -1,32 +1,209 @@
 ---
-description: Validation using Archetype
+name: validation
+description: The core Archetype actor loop. Use for the /archetype:validation command. With no arguments, connects the session to Archetype (login wizard). With arguments (a natural-language goal and/or a url=<...> token), it starts a validation run, becomes the assigned persona, drives Chrome through each scenario as that persona, and reports structured results back to the backend.
 ---
 
 # Validation
 
-You are responding to the `/archetype:validation` command. Branch on `$ARGUMENTS`:
+You are responding to the `/archetype:validation` command. This skill is the
+**actor** in the Archetype pipeline: the backend hands you a persona and a set
+of test scenarios, and you drive a real browser through the product under test
+*as that persona*, then report what happened.
 
-- **Empty `$ARGUMENTS`** → run the **Login wizard** below.
-- **Non-empty `$ARGUMENTS`** → hand off to the `validate-feature` skill, passing `$ARGUMENTS` through as the feature identifier or natural-language target.
+Branch on `$ARGUMENTS`:
+
+- **Empty `$ARGUMENTS`** → run the **Login wizard** (below) and stop.
+- **Non-empty `$ARGUMENTS`** → run the **Validation run flow** (below).
+
+Never simulate the backend, invent run/persona data, or fabricate steps and
+results. Everything you report must come from what you actually observed in the
+browser, and every run must be created by the `start_run` tool.
+
+---
 
 ## Login wizard
 
-Invoke the `login` tool exposed by the `archetype-setup` MCP server (its full tool name in your tools list contains `archetype-setup__login`). The tool encapsulates the entire connection flow:
-
-1. **Cached-token check.** It reads `${CLAUDE_PLUGIN_DATA}/auth.json` and calls `POST /api/oauth/validate-token` on the backend.
-   - Valid → tool returns "already connected as `<user_id>`".
-   - Missing or expired → tool proceeds to the device flow.
-2. **Device flow** (only when needed):
-   - Calls `POST /api/oauth/device/code` to get a verification URL + code.
-   - Pops an MCP **elicitation modal** showing the URL and code, with a single "I've approved" tick box.
-   - After the user opens the URL, approves in their browser, and accepts the modal, the tool polls `POST /api/oauth/device/token` at the backend-given interval.
-   - On success it saves the access token to `${CLAUDE_PLUGIN_DATA}/auth.json` with mode `0600` and returns success.
+Invoke the `login` tool from the `archetype-setup` MCP server (its full tool
+name in your tools list ends with `__login`). The tool encapsulates the entire
+connection flow — cached-token check, device-code request, browser launch,
+elicitation modal, polling, and the on-disk token save — in a single call.
 
 Steps for you (Claude):
 
-1. Locate the `login` tool from `archetype-setup` in your available tools.
+1. Locate the `login` tool from `archetype-setup` in your available tools. The
+   `archetype-setup` tools may be deferred; if so, load them first with
+   ToolSearch (query `select:mcp__plugin_archetype_archetype-setup__login`).
 2. Call it with an empty arguments object — no parameters.
-3. **On success**: report the tool's response verbatim (it will say either "already connected as X" or "connected and token saved at <path>").
-4. **On cancellation, timeout, or error**: surface the error verbatim and ask whether the user wants to retry.
+3. **On success**: report the tool's response verbatim (it will say either
+   "already connected as X" or "connected and token saved at <path>").
+4. **On cancellation, timeout, or error**: surface the error verbatim and ask
+   whether the user wants to retry.
 
-Do not ask the user to paste anything in chat. Do not try to shortcut or simulate the device flow. The modal + browser approval is the only authorized path.
+Do not ask the user to paste anything in chat. Do not try to shortcut or
+simulate the device flow. The MCP elicitation modal + browser approval is the
+only authorized path.
+
+---
+
+## Validation run flow
+
+Run this when `$ARGUMENTS` is non-empty. Follow the steps in order.
+
+### 1. Parse `$ARGUMENTS`
+
+- Free text is the **goal** (e.g. "test the signup flow").
+- A `url=<...>` token overrides the target URL (e.g.
+  `url=http://localhost:8321`). Strip it out of the goal text.
+- If the user names a specific feature and you already have its id, treat that
+  as `feature_id`. (If they want to test a named feature but you don't have an
+  id, prefer the `validate-feature` skill instead.)
+- If **no URL** is present, ASK the user for the product URL. Never guess a URL.
+
+### 2. Start the run
+
+Call the `start_run` tool from the `archetype-setup` MCP server with:
+
+- `goal`: the parsed free text (omit if you're running purely by
+  `feature_id`).
+- `url`: the target URL (required).
+- `feature_id`: only if the user named a feature you have an id for.
+
+The tool's result text is **authoritative guidance**. It contains: the mission
+brief, a first-person persona card, numbered scenarios (each with steps and an
+expected result), conduct rules, the `runId` and `sessionId`, and the full
+`report_result` contract. Read all of it.
+
+**Error handling:** if `start_run` returns a "Not connected" error, run the
+**Login wizard** above once, then retry `start_run` exactly ONCE. If it still
+fails, surface the error to the user and stop — do not fabricate a run.
+
+Record the `runId` and `sessionId` — you need them for `report_result`.
+
+### 3. Become the persona
+
+The brief, persona card, and conduct rules from the `start_run` result are
+authoritative. Adopt them fully. Summarize to the user in about three lines:
+who you are (persona name + one-line character), and what you are about to test
+(the goal and the target URL). Then begin.
+
+From here on, act *as this persona*: their patience, skill level, reading
+speed, and mood. Narrate your actions in the persona's first-person voice.
+
+### 4. Open the browser
+
+The Claude-in-Chrome browser tools are deferred and must be loaded before use.
+
+1. Load them with ToolSearch (query `claude-in-chrome`). At minimum you need
+   `tabs_context_mcp`, `tabs_create_mcp`, `navigate`, `computer`,
+   `get_page_text`/`read_page`, and `find`.
+2. Call `tabs_context_mcp` FIRST to see the current browser/tab state.
+3. Create a **NEW** tab (`tabs_create_mcp`) for the target URL — do not hijack
+   an existing tab.
+4. Navigate that tab to the target URL.
+
+### 5. Execute the scenarios
+
+Work through each scenario **in order**, acting at the persona's
+patience/skill/reading level.
+
+Keep a running **step log** as you go. For every meaningful action, record an
+object with these keys (snake_case — this is the shape `report_result` wants):
+
+- `seq`: a 1-based integer, strictly increasing across the whole run.
+- `scenario_id`: the id of the scenario you're on (e.g. `"SC-1"`).
+- `action_text`: what you actually did, plain and factual (e.g. "clicked Start
+  free trial").
+- `narration`: a short persona-voice inner monologue (e.g. "Ugh, nothing
+  happened when I clicked — is it broken?").
+- `url`: the page URL at that moment.
+- `observation_page_type`: one or two words describing the page
+  (`"landing"`, `"pricing"`, `"signup-form"`, etc.).
+- `success`: `true` if the action did what you intended, `false` otherwise.
+- `error`: optional string if something went wrong.
+- `screenshot_b64`: OPTIONAL. The browser/computer tools return screenshots;
+  only attach one for a few key moments and only if it's readily available.
+  Never exceed 6 screenshots total across the whole run, and keep each under
+  1 MB. When in doubt, omit it.
+
+Conduct rules while acting:
+
+- Time-box each scenario to about 3 minutes. If a scenario is blocked (a flaw,
+  a dead end, something you genuinely can't complete as this persona), mark
+  that scenario `blocked` and move on to the next one.
+- Stay on the target site. Do not wander to unrelated URLs.
+- Never fabricate steps, observations, or results. If you didn't see it, don't
+  report it.
+
+### 6. Report results
+
+When you have worked through all scenarios (or exhausted them), call the
+`report_result` tool from the `archetype-setup` MCP server exactly ONCE with
+the full payload. Top-level keys are snake_case; the tool maps them to the
+backend. The `feedback` object's nested keys are already camelCase.
+
+```jsonc
+{
+  "run_id": "<runId from start_run>",
+  "session_id": "<sessionId from start_run>",
+  "status": "completed",            // one of: completed | failed | aborted
+  "duration_seconds": 312,          // approximate wall-clock of the run
+  "steps": [
+    {
+      "seq": 1,
+      "scenario_id": "SC-1",
+      "action_text": "clicked Start free trial",
+      "narration": "Nothing happened for a second — did it register?",
+      "url": "http://localhost:8321/",
+      "observation_page_type": "landing",
+      "success": true,
+      "error": null
+      // "screenshot_b64": "<optional, ≤1MB, ≤6 total>"
+    }
+    // ... one object per meaningful action, seq strictly increasing
+  ],
+  "feedback": {
+    "verdict": "mixed",             // one of: pass | fail | mixed
+    "summary": "<a few sentences: what worked, what broke, overall impression>",
+    "scenarioResults": [
+      {"scenarioId": "SC-1", "status": "pass", "actualResult": "<what actually happened>"}
+      // status is one of: pass | fail | blocked
+    ],
+    "findings": [
+      {
+        "scenarioId": "SC-1",
+        "category": "ux",           // bug | ux | content | performance | other
+        "severity": "high",         // critical | high | medium | low
+        "description": "<the problem, concretely>",
+        "evidenceStepSeq": 4        // the step.seq that demonstrates it
+      }
+    ],
+    "personaReaction": "<a first-person quote capturing how the persona felt>"
+  }
+}
+```
+
+Choose `status`: `completed` if you ran the scenarios through, `failed` if the
+run broke down, `aborted` if you deliberately stopped early. Choose `verdict`
+from the *product's* performance: `pass` (everything worked), `fail`
+(core goal couldn't be achieved), or `mixed`.
+
+### 7. Render the local report
+
+After `report_result` succeeds, present a concise report to the user:
+
+- A **scenario verdict table**: scenario id · title · status (pass/fail/blocked).
+- **Findings by severity** (critical first), each with category and a one-line
+  description.
+- The **persona quote** (`personaReaction`) as a pull-quote.
+- The **run id**.
+- A closing line: "Check status later with
+  `/archetype:check-run-status <run_id>`."
+
+---
+
+## Boundaries (always)
+
+- Never simulate the backend or invent run data. Runs come only from
+  `start_run`; results go only through `report_result`.
+- Call `report_result` exactly once per run.
+- Everything you report must reflect what you actually did in the browser.

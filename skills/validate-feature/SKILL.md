@@ -1,33 +1,55 @@
 ---
-description: Run a feature validation test against the Archetype web portal. Use when the user asks to validate a feature, run feature validation, or test a feature through Synthetic Archetype.
+name: validate-feature
+description: Feature-first entry into an Archetype validation run. Use when the user asks to validate, test, or run validation on a specific saved feature by name (e.g. "validate the signup feature"). Resolves the feature via list_features, then runs the same actor loop as the validation skill with the feature's id attached.
 ---
 
 # Validate Feature
 
-Trigger a feature validation run via the Archetype web portal for the feature
-named "$ARGUMENTS".
+This is the **feature-first** doorway into a validation run. Instead of the
+user handing you a goal, they name a saved feature; you look it up, match it,
+and then run the standard actor loop with that feature's id set.
+
+The run loop itself is identical to the `validation` skill — do not duplicate
+it here. This skill only covers how to resolve the feature and the deltas.
 
 ## Workflow
 
-1. **Identify the feature.** If `$ARGUMENTS` is empty, ask the user which
-   feature (by id, slug, or name) they want to validate. Otherwise treat the
-   value as the feature identifier.
-2. **Locate the portal connection.** Read the plugin's `.mcp.json` and the
-   `ARCHETYPE_PORTAL_URL` / `ARCHETYPE_API_KEY` environment variables to find
-   the configured Archetype web portal endpoint.
-3. **Kick off the validation run.** Call the portal's validation endpoint
-   (`POST {ARCHETYPE_PORTAL_URL}/api/feature-validation/runs`) with the
-   feature identifier. Capture the returned run id.
-4. **Stream / poll status.** Poll `GET .../runs/{run_id}` until the run
-   reaches a terminal state (`passed`, `failed`, `error`). Surface progress
-   to the user as it advances.
-5. **Summarize results.** Report pass/fail, scenario counts, and a link to
-   the full report in the portal. On failure, list the failing scenarios
-   with their assertion messages.
+### 1. Resolve the feature
 
-## Notes
+Call the `list_features` tool from the `archetype-setup` MCP server. Pass
+`$ARGUMENTS` as the `query` (an optional case-insensitive title filter). The
+tool returns a list of features, each with an `_id`, `title`, and `updatedAt`.
 
-- Never invent feature ids — confirm them with the user or via the
-  `list-features` skill before kicking off a run.
-- If the portal is unreachable, surface the exact error rather than retrying
-  silently.
+- **Exact/clear single match** → use that feature's `_id` as `feature_id`.
+- **Multiple plausible matches or ambiguous input** → show the candidates to
+  the user and ask which one they mean. Never guess.
+- **No match** → tell the user, show what features exist (or none), and stop.
+- **"Not connected" error** → run the `login` tool (see the `validation`
+  skill's Login wizard), then retry `list_features` once.
+
+### 2. Ask for the target URL
+
+`list_features` returns features but not necessarily a URL to test. If the user
+didn't supply a `url=<...>` token in `$ARGUMENTS`, ASK them for the product
+URL. Never guess a URL.
+
+### 3. Run the standard actor loop
+
+Now follow the **Validation run flow** from the `validation` skill, with these
+deltas:
+
+- When you call `start_run`, pass `feature_id` set to the resolved feature's
+  `_id`, and `url` set to the target URL. The **goal is optional** — the
+  backend derives it from the feature's fields when `feature_id` is given. Only
+  pass a `goal` if the user gave you extra free-text intent to layer on top.
+- Everything else is the same: become the persona, load Claude-in-Chrome tools,
+  drive each scenario as the persona, keep the snake_case step log, call
+  `report_result` exactly once, and render the local report (scenario verdict
+  table, findings by severity, persona quote, run id, and the
+  `/archetype:check-run-status <run_id>` follow-up).
+
+## Boundaries
+
+- Never invent feature ids — every id must come from `list_features`.
+- Never simulate the backend or fabricate steps/results. Runs come only from
+  `start_run`; results go only through `report_result`, exactly once.
