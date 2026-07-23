@@ -1,12 +1,11 @@
 /* =============================================================
    Lumina Notes — app.js
-   Handles interactivity. Contains three planted UX flaws for
-   persona-actor E2E testing (do NOT add hints or fix markers).
+   Page interactivity: navigation, CTA, and signup handling.
    ============================================================= */
 
 'use strict';
 
-// ---- Banner utility ----
+// Show a transient notification banner at the top of the page.
 function showBanner(text) {
   const banner = document.getElementById('banner');
   if (!banner) return;
@@ -18,19 +17,17 @@ function showBanner(text) {
   }, 4000);
 }
 
-// ---- History helper ----
+// Record an SPA-style pageview in the browser history.
 function pushPageview(p) {
   history.pushState({}, '', p);
 }
 
-// ---- Nav: Plans & More ----
-// Wire up analytics pageview on click (anchor still scrolls via href).
+// Track a pageview when the plans nav link is used (anchor scroll via href).
 document.getElementById('nav-plans').addEventListener('click', () => {
   pushPageview('/#plans');
 });
 
-// ---- Flaw 1: Sluggish CTA ----
-// 900 ms dead delay with no visual feedback whatsoever before navigation.
+// Primary CTA: defer navigation until content settles.
 document.getElementById('cta-trial').addEventListener('click', () => {
   setTimeout(() => {
     location.hash = '#signup';
@@ -38,16 +35,14 @@ document.getElementById('cta-trial').addEventListener('click', () => {
   }, 900);
 });
 
-// ---- Flaw 3: Form validation wipes all fields ----
-// Also shows an unhelpful generic error message; password minimum length is
-// intentionally undisclosed in the UI.
+// Signup form submission with client-side validation.
 document.getElementById('signup-form').addEventListener('submit', (e) => {
   e.preventDefault();
   const email = document.getElementById('signup-email').value;
   if (!email.includes('@') || document.getElementById('signup-password').value.length < 8) {
     console.error('Form validation failed: fields cleared');
-    e.target.reset();                        // the flaw
-    showBanner('Something went wrong. Please try again.');   // unhelpful copy
+    e.target.reset();                        // reset form state on validation error
+    showBanner('Something went wrong. Please try again.');
   } else {
     showBanner('Account created! (demo)');
   }
