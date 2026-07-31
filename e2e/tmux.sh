@@ -69,8 +69,10 @@ e2e_pane() {
 e2e_idle() {
   local pane
   pane="$(tmux capture-pane -t "$E2E_SESSION" -p)"
-  # Busy signals: the running token counter or the interrupt affordance.
-  if printf '%s' "$pane" | grep -qE '·[[:space:]]*↓[[:space:]]*[0-9].*token|esc to interrupt'; then
+  # Busy signals: the running token counter, the interrupt affordance, or the
+  # early "Generating…" spinner (shown before any token counter appears —
+  # verified 2026-07-31: the pane can show an empty ❯ alongside it).
+  if printf '%s' "$pane" | grep -qE '·[[:space:]]*↓[[:space:]]*[0-9].*token|esc to interrupt|Generating…'; then
     return 1
   fi
   # Idle signal: a prompt line showing "❯".
