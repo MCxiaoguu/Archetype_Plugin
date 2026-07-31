@@ -1,0 +1,11 @@
+{
+  "name": "archetype",
+  "owner": { "name": "Synthetic Archetype" },
+  "plugins": [
+    {
+      "name": "archetype",
+      "source": "./",
+      "description": "Testing your product with synthetic personas"
+    }
+  ]
+}
