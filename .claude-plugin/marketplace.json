@@ -4,7 +4,10 @@
   "plugins": [
     {
       "name": "archetype",
-      "source": "./",
+      "source": {
+        "source": "url",
+        "url": "https://github.com/MCxiaoguu/Archetype_Plugin.git"
+      },
       "description": "Testing your product with synthetic personas"
     }
   ]
