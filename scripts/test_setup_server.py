@@ -118,6 +118,27 @@ FEATURES_RESPONSE = {
     ],
 }
 
+DEVICE_CODE_RESPONSE = {
+    "device_code": "dev-code-123",
+    "user_code": "ABCD-EFGH",
+    "verification_uri_complete": "https://auth0.test/activate?user_code=ABCD-EFGH",
+    "interval": 1,
+    "expires_in": 15,
+}
+
+DEVICE_TOKEN_RESPONSE = {
+    "access_token": "new-token-456",
+    "token_type": "Bearer",
+    "expires_in": 86400,
+}
+
+VALIDATE_RESPONSE = {
+    "valid": True,
+    "user_id": "auth0|abc123",
+    "audience": "https://api.syntheticarchetype.com",
+    "issuer": "https://dev.auth0.test/",
+}
+
 
 # ---------------------------------------------------------------------------
 # Recording HTTP stub
@@ -133,6 +154,8 @@ class StubState:
         # (`needle in path`), so needles like "/results" or "/api/plugin/runs"
         # hit run-id paths too.
         self.error_overrides: dict[str, tuple[int, dict]] = {}
+        # like error_overrides, but consumed on first match (for retry paths)
+        self.once_overrides: dict[str, tuple[int, dict]] = {}
         self.lock = threading.Lock()
 
     def record(self, entry: dict) -> None:
@@ -143,6 +166,7 @@ class StubState:
         with self.lock:
             self.requests.clear()
             self.error_overrides.clear()
+            self.once_overrides.clear()
 
     def last_for(self, needle: str) -> dict | None:
         with self.lock:
@@ -180,6 +204,14 @@ class Handler(BaseHTTPRequestHandler):
             }
         )
 
+        # One-shot overrides fire first and are consumed on match.
+        with STATE.lock:
+            for needle in list(STATE.once_overrides):
+                if needle in self.path:
+                    status, payload = STATE.once_overrides.pop(needle)
+                    self._reply(status, payload)
+                    return
+
         # Error overrides take precedence (matched by path substring).
         with STATE.lock:
             overrides = dict(STATE.error_overrides)
@@ -195,6 +227,12 @@ class Handler(BaseHTTPRequestHandler):
         # NOTE: ordering is load-bearing — the "/results" check must precede
         # the "/api/plugin/runs" prefix check, or result POSTs (which live
         # under /api/plugin/runs/<id>/results) would get RUN_RESPONSE instead.
+        if path.startswith("/api/oauth/device/code"):
+            return 200, DEVICE_CODE_RESPONSE
+        if path.startswith("/api/oauth/device/token"):
+            return 200, DEVICE_TOKEN_RESPONSE
+        if path.startswith("/api/oauth/validate-token"):
+            return 200, VALIDATE_RESPONSE
         if path.endswith("/results"):
             return 200, RESULTS_RESPONSE
         if path.startswith("/api/plugin/runs") and method == "POST":
@@ -230,6 +268,11 @@ class ServerProc:
         env = dict(os.environ)
         env["CLAUDE_PLUGIN_DATA"] = str(data_dir)
         env["ARCHETYPE_BACKEND_URL"] = f"http://127.0.0.1:{port}"
+        # Neuter webbrowser.open in the login flow: `true` is a no-op command.
+        env["BROWSER"] = "true"
+        # How this harness answers elicitation/create: "accept" or "decline".
+        self.elicit_action = "decline"
+        self.elicitations: list[dict] = []
         self.proc = subprocess.Popen(
             [sys.executable, str(SERVER)],
             stdin=subprocess.PIPE,
@@ -256,7 +299,16 @@ class ServerProc:
             resp = self._read()
             if resp.get("id") == req_id and ("result" in resp or "error" in resp):
                 return resp
-            # ignore server-initiated requests / mismatched ids
+            # Server-initiated elicitation: record it and answer per elicit_action.
+            if resp.get("method") == "elicitation/create" and resp.get("id") is not None:
+                self.elicitations.append(resp.get("params") or {})
+                if self.elicit_action == "accept":
+                    payload = {"action": "accept", "content": {"approved": True}}
+                else:
+                    payload = {"action": "decline"}
+                self._write({"jsonrpc": "2.0", "id": resp["id"], "result": payload})
+                continue
+            # ignore other server-initiated requests / mismatched ids
 
     def notify(self, method: str, params: dict | None = None) -> None:
         msg = {"jsonrpc": "2.0", "method": method}
@@ -356,9 +408,36 @@ def write_auth(data_dir: Path) -> None:
 
 
 def clear_auth(data_dir: Path) -> None:
-    auth = data_dir / "auth.json"
-    if auth.exists():
-        auth.unlink()
+    for name in ("auth.json", "runs.json"):
+        path = data_dir / name
+        if path.exists():
+            path.unlink()
+
+
+def _b64url(data: bytes) -> str:
+    import base64
+
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
+
+
+def fake_id_token(email: str, name: str) -> str:
+    """JWT-shaped token whose payload segment decodes to {email, name}."""
+    header = _b64url(json.dumps({"alg": "RS256", "typ": "JWT"}).encode())
+    payload = _b64url(json.dumps({"email": email, "name": name}).encode())
+    return f"{header}.{payload}.fakesig"
+
+
+def write_auth_full(data_dir: Path, **extra) -> None:
+    payload = {"access_token": "test-token-123"}
+    payload.update(extra)
+    (data_dir / "auth.json").write_text(json.dumps(payload))
+
+
+def read_run_log(data_dir: Path) -> list:
+    path = data_dir / "runs.json"
+    if not path.exists():
+        return []
+    return json.loads(path.read_text())
 
 
 def case_1_tools_list(srv: ServerProc, data_dir: Path) -> None:
@@ -368,8 +447,11 @@ def case_1_tools_list(srv: ServerProc, data_dir: Path) -> None:
     tools = resp["result"]["tools"]
     names = sorted(t["name"] for t in tools)
     expect(
-        names == sorted(["login", "start_run", "report_result", "get_run", "list_features"]),
-        f"tools/list should show exactly the 5 tools, got {names}",
+        names
+        == sorted(
+            ["login", "start_run", "report_result", "get_run", "list_features", "status"]
+        ),
+        f"tools/list should show exactly the 6 tools, got {names}",
     )
 
 
@@ -417,11 +499,14 @@ def case_2b_start_run_feature_id(srv: ServerProc, data_dir: Path) -> None:
     assert_no_snake_case(body, "start_run body (with feature)")
 
 
-def case_3_start_run_no_auth(srv: ServerProc, data_dir: Path) -> None:
+def case_3_start_run_no_auth_declined(srv: ServerProc, data_dir: Path) -> None:
+    # No token + user declines the inline login -> clean login-hint error.
     clear_auth(data_dir)
+    srv.elicit_action = "decline"
     result = call_tool(srv, "start_run", {"goal": "g", "url": "http://x"})
     expect(result.get("isError") is True, "start_run without auth must be isError")
     contains(result_text(result), "Run /archetype:validation to log in", "start_run no-auth text")
+    expect(len(srv.elicitations) == 1, "self-heal should have offered the login modal once")
 
 
 def case_4_report_result_happy(srv: ServerProc, data_dir: Path) -> None:
@@ -528,8 +613,11 @@ def case_5_report_result_conflict(srv: ServerProc, data_dir: Path) -> None:
     contains(result_text(result), "This run is already completed.", "409 NL message surfaced")
 
 
-def case_6_401_appends_login_hint(srv: ServerProc, data_dir: Path) -> None:
+def case_6_401_declined_heal_appends_login_hint(srv: ServerProc, data_dir: Path) -> None:
+    # Stale token, backend keeps saying 401, user declines re-login ->
+    # the original backend message + login hint must surface.
     write_auth(data_dir)
+    srv.elicit_action = "decline"
     STATE.error_overrides["/api/plugin/runs"] = (
         401,
         {"error": "invalid_token", "message": "Token expired or invalid."},
@@ -568,16 +656,175 @@ def case_8_list_features(srv: ServerProc, data_dir: Path) -> None:
     contains(text, "665f0a1b2c3d4e5f60718293", "list_features text (_id)")
 
 
+def case_9_status_not_connected(srv: ServerProc, data_dir: Path) -> None:
+    # status reports state; it must NOT self-heal into a login modal.
+    clear_auth(data_dir)
+    srv.elicit_action = "decline"
+    result = call_tool(srv, "status", {})
+    expect(not result.get("isError"), "status not-connected is a report, not an error")
+    text = result_text(result)
+    contains(text, "Not connected", "status not-connected text")
+    contains(text, "https://www.syntheticarchetype.com", "status portal link")
+    contains(text, "/archetype:validation", "status login hint")
+    expect(len(srv.elicitations) == 0, "status must not trigger the login modal")
+    expect(
+        STATE.last_for("/api/oauth/device/code") is None,
+        "status must not start a device flow",
+    )
+
+
+def case_10_status_connected(srv: ServerProc, data_dir: Path) -> None:
+    write_auth_full(
+        data_dir,
+        id_token=fake_id_token("priya@example.com", "Priya Nair"),
+        expires_in=86400,
+        saved_at=int(time.time()),
+    )
+    result = call_tool(srv, "status", {})
+    expect(not result.get("isError"), "status connected must not be an error")
+    text = result_text(result)
+    contains(text, "priya@example.com", "status shows email from id_token")
+    contains(text, "Priya Nair", "status shows name from id_token")
+    contains(text, "auth0|abc123", "status shows user_id from validate-token")
+    contains(text, "Features: 1", "status shows feature count")
+    contains(text, "https://www.syntheticarchetype.com", "status portal link")
+    req = STATE.last_for("/api/oauth/validate-token")
+    expect(req is not None, "status should validate the token against the backend")
+    freq = STATE.last_for("/api/features")
+    expect(freq is not None, "status should fetch the feature count")
+
+
+def case_11_status_invalid_token(srv: ServerProc, data_dir: Path) -> None:
+    write_auth(data_dir)
+    STATE.error_overrides["/api/oauth/validate-token"] = (
+        401,
+        {"valid": False, "error": "invalid_token", "reason": "expired"},
+    )
+    result = call_tool(srv, "status", {})
+    expect(not result.get("isError"), "status with stale token still renders a report")
+    text = result_text(result)
+    expect(
+        "expired" in text.lower() or "invalid" in text.lower(),
+        f"status should flag the stale token, got: {text!r}",
+    )
+    contains(text, "https://www.syntheticarchetype.com", "status portal link (stale token)")
+    contains(text, "/archetype:validation", "status login hint (stale token)")
+
+
+def case_12_run_log_start_report_status(srv: ServerProc, data_dir: Path) -> None:
+    write_auth(data_dir)
+    call_tool(srv, "start_run", {"goal": "test signup", "url": "http://localhost:8321"})
+    log_entries = read_run_log(data_dir)
+    expect(len(log_entries) == 1, f"start_run should append one run-log entry, got {log_entries}")
+    entry = log_entries[0]
+    expect(entry.get("run_id") == RUN_RESPONSE["runId"], f"run_id recorded, got {entry}")
+    expect(entry.get("goal") == "test signup", "goal recorded")
+    expect(entry.get("url") == "http://localhost:8321", "url recorded")
+    expect(entry.get("started_at") is not None, "started_at recorded")
+
+    call_tool(
+        srv,
+        "report_result",
+        {
+            "run_id": RUN_RESPONSE["runId"],
+            "session_id": RUN_RESPONSE["sessionId"],
+            "status": "completed",
+            "steps": [],
+            "feedback": {"verdict": "mixed", "summary": "ok"},
+        },
+    )
+    entry = read_run_log(data_dir)[0]
+    expect(entry.get("status") == "completed", f"report_result records status, got {entry}")
+    expect(entry.get("verdict") == "mixed", f"report_result records verdict, got {entry}")
+
+    text = result_text(call_tool(srv, "status", {}))
+    contains(text, RUN_RESPONSE["runId"], "status shows recent run id")
+    contains(text, "test signup", "status shows recent run goal")
+    contains(text, "mixed", "status shows recent run verdict")
+
+
+def case_13_run_log_truncation(srv: ServerProc, data_dir: Path) -> None:
+    write_auth(data_dir)
+    stale = [
+        {"run_id": f"old-{i}", "goal": "g", "url": "u", "started_at": i}
+        for i in range(20)
+    ]
+    (data_dir / "runs.json").write_text(json.dumps(stale))
+    call_tool(srv, "start_run", {"goal": "g", "url": "http://x"})
+    log_entries = read_run_log(data_dir)
+    expect(len(log_entries) == 20, f"run log must cap at 20 entries, got {len(log_entries)}")
+    ids = [e.get("run_id") for e in log_entries]
+    expect(RUN_RESPONSE["runId"] in ids, "newest run kept")
+    expect("old-0" not in ids, "oldest entry dropped")
+
+
+def case_14_run_log_corrupt(srv: ServerProc, data_dir: Path) -> None:
+    write_auth(data_dir)
+    (data_dir / "runs.json").write_text("{not json")
+    result = call_tool(srv, "start_run", {"goal": "g", "url": "http://x"})
+    expect(not result.get("isError"), "corrupt run log must not break start_run")
+    log_entries = read_run_log(data_dir)
+    expect(len(log_entries) == 1, "corrupt log replaced by fresh one")
+    status_text = result_text(call_tool(srv, "status", {}))
+    contains(status_text, "https://www.syntheticarchetype.com", "status survives log rewrite")
+
+
+def case_15_self_heal_missing_token(srv: ServerProc, data_dir: Path) -> None:
+    # No token, user accepts the inline login -> the ORIGINAL call completes.
+    clear_auth(data_dir)
+    srv.elicit_action = "accept"
+    result = call_tool(srv, "list_features", {})
+    expect(not result.get("isError"), f"self-healed call must succeed, got {result_text(result)!r}")
+    contains(result_text(result), "Signup", "self-healed list_features returns data")
+    expect(len(srv.elicitations) == 1, "exactly one login modal")
+    req = STATE.last_for("/api/features")
+    expect(
+        req["headers"].get("Authorization") == "Bearer new-token-456",
+        f"retry must use the fresh token, got {req['headers'].get('Authorization')}",
+    )
+    auth = json.loads((data_dir / "auth.json").read_text())
+    expect(auth.get("access_token") == "new-token-456", "fresh token persisted")
+
+
+def case_16_self_heal_401_retry(srv: ServerProc, data_dir: Path) -> None:
+    # Stale token -> one 401 -> inline re-login -> retry succeeds.
+    write_auth(data_dir)
+    srv.elicit_action = "accept"
+    STATE.once_overrides["/api/features"] = (
+        401,
+        {"error": "invalid_token", "message": "Token expired or invalid."},
+    )
+    result = call_tool(srv, "list_features", {})
+    expect(not result.get("isError"), f"401-healed call must succeed, got {result_text(result)!r}")
+    contains(result_text(result), "Signup", "401-healed list_features returns data")
+    expect(len(srv.elicitations) == 1, "exactly one login modal")
+    req = STATE.last_for("/api/features")
+    expect(
+        req["headers"].get("Authorization") == "Bearer new-token-456",
+        f"retry must use the fresh token, got {req['headers'].get('Authorization')}",
+    )
+    auth = json.loads((data_dir / "auth.json").read_text())
+    expect(auth.get("access_token") == "new-token-456", "fresh token persisted after 401 heal")
+
+
 CASES = [
-    ("initialize + tools/list shows 5 tools", case_1_tools_list),
+    ("initialize + tools/list shows 6 tools", case_1_tools_list),
     ("start_run happy path (camelCase body, rich tool text)", case_2_start_run_happy),
     ("start_run maps feature_id -> featureId", case_2b_start_run_feature_id),
-    ("start_run without auth -> login hint error", case_3_start_run_no_auth),
+    ("start_run no auth + declined login -> login hint error", case_3_start_run_no_auth_declined),
     ("report_result happy path (snake->camel, message surfaced)", case_4_report_result_happy),
     ("report_result 409 conflict -> NL message error", case_5_report_result_conflict),
-    ("401 on any tool -> appends login hint", case_6_401_appends_login_hint),
+    ("persistent 401 + declined heal -> login hint", case_6_401_declined_heal_appends_login_hint),
     ("get_run renders status/progress/feedback", case_7_get_run),
     ("list_features renders title + _id", case_8_list_features),
+    ("status: not connected, no login modal", case_9_status_not_connected),
+    ("status: connected dashboard (account, features, portal)", case_10_status_connected),
+    ("status: stale token degrades gracefully", case_11_status_invalid_token),
+    ("run log: start_run appends, report_result updates, status renders", case_12_run_log_start_report_status),
+    ("run log: caps at 20 entries", case_13_run_log_truncation),
+    ("run log: corrupt file tolerated", case_14_run_log_corrupt),
+    ("self-heal: missing token -> inline login -> original call", case_15_self_heal_missing_token),
+    ("self-heal: 401 -> re-login -> retry once", case_16_self_heal_401_retry),
 ]
 
 

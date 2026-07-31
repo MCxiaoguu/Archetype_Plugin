@@ -18,8 +18,10 @@ Look up a specific validation run by its id and report where it stands.
    `run_id` set to that id.
    - The `archetype-setup` tools may be deferred; if so, load them first with
      ToolSearch (query `select:mcp__plugin_archetype_archetype-setup__get_run`).
-   - **On a "Not connected" error** → run the `login` tool (see the
-     `validation` skill's Login wizard), then retry `get_run` once.
+   - Auth is self-healing: if the session isn't connected, the tool itself
+     opens the login modal and then completes the request — do not pre-call
+     `login`. A "Not connected" error only comes back if the user declined the
+     login; surface it and stop.
 3. Report what the tool returns:
    - **Status** and **progress** (e.g. `running · 60%`, `completed · 100%`).
    - **analyticsReady** (whether downstream analytics have finished).

@@ -45,8 +45,9 @@ listing is a possible later upgrade.
 
 ### 4. Self-healing auth
 
-A shared `ensure_token()` used by `start_run`, `report_result`, `get_run`,
-`list_features`, `status`:
+A shared `authed_call()` used by `start_run`, `report_result`, `get_run`,
+`list_features` (`status` deliberately does NOT self-heal — asking for status
+must never pop a login modal):
 
 1. Load the cached token. If present, use it (unchanged fast path).
 2. If missing — or the backend answers 401 — run the existing device-flow

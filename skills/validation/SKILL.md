@@ -73,9 +73,14 @@ brief, a first-person persona card, numbered scenarios (each with steps and an
 expected result), conduct rules, the `runId` and `sessionId`, and the full
 `report_result` contract. Read all of it.
 
-**Error handling:** if `start_run` returns a "Not connected" error, run the
-**Login wizard** above once, then retry `start_run` exactly ONCE. If it still
-fails, surface the error to the user and stop — do not fabricate a run.
+**Error handling:** auth is self-healing — if the session isn't connected (or
+the token expired), `start_run` itself opens the login modal and then starts
+the run; do not pre-call `login`. A "Not connected" error only comes back if
+the user declined the login; surface it and stop — do not fabricate a run.
+
+Tip: this flow also needs `report_result` later — load both in one ToolSearch
+query
+(`select:mcp__plugin_archetype_archetype-setup__start_run,mcp__plugin_archetype_archetype-setup__report_result`).
 
 Record the `runId` and `sessionId` — you need them for `report_result`.
 
@@ -144,10 +149,10 @@ Conduct rules while acting:
 When you have worked through all scenarios (or exhausted them), call the
 `report_result` tool from the `archetype-setup` MCP server with the full
 payload. Make exactly one SUCCESSFUL call: if the call itself errors, you may
-retry with the same payload (on a "Not connected" error, run the **Login
-wizard** once first, then retry); but once you receive a success confirmation,
-never re-send. Top-level keys are snake_case; the tool maps them to the
-backend. The `feedback` object's nested keys are already camelCase.
+retry with the same payload (auth is self-healing — an expired token re-opens
+the login modal inside the tool call); but once you receive a success
+confirmation, never re-send. Top-level keys are snake_case; the tool maps them
+to the backend. The `feedback` object's nested keys are already camelCase.
 
 The shape below mirrors the contract rendered by `start_run`; if they ever
 differ, the `start_run` text wins.

@@ -24,8 +24,10 @@ tool returns a list of features, each with an `_id`, `title`, and `updatedAt`.
 - **Multiple plausible matches or ambiguous input** → show the candidates to
   the user and ask which one they mean. Never guess.
 - **No match** → tell the user, show what features exist (or none), and stop.
-- **"Not connected" error** → run the `login` tool (see the `validation`
-  skill's Login wizard), then retry `list_features` once.
+- Auth is self-healing: if the session isn't connected, the tool itself opens
+  the login modal and then completes the request — do not pre-call `login`.
+  A "Not connected" error only comes back if the user declined the login;
+  surface it and stop.
 
 ### 2. Ask for the target URL
 

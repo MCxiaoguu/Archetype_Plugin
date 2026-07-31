@@ -31,6 +31,7 @@ Stdlib-only. Backend base URL is configurable via the
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import sys
@@ -39,7 +40,7 @@ import urllib.error
 import urllib.request
 import webbrowser
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 PROTOCOL_VERSION = "2025-06-18"
 SERVER_NAME = "archetype-setup"
@@ -60,7 +61,15 @@ LOGIN_HINT = "Run /archetype:validation to log in."
 BACKEND_BASE = os.environ.get(
     "ARCHETYPE_BACKEND_URL", "https://api.syntheticarchetype.com"
 ).rstrip("/")
+PORTAL_URL = os.environ.get(
+    "ARCHETYPE_PORTAL_URL", "https://www.syntheticarchetype.com"
+).rstrip("/")
 HTTP_TIMEOUT = 15
+
+# The status dashboard keeps a small per-machine log of recent runs
+# (${CLAUDE_PLUGIN_DATA}/runs.json); cross-device history lives in the portal.
+RUN_LOG_LIMIT = 20
+RUN_LOG_SHOWN = 5
 
 # Cloudflare WAF in front of api.syntheticarchetype.com returns HTTP 403
 # (error 1010) for the default Python-urllib User-Agent. Send a real,
@@ -284,6 +293,72 @@ def poll_for_token(
     }
 
 
+def perform_device_login() -> tuple[str | None, str]:
+    """Run the Auth0 device flow end to end, saving the token on success.
+
+    Returns (access_token, message); access_token is None on any failure and
+    the message explains why in user-facing language. Shared by the explicit
+    `login` tool and the self-healing path of every authed tool.
+    """
+    plugin_data = os.environ.get("CLAUDE_PLUGIN_DATA")
+    if not plugin_data:
+        return None, (
+            "CLAUDE_PLUGIN_DATA is not set; cannot determine where to store credentials."
+        )
+    auth_path = Path(plugin_data) / "auth.json"
+
+    status, code_body = backend_post("/api/oauth/device/code", {})
+    if status != 200 or "device_code" not in code_body:
+        err = code_body.get("error_description") or code_body.get("error") or code_body
+        return None, (
+            f"Could not start Archetype login (backend={BACKEND_BASE}, status={status}): {err}"
+        )
+
+    device_code = code_body["device_code"]
+    user_code = code_body.get("user_code", "")
+    verify_url = code_body.get("verification_uri_complete") or code_body.get(
+        "verification_uri", ""
+    )
+    interval = int(code_body.get("interval", 5))
+    expires_in = int(code_body.get("expires_in", 900))
+
+    if not verify_url:
+        return None, "Backend did not return a verification URL."
+
+    log(f"prompting user with verification URL: {verify_url}")
+    if not request_user_approval(verify_url, user_code):
+        return None, "Login cancelled. Re-run /archetype:validation to try again."
+
+    ok, token_body = poll_for_token(device_code, interval, expires_in)
+    if not ok:
+        err = (
+            token_body.get("error_description")
+            or token_body.get("error")
+            or "unknown error"
+        )
+        return None, f"Could not complete login: {err}"
+
+    auth_path.parent.mkdir(parents=True, exist_ok=True)
+    payload: dict[str, Any] = {
+        "access_token": token_body["access_token"],
+        "token_type": token_body.get("token_type", "Bearer"),
+        "expires_in": token_body.get("expires_in"),
+        "scope": token_body.get("scope"),
+        "refresh_token": token_body.get("refresh_token"),
+        "id_token": token_body.get("id_token"),
+        "saved_at": int(time.time()),
+    }
+    payload = {k: v for k, v in payload.items() if v is not None}
+    auth_path.write_text(json.dumps(payload, indent=2) + "\n")
+    os.chmod(auth_path, 0o600)
+    log(f"saved token to {auth_path}")
+
+    return token_body["access_token"], (
+        f"Connected to Archetype. Access token saved to {auth_path} (mode 0600).\n"
+        "Run `/archetype:validation <instruction>` to start a validation run."
+    )
+
+
 def handle_login() -> dict[str, Any]:
     plugin_data = os.environ.get("CLAUDE_PLUGIN_DATA")
     if not plugin_data:
@@ -301,62 +376,8 @@ def handle_login() -> dict[str, Any]:
             f"Token at {auth_path}. To re-login, delete that file and re-run /archetype:validation."
         )
 
-    status, code_body = backend_post("/api/oauth/device/code", {})
-    if status != 200 or "device_code" not in code_body:
-        err = code_body.get("error_description") or code_body.get("error") or code_body
-        return tool_text(
-            f"Could not start Archetype login (backend={BACKEND_BASE}, status={status}): {err}",
-            is_error=True,
-        )
-
-    device_code = code_body["device_code"]
-    user_code = code_body.get("user_code", "")
-    verify_url = code_body.get("verification_uri_complete") or code_body.get(
-        "verification_uri", ""
-    )
-    interval = int(code_body.get("interval", 5))
-    expires_in = int(code_body.get("expires_in", 900))
-
-    if not verify_url:
-        return tool_text(
-            "Backend did not return a verification URL.", is_error=True
-        )
-
-    log(f"prompting user with verification URL: {verify_url}")
-    if not request_user_approval(verify_url, user_code):
-        return tool_text(
-            "Login cancelled. Re-run /archetype:validation to try again.",
-            is_error=True,
-        )
-
-    ok, token_body = poll_for_token(device_code, interval, expires_in)
-    if not ok:
-        err = (
-            token_body.get("error_description")
-            or token_body.get("error")
-            or "unknown error"
-        )
-        return tool_text(f"Could not complete login: {err}", is_error=True)
-
-    auth_path.parent.mkdir(parents=True, exist_ok=True)
-    payload: dict[str, Any] = {
-        "access_token": token_body["access_token"],
-        "token_type": token_body.get("token_type", "Bearer"),
-        "expires_in": token_body.get("expires_in"),
-        "scope": token_body.get("scope"),
-        "refresh_token": token_body.get("refresh_token"),
-        "id_token": token_body.get("id_token"),
-        "saved_at": int(time.time()),
-    }
-    payload = {k: v for k, v in payload.items() if v is not None}
-    auth_path.write_text(json.dumps(payload, indent=2) + "\n")
-    os.chmod(auth_path, 0o600)
-    log(f"saved token to {auth_path}")
-
-    return tool_text(
-        f"Connected to Archetype. Access token saved to {auth_path} (mode 0600).\n"
-        "Run `/archetype:validation <instruction>` to start a validation run."
-    )
+    token, message = perform_device_login()
+    return tool_text(message, is_error=token is None)
 
 
 # ---------- auth + backend-error helpers (shared by the run tools) ----------
@@ -381,6 +402,88 @@ def not_connected() -> dict[str, Any]:
     return tool_text(
         "Not connected. Run /archetype:validation to log in.", is_error=True
     )
+
+
+def authed_call(
+    do_call: Callable[[str], tuple[int, dict[str, Any]]],
+) -> tuple[int, dict[str, Any]] | None:
+    """Run a backend call with a token, self-healing missing/expired auth.
+
+    Missing token → run the device-flow login inline (elicitation modal) and
+    proceed. A 401 answer → re-login once and retry once. Returns the final
+    (status, body), or None when no token could be obtained (user declined or
+    the flow failed) — callers render not_connected() for that.
+    """
+    token = load_token()
+    if not token:
+        token, message = perform_device_login()
+        if not token:
+            log(f"inline login failed: {message}")
+            return None
+    status, body = do_call(token)
+    if status == 401:
+        token, message = perform_device_login()
+        if token:
+            status, body = do_call(token)
+        else:
+            log(f"inline re-login after 401 failed: {message}")
+    return status, body
+
+
+# ---------- local run log (feeds the status dashboard) ----------
+
+
+def _runs_path() -> Path | None:
+    plugin_data = os.environ.get("CLAUDE_PLUGIN_DATA")
+    return Path(plugin_data) / "runs.json" if plugin_data else None
+
+
+def load_run_log() -> list[dict[str, Any]]:
+    path = _runs_path()
+    if path is None or not path.exists():
+        return []
+    try:
+        entries = json.loads(path.read_text())
+        return entries if isinstance(entries, list) else []
+    except Exception as exc:
+        log(f"run log unreadable, starting fresh: {exc}")
+        return []
+
+
+def _save_run_log(entries: list[dict[str, Any]]) -> None:
+    path = _runs_path()
+    if path is None:
+        return
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(entries[-RUN_LOG_LIMIT:], indent=2) + "\n")
+    except Exception as exc:  # the log is best-effort, never fatal
+        log(f"could not write run log: {exc}")
+
+
+def record_run_start(run_body: dict[str, Any], arguments: dict[str, Any]) -> None:
+    entries = load_run_log()
+    entry = {
+        "run_id": run_body.get("runId"),
+        "session_id": run_body.get("sessionId"),
+        "goal": arguments.get("goal"),
+        "url": arguments.get("url"),
+        "feature_id": arguments.get("feature_id"),
+        "started_at": int(time.time()),
+    }
+    entries.append({k: v for k, v in entry.items() if v is not None})
+    _save_run_log(entries)
+
+
+def record_run_result(run_id: str, status_str: str | None, verdict: str | None) -> None:
+    entries = load_run_log()
+    for entry in reversed(entries):
+        if entry.get("run_id") == run_id:
+            entry["status"] = status_str
+            entry["verdict"] = verdict
+            entry["reported_at"] = int(time.time())
+            break
+    _save_run_log(entries)
 
 
 def backend_error_text(status: int, body: dict[str, Any]) -> dict[str, Any]:
@@ -456,10 +559,6 @@ def _render_run(body: dict[str, Any]) -> str:
 
 
 def handle_start_run(arguments: dict[str, Any]) -> dict[str, Any]:
-    token = load_token()
-    if not token:
-        return not_connected()
-
     body = {
         "goal": arguments.get("goal"),
         "featureId": arguments.get("feature_id"),
@@ -467,12 +566,18 @@ def handle_start_run(arguments: dict[str, Any]) -> dict[str, Any]:
     }
     body = {k: v for k, v in body.items() if v is not None}
 
-    status, resp = backend_post(
-        "/api/plugin/runs", body, auth_token=token, timeout=RUN_TIMEOUT
+    result = authed_call(
+        lambda token: backend_post(
+            "/api/plugin/runs", body, auth_token=token, timeout=RUN_TIMEOUT
+        )
     )
+    if result is None:
+        return not_connected()
+    status, resp = result
     if not (200 <= status < 300):
         return backend_error_text(status, resp)
 
+    record_run_start(resp, arguments)
     return tool_text(_render_run(resp))
 
 
@@ -495,10 +600,6 @@ def _map_step(step: dict[str, Any]) -> dict[str, Any]:
 
 
 def handle_report_result(arguments: dict[str, Any]) -> dict[str, Any]:
-    token = load_token()
-    if not token:
-        return not_connected()
-
     run_id = arguments.get("run_id")
     body: dict[str, Any] = {
         "sessionId": arguments.get("session_id"),
@@ -512,14 +613,24 @@ def handle_report_result(arguments: dict[str, Any]) -> dict[str, Any]:
     if arguments.get("duration_seconds") is not None:
         body["durationSeconds"] = arguments["duration_seconds"]
 
-    status, resp = backend_post(
-        f"/api/plugin/runs/{run_id}/results",
-        body,
-        auth_token=token,
-        timeout=RESULT_TIMEOUT,
+    result = authed_call(
+        lambda token: backend_post(
+            f"/api/plugin/runs/{run_id}/results",
+            body,
+            auth_token=token,
+            timeout=RESULT_TIMEOUT,
+        )
     )
+    if result is None:
+        return not_connected()
+    status, resp = result
     if not (200 <= status < 300):
         return backend_error_text(status, resp)
+
+    verdict = (resp.get("summary") or {}).get("verdict") or (
+        arguments.get("feedback") or {}
+    ).get("verdict")
+    record_run_result(run_id, arguments.get("status"), verdict)
 
     message = resp.get("message", "Results stored.")
     summary = resp.get("summary") or {}
@@ -535,12 +646,13 @@ def handle_report_result(arguments: dict[str, Any]) -> dict[str, Any]:
 
 
 def handle_get_run(arguments: dict[str, Any]) -> dict[str, Any]:
-    token = load_token()
-    if not token:
-        return not_connected()
-
     run_id = arguments.get("run_id")
-    status, resp = backend_get(f"/api/plugin/runs/{run_id}", auth_token=token)
+    result = authed_call(
+        lambda token: backend_get(f"/api/plugin/runs/{run_id}", auth_token=token)
+    )
+    if result is None:
+        return not_connected()
+    status, resp = result
     if not (200 <= status < 300):
         return backend_error_text(status, resp)
 
@@ -563,11 +675,12 @@ def handle_get_run(arguments: dict[str, Any]) -> dict[str, Any]:
 
 
 def handle_list_features(arguments: dict[str, Any]) -> dict[str, Any]:
-    token = load_token()
-    if not token:
+    result = authed_call(
+        lambda token: backend_get("/api/features", auth_token=token)
+    )
+    if result is None:
         return not_connected()
-
-    status, resp = backend_get("/api/features", auth_token=token)
+    status, resp = result
     if not (200 <= status < 300):
         return backend_error_text(status, resp)
 
@@ -589,6 +702,116 @@ def handle_list_features(arguments: dict[str, Any]) -> dict[str, Any]:
     lines.append(
         "\nPass a feature's _id as feature_id to start_run to validate it."
     )
+    return tool_text("\n".join(lines))
+
+
+# ---------- tool: status ----------
+
+
+def _decode_jwt_claims(token: str) -> dict[str, Any]:
+    """Decode a JWT's payload segment for DISPLAY only — no signature check."""
+    try:
+        payload = token.split(".")[1]
+        payload += "=" * (-len(payload) % 4)
+        claims = json.loads(base64.urlsafe_b64decode(payload))
+        return claims if isinstance(claims, dict) else {}
+    except Exception:
+        return {}
+
+
+def _token_expiry_line(auth: dict[str, Any]) -> str | None:
+    expires_in = auth.get("expires_in")
+    saved_at = auth.get("saved_at")
+    if not isinstance(expires_in, (int, float)) or not isinstance(saved_at, (int, float)):
+        return None
+    remaining = int(saved_at + expires_in - time.time())
+    if remaining <= 0:
+        return "expires: past its lifetime (a re-login will happen automatically)"
+    if remaining >= 3600:
+        return f"expires: in ~{remaining // 3600}h"
+    return f"expires: in ~{max(remaining // 60, 1)}m"
+
+
+def _recent_runs_lines() -> list[str]:
+    entries = load_run_log()
+    if not entries:
+        return ["Recent runs (this machine): none recorded yet"]
+    lines = ["Recent runs (this machine):"]
+    for entry in reversed(entries[-RUN_LOG_SHOWN:]):
+        outcome = entry.get("status") or "started"
+        if entry.get("verdict"):
+            outcome += f" · verdict {entry['verdict']}"
+        goal = entry.get("goal") or entry.get("url") or ""
+        lines.append(f"  {entry.get('run_id', '?')}  {goal}  → {outcome}")
+    return lines
+
+
+def handle_status(_arguments: dict[str, Any]) -> dict[str, Any]:
+    """Render the connection dashboard. Reports state; never triggers login."""
+    header = "— ARCHETYPE STATUS —"
+    plugin_data = os.environ.get("CLAUDE_PLUGIN_DATA")
+    auth: dict[str, Any] = {}
+    if plugin_data:
+        auth_path = Path(plugin_data) / "auth.json"
+        if auth_path.exists():
+            try:
+                auth = json.loads(auth_path.read_text())
+            except Exception as exc:
+                log(f"could not parse auth.json for status: {exc}")
+
+    token = auth.get("access_token")
+    if not token:
+        return tool_text(
+            f"{header}\n\n"
+            f"Account: Not connected — run /archetype:validation to log in.\n"
+            f"Backend: {BACKEND_BASE}\n"
+            f"Portal:  {PORTAL_URL}"
+        )
+
+    claims = _decode_jwt_claims(auth.get("id_token") or "")
+    identity_bits = [b for b in (claims.get("name"), claims.get("email")) if b]
+
+    status, body = backend_post("/api/oauth/validate-token", {}, auth_token=token)
+    lines = [header, ""]
+
+    if status == 200 and body.get("valid") is True:
+        user_id = body.get("user_id")
+        who = " ".join(identity_bits) if identity_bits else "connected"
+        if user_id:
+            who += f" ({user_id})"
+        lines.append(f"Account: {who}")
+        token_line = "Token:   valid"
+        expiry = _token_expiry_line(auth)
+        if expiry:
+            token_line += f" · {expiry}"
+        lines.append(token_line)
+        lines.append(f"Backend: {BACKEND_BASE} — reachable")
+
+        fstatus, fbody = backend_get("/api/features", auth_token=token)
+        if 200 <= fstatus < 300:
+            lines.append(f"Features: {len(fbody.get('features') or [])} saved")
+        else:
+            lines.append("Features: unavailable")
+    elif status == 0:
+        who = " ".join(identity_bits) if identity_bits else "unverified"
+        lines.append(f"Account: {who} (could not verify)")
+        lines.append("Token:   could not verify — backend unreachable")
+        lines.append(
+            f"Backend: {BACKEND_BASE} — unreachable ({body.get('message', 'network error')})"
+        )
+    else:
+        who = " ".join(identity_bits) if identity_bits else "previously connected"
+        lines.append(f"Account: {who}")
+        lines.append(
+            "Token:   expired or invalid — run /archetype:validation to log in "
+            "(any archetype command will also re-login automatically)"
+        )
+        lines.append(f"Backend: {BACKEND_BASE} — reachable")
+
+    lines.append("")
+    lines.extend(_recent_runs_lines())
+    lines.append("")
+    lines.append(f"Portal:  {PORTAL_URL}")
     return tool_text("\n".join(lines))
 
 
@@ -684,6 +907,16 @@ TOOLS: dict[str, dict[str, Any]] = {
             "required": [],
         },
         "handler": handle_list_features,
+    },
+    "status": {
+        "description": (
+            "Render the Archetype connection dashboard: connected account, "
+            "token health, backend reachability, saved-feature count, recent "
+            "runs from this machine, and the portal link. Read-only — never "
+            "triggers a login."
+        ),
+        "schema": {"type": "object", "properties": {}, "required": []},
+        "handler": handle_status,
     },
 }
 
