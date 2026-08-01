@@ -139,6 +139,53 @@ VALIDATE_RESPONSE = {
     "issuer": "https://dev.auth0.test/",
 }
 
+PERSONAS_RESPONSE = {
+    "personas": [
+        {
+            "personaId": "vp-fiona-001",
+            "name": "Fiona Founder",
+            "story": "A vibe-coding solo founder who ships fast and trusts her gut.",
+            "source": "vibe",
+            "createdAt": "2026-08-01T00:00:00Z",
+            "demographics": {"occupation": "startup founder"},
+        },
+        {
+            "personaId": "rp-replay-001",
+            "name": "Priya Nair",
+            "story": "A busy PM who skims fast and abandons at the first snag.",
+            "source": "replay",
+            "createdAt": "2026-07-22T00:00:00Z",
+            "demographics": {},
+        },
+    ]
+}
+
+VIBE_PREVIEW_RESPONSE = {
+    "examples": [
+        {
+            "name": "Fiona Founder",
+            "story": "Ships fast, trusts her gut, hates onboarding friction.",
+            "personaNeed": "see whether this saves her an afternoon",
+            "vibeSummary": "impatient vibe-coder founder",
+        },
+        {
+            "name": "Gary Garage",
+            "story": "Tinkers late at night; skeptical of shiny tools.",
+            "personaNeed": "prove the tool is not vaporware",
+            "vibeSummary": "skeptical hacker founder",
+        },
+    ]
+}
+
+VIBE_CREATE_RESPONSE = {
+    "personaId": "vp-new-123",
+    "name": "Fiona Founder",
+    "story": "A vibe-coding solo founder who ships fast and trusts her gut.",
+    "personaNeed": "see whether this product saves her time",
+    "source": "vibe",
+    "createdAt": "2026-08-01T00:00:00Z",
+}
+
 
 # ---------------------------------------------------------------------------
 # Recording HTTP stub
@@ -220,19 +267,26 @@ class Handler(BaseHTTPRequestHandler):
                 self._reply(status, payload)
                 return
 
-        status, payload = self._canned(method, self.path)
+        status, payload = self._canned(method, self.path, body)
         self._reply(status, payload)
 
-    def _canned(self, method: str, path: str) -> tuple[int, dict]:
+    def _canned(self, method: str, path: str, body: dict | None) -> tuple[int, dict]:
         # NOTE: ordering is load-bearing — the "/results" check must precede
         # the "/api/plugin/runs" prefix check, or result POSTs (which live
         # under /api/plugin/runs/<id>/results) would get RUN_RESPONSE instead.
+        # Likewise "/api/persona/vibe" must precede the "/api/persona" prefix.
         if path.startswith("/api/oauth/device/code"):
             return 200, DEVICE_CODE_RESPONSE
         if path.startswith("/api/oauth/device/token"):
             return 200, DEVICE_TOKEN_RESPONSE
         if path.startswith("/api/oauth/validate-token"):
             return 200, VALIDATE_RESPONSE
+        if path.startswith("/api/persona/vibe"):
+            if (body or {}).get("previewOnly"):
+                return 200, VIBE_PREVIEW_RESPONSE
+            return 201, VIBE_CREATE_RESPONSE
+        if path.startswith("/api/persona"):
+            return 200, PERSONAS_RESPONSE
         if path.endswith("/results"):
             return 200, RESULTS_RESPONSE
         if path.startswith("/api/plugin/runs") and method == "POST":
@@ -449,9 +503,18 @@ def case_1_tools_list(srv: ServerProc, data_dir: Path) -> None:
     expect(
         names
         == sorted(
-            ["login", "start_run", "report_result", "get_run", "list_features", "status"]
+            [
+                "login",
+                "start_run",
+                "report_result",
+                "get_run",
+                "list_features",
+                "status",
+                "list_personas",
+                "create_persona",
+            ]
         ),
-        f"tools/list should show exactly the 6 tools, got {names}",
+        f"tools/list should show exactly the 8 tools, got {names}",
     )
 
 
@@ -807,8 +870,94 @@ def case_16_self_heal_401_retry(srv: ServerProc, data_dir: Path) -> None:
     expect(auth.get("access_token") == "new-token-456", "fresh token persisted after 401 heal")
 
 
+def case_17_list_personas(srv: ServerProc, data_dir: Path) -> None:
+    write_auth(data_dir)
+    result = call_tool(srv, "list_personas", {})
+    req = STATE.last_for("/api/persona")
+    expect(req is not None and req["method"] == "GET", "list_personas should GET /api/persona")
+    expect(req["headers"].get("Authorization") == "Bearer test-token-123", "missing bearer")
+    text = result_text(result)
+    contains(text, "Fiona Founder", "list_personas shows name")
+    contains(text, "vp-fiona-001", "list_personas shows personaId")
+    contains(text, "vibe", "list_personas labels vibe source")
+    contains(text, "replay", "list_personas labels replay source")
+    contains(text, "persona=", "list_personas shows run-usage hint")
+
+
+def case_18_list_personas_empty(srv: ServerProc, data_dir: Path) -> None:
+    write_auth(data_dir)
+    STATE.error_overrides["/api/persona"] = (200, {"personas": []})
+    result = call_tool(srv, "list_personas", {})
+    expect(not result.get("isError"), "empty persona list is not an error")
+    text = result_text(result)
+    expect("no personas" in text.lower(), f"empty list says so plainly, got {text!r}")
+    expect("create" in text.lower(), f"empty list nudges toward creation, got {text!r}")
+
+
+def case_19_create_persona_preview(srv: ServerProc, data_dir: Path) -> None:
+    write_auth(data_dir)
+    result = call_tool(
+        srv,
+        "create_persona",
+        {
+            "vibe_prompt": "a vibe-coding solo founder who ships fast",
+            "age_range": [28, 35],
+            "skills_range": [70, 90],
+            "occupation": "startup founder",
+            "product_description": "Lumina Notes, a note-taking app",
+            "preview_only": True,
+            "preview_count": 2,
+        },
+    )
+    req = STATE.last_for("/api/persona/vibe")
+    expect(req is not None and req["method"] == "POST", "create_persona should POST /api/persona/vibe")
+    body = req["body"]
+    expect(body.get("mode") == "vibe", "mode is vibe")
+    expect(body.get("vibePrompt") == "a vibe-coding solo founder who ships fast", "vibe_prompt -> vibePrompt")
+    expect(body.get("previewOnly") is True, "preview_only -> previewOnly")
+    expect(body.get("previewCount") == 2, "preview_count -> previewCount")
+    expect(body.get("productDescription") == "Lumina Notes, a note-taking app", "product_description -> productDescription")
+    controls = body.get("controls") or {}
+    expect(controls.get("ageRange") == [28, 35], f"age_range -> controls.ageRange, got {controls}")
+    expect(controls.get("skillsRange") == [70, 90], f"skills_range -> controls.skillsRange, got {controls}")
+    expect(controls.get("occupation") == "startup founder", "occupation -> controls.occupation")
+    assert_no_snake_case(body, "create_persona body")
+    text = result_text(result)
+    contains(text, "Fiona Founder", "preview shows candidate 1")
+    contains(text, "Gary Garage", "preview shows candidate 2")
+    expect("preview" in text.lower(), "preview result says these are previews")
+
+
+def case_20_create_persona_final(srv: ServerProc, data_dir: Path) -> None:
+    write_auth(data_dir)
+    result = call_tool(
+        srv,
+        "create_persona",
+        {"vibe_prompt": "a vibe-coding solo founder who ships fast"},
+    )
+    req = STATE.last_for("/api/persona/vibe")
+    body = req["body"]
+    expect(not body.get("previewOnly"), "final create must not set previewOnly")
+    text = result_text(result)
+    contains(text, "vp-new-123", "create returns the saved personaId")
+    contains(text, "persona=vp-new-123", "create shows how to use it in a run")
+
+
+def case_21_start_run_persona_id(srv: ServerProc, data_dir: Path) -> None:
+    write_auth(data_dir)
+    call_tool(
+        srv,
+        "start_run",
+        {"goal": "g", "url": "http://x", "persona_id": "vp-fiona-001"},
+    )
+    req = STATE.last_for("/api/plugin/runs")
+    body = req["body"]
+    expect(body.get("personaId") == "vp-fiona-001", f"persona_id -> personaId, got {body}")
+    assert_no_snake_case(body, "start_run body (with persona)")
+
+
 CASES = [
-    ("initialize + tools/list shows 6 tools", case_1_tools_list),
+    ("initialize + tools/list shows 8 tools", case_1_tools_list),
     ("start_run happy path (camelCase body, rich tool text)", case_2_start_run_happy),
     ("start_run maps feature_id -> featureId", case_2b_start_run_feature_id),
     ("start_run no auth + declined login -> login hint error", case_3_start_run_no_auth_declined),
@@ -825,6 +974,11 @@ CASES = [
     ("run log: corrupt file tolerated", case_14_run_log_corrupt),
     ("self-heal: missing token -> inline login -> original call", case_15_self_heal_missing_token),
     ("self-heal: 401 -> re-login -> retry once", case_16_self_heal_401_retry),
+    ("list_personas renders dashboard rows", case_17_list_personas),
+    ("list_personas: empty -> creation nudge", case_18_list_personas_empty),
+    ("create_persona preview (camelCase body, both candidates)", case_19_create_persona_preview),
+    ("create_persona final -> personaId + usage hint", case_20_create_persona_final),
+    ("start_run maps persona_id -> personaId", case_21_start_run_persona_id),
 ]
 
 

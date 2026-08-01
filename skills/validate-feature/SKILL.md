@@ -44,6 +44,8 @@ deltas:
   `_id`, and `url` set to the target URL. The **goal is optional** — the
   backend derives it from the feature's fields when `feature_id` is given. Only
   pass a `goal` if the user gave you extra free-text intent to layer on top.
+- A `persona=<personaId>` token in `$ARGUMENTS` works here too — pass it as
+  `persona_id` (ids come from `/archetype:persona`).
 - Everything else is the same: become the persona, load Claude-in-Chrome tools,
   drive each scenario as the persona, keep the snake_case step log, call
   `report_result` exactly once, and render the local report (scenario verdict

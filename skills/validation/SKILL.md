@@ -54,6 +54,10 @@ Run this when `$ARGUMENTS` is non-empty. Follow the steps in order.
 - Free text is the **goal** (e.g. "test the signup flow").
 - A `url=<...>` token overrides the target URL (e.g.
   `url=http://localhost:8321`). Strip it out of the goal text.
+- A `persona=<personaId>` token selects an explicit persona for the run
+  (ids come from `/archetype:persona`). Strip it out of the goal text and
+  pass it to `start_run` as `persona_id`. Without it, the backend uses the
+  replay-derived persona.
 - If the user names a specific feature and you already have its id, treat that
   as `feature_id`. (If they want to test a named feature but you don't have an
   id, prefer the `validate-feature` skill instead.)
@@ -67,6 +71,7 @@ Call the `start_run` tool from the `archetype-setup` MCP server with:
   `feature_id`).
 - `url`: the target URL (required).
 - `feature_id`: only if the user named a feature you have an id for.
+- `persona_id`: only if the user gave a `persona=<id>` token.
 
 The tool's result text is **authoritative guidance**. It contains: the mission
 brief, a first-person persona card, numbered scenarios (each with steps and an

@@ -15,12 +15,12 @@ Central ref that you must read:
 ## Status: actor contract implemented
 
 The actor half of the pipeline is now wired to the real backend contract. The
-`archetype-setup` MCP server (`scripts/setup-server.py`) exposes six tools —
-`login`, `start_run`, `report_result`, `get_run`, `list_features`, `status` —
-talking to the backend's `/api/plugin` endpoints. The five skills
-(`validation`, `validate-feature`, `list-features`, `check-run-status`,
-`status`) and the `feature-validator` agent drive the actor loop over those
-tools: `start_run` → become the persona → drive Claude-in-Chrome through the
+`archetype-setup` MCP server (`scripts/setup-server.py`) exposes eight tools —
+`login`, `start_run`, `report_result`, `get_run`, `list_features`, `status`,
+`list_personas`, `create_persona` — talking to the backend's `/api/plugin`,
+`/api/features`, and `/api/persona` endpoints. The six skills (`validation`,
+`validate-feature`, `list-features`, `check-run-status`, `status`, `persona`)
+and the `feature-validator` agent drive the actor loop over those tools: `start_run` → become the persona → drive Claude-in-Chrome through the
 scenarios → keep a snake_case step log → `report_result` once → render a local
 report. Auth is a single device-flow Bearer scheme and is self-healing: any
 authed tool that finds a missing/expired token runs the login elicitation
@@ -28,7 +28,10 @@ inline and retries once (`status` is read-only and never triggers login).
 `status` renders a dashboard (account from the id_token, token health, feature
 count, recent runs from `${CLAUDE_PLUGIN_DATA}/runs.json`, portal link;
 portal default `https://www.syntheticarchetype.com`, override via
-`ARCHETYPE_PORTAL_URL`).
+`ARCHETYPE_PORTAL_URL`). `/archetype:persona` lists personas and creates new
+ones questionnaire-style (vibe prompt + controls → preview → save); runs accept
+`persona=<personaId>` which `start_run` forwards as `personaId` so the backend
+uses that persona instead of the replay-derived one.
 
 Authoritative references for this work:
 - Design spec: `docs/superpowers/specs/2026-07-22-plugin-backend-pipeline-design.md` (§4.2 covers the skills).

@@ -563,6 +563,7 @@ def handle_start_run(arguments: dict[str, Any]) -> dict[str, Any]:
         "goal": arguments.get("goal"),
         "featureId": arguments.get("feature_id"),
         "url": arguments.get("url"),
+        "personaId": arguments.get("persona_id"),
     }
     body = {k: v for k, v in body.items() if v is not None}
 
@@ -701,6 +702,123 @@ def handle_list_features(arguments: dict[str, Any]) -> dict[str, Any]:
     ]
     lines.append(
         "\nPass a feature's _id as feature_id to start_run to validate it."
+    )
+    return tool_text("\n".join(lines))
+
+
+# ---------- tools: list_personas / create_persona ----------
+
+# Persona generation runs the LLM server-side (one call per preview candidate);
+# give it the same generous headroom as run assembly.
+PERSONA_TIMEOUT = 180
+
+
+def handle_list_personas(arguments: dict[str, Any]) -> dict[str, Any]:
+    result = authed_call(
+        lambda token: backend_get("/api/persona", auth_token=token)
+    )
+    if result is None:
+        return not_connected()
+    status, resp = result
+    if not (200 <= status < 300):
+        return backend_error_text(status, resp)
+
+    personas = resp.get("personas") or []
+    if not personas:
+        return tool_text(
+            "No personas yet. Create one with /archetype:persona — say 'new' "
+            "and I'll walk you through a short questionnaire."
+        )
+
+    lines = [f"{len(personas)} persona(s):", ""]
+    for p in personas:
+        demo = p.get("demographics") or {}
+        head = f"{p.get('personaId', '?')}  {p.get('name', '(unnamed)')}  [{p.get('source') or 'unknown'}]"
+        occupation = demo.get("occupation")
+        if occupation:
+            head += f"  · {occupation}"
+        created = p.get("createdAt")
+        if created:
+            head += f"  · created {created}"
+        lines.append(head)
+        story = (p.get("story") or "").strip()
+        if story:
+            lines.append(f"    {story[:200]}")
+    lines.append(
+        "\nUse one in a run: /archetype:validation \"<goal>\" url=<...> persona=<personaId>"
+    )
+    return tool_text("\n".join(lines))
+
+
+def handle_create_persona(arguments: dict[str, Any]) -> dict[str, Any]:
+    vibe_prompt = (arguments.get("vibe_prompt") or "").strip()
+    if not vibe_prompt:
+        return tool_text(
+            "vibe_prompt is required — describe the persona in a sentence or "
+            "two (who they are, how they behave, what they care about).",
+            is_error=True,
+        )
+
+    body: dict[str, Any] = {"mode": "vibe", "vibePrompt": vibe_prompt}
+    controls: dict[str, Any] = {}
+    if arguments.get("age_range") is not None:
+        controls["ageRange"] = arguments["age_range"]
+    if arguments.get("skills_range") is not None:
+        controls["skillsRange"] = arguments["skills_range"]
+    if arguments.get("occupation"):
+        controls["occupation"] = arguments["occupation"]
+    if arguments.get("education"):
+        controls["education"] = arguments["education"]
+    if controls:
+        body["controls"] = controls
+    if arguments.get("product_description"):
+        body["productDescription"] = arguments["product_description"]
+    if arguments.get("preview_only"):
+        body["previewOnly"] = True
+        body["previewCount"] = int(arguments.get("preview_count") or 2)
+
+    result = authed_call(
+        lambda token: backend_post(
+            "/api/persona/vibe", body, auth_token=token, timeout=PERSONA_TIMEOUT
+        )
+    )
+    if result is None:
+        return not_connected()
+    status, resp = result
+    if not (200 <= status < 300):
+        return backend_error_text(status, resp)
+
+    if body.get("previewOnly"):
+        examples = resp.get("examples") or []
+        lines = [
+            f"{len(examples)} persona preview(s) — directions, not saved yet. "
+            "The final persona is regenerated along the chosen direction."
+        ]
+        for i, ex in enumerate(examples, start=1):
+            lines.append("")
+            lines.append(f"{i}. {ex.get('name', '(unnamed)')}")
+            if ex.get("vibeSummary"):
+                lines.append(f"   vibe: {ex['vibeSummary']}")
+            if ex.get("story"):
+                lines.append(f"   {str(ex['story'])[:300]}")
+            if ex.get("personaNeed"):
+                lines.append(f"   need: {ex['personaNeed']}")
+        lines.append(
+            "\nTo save one, call create_persona again without preview_only, "
+            "folding the chosen candidate's summary into vibe_prompt."
+        )
+        return tool_text("\n".join(lines))
+
+    persona_id = resp.get("personaId", "")
+    lines = [
+        f"Persona saved: {resp.get('name', '(unnamed)')} ({persona_id})",
+    ]
+    if resp.get("story"):
+        lines.append(str(resp["story"])[:300])
+    if resp.get("personaNeed"):
+        lines.append(f"Need: {resp['personaNeed']}")
+    lines.append(
+        f"\nUse it in a run: /archetype:validation \"<goal>\" url=<...> persona={persona_id}"
     )
     return tool_text("\n".join(lines))
 
@@ -852,6 +970,13 @@ TOOLS: dict[str, dict[str, Any]] = {
                     "type": "string",
                     "description": "The product URL under test.",
                 },
+                "persona_id": {
+                    "type": "string",
+                    "description": (
+                        "Optional personaId (from list_personas) to run AS that "
+                        "persona instead of the replay-derived one."
+                    ),
+                },
             },
             "required": ["url"],
         },
@@ -917,6 +1042,66 @@ TOOLS: dict[str, dict[str, Any]] = {
         ),
         "schema": {"type": "object", "properties": {}, "required": []},
         "handler": handle_status,
+    },
+    "list_personas": {
+        "description": (
+            "List the user's personas (replay-derived, vibe, custom) with "
+            "personaId, source, occupation, and story. A personaId can be "
+            "passed to start_run to run AS that persona."
+        ),
+        "schema": {"type": "object", "properties": {}, "required": []},
+        "handler": handle_list_personas,
+    },
+    "create_persona": {
+        "description": (
+            "Create a persona from a natural-language vibe prompt (plus "
+            "optional demographic controls). With preview_only=true, returns "
+            "unsaved candidate personas to choose a direction from; without "
+            "it, generates and SAVES the persona and returns its personaId."
+        ),
+        "schema": {
+            "type": "object",
+            "properties": {
+                "vibe_prompt": {
+                    "type": "string",
+                    "description": (
+                        "Natural-language description of the persona: who they "
+                        "are, how they behave, what they care about."
+                    ),
+                },
+                "age_range": {
+                    "type": "array",
+                    "items": {"type": "number"},
+                    "description": "Optional [low, high] age range, e.g. [28, 35].",
+                },
+                "skills_range": {
+                    "type": "array",
+                    "items": {"type": "number"},
+                    "description": (
+                        "Optional [low, high] tech-savviness on a 0-100 scale."
+                    ),
+                },
+                "occupation": {"type": "string"},
+                "education": {"type": "string"},
+                "product_description": {
+                    "type": "string",
+                    "description": (
+                        "Optional one-line description of the product, used to "
+                        "derive the persona's need."
+                    ),
+                },
+                "preview_only": {
+                    "type": "boolean",
+                    "description": "Return unsaved candidates instead of saving.",
+                },
+                "preview_count": {
+                    "type": "number",
+                    "description": "How many previews (1-5, default 2).",
+                },
+            },
+            "required": ["vibe_prompt"],
+        },
+        "handler": handle_create_persona,
     },
 }
 
