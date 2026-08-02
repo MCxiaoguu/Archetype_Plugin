@@ -51,31 +51,52 @@ only authorized path.
 
 Run this when `$ARGUMENTS` is non-empty. Follow the steps in order.
 
-### 1. Parse `$ARGUMENTS`
+### 1. Intake: understand `$ARGUMENTS` with judgment, then confirm
 
-- Free text is the **goal** (e.g. "test the signup flow").
-- A `url=<...>` token overrides the target URL (e.g.
-  `url=http://localhost:8321`). Strip it out of the goal text.
-- A `persona=<name-or-id>` token selects an explicit persona for the run.
-  Strip it out of the goal text. `start_run` needs the persona's ID: if the
-  value is a name (or you're unsure), call `list_personas` and resolve it by
-  case-insensitive name match — ambiguous or no match → show the candidates
-  and ask, never guess. Pass the resolved id as `persona_id`. Without the
-  token, the backend uses the replay-derived persona.
-- If the user names a specific feature and you already have its id, treat that
-  as `feature_id`. (If they want to test a named feature but you don't have an
-  id, prefer the `validate-feature` skill instead.)
-- If **no URL** is present, ASK the user for the product URL. Never guess a URL.
+`$ARGUMENTS` is natural language, not a token grammar. YOU parse and
+categorize it. Fill this field table:
+
+| field | what to look for |
+| :-- | :-- |
+| `goal` | what to test — the free text minus everything captured below |
+| `url` | a `url=<...>` token or any URL in the text |
+| `persona` | ANY persona intent: a `persona=<...>` token, a name ("as Veda", "with Marcus"), or a description ("as a cautious non-technical first-timer", "from the perspective of ...") |
+| `feature` | a named saved feature (prefer the `validate-feature` skill when feature-first) |
+
+**Persona resolution** (whenever the persona field is non-empty — name OR
+description):
+
+1. Call `list_personas` so you know what actually exists.
+2. Match the intent against the real personas — exact/close name match, or
+   best description fit (occupation, story, traits).
+3. Propose the match conversationally before using it: "I found
+   **<name>** (<one-line story>) — largely fits your description. Test with
+   them, or create a new persona?" Multiple plausible → show candidates and
+   ask. None plausible → say so and offer `/archetype:persona new`.
+4. Only a persona the user confirmed becomes `persona_id`. NEVER silently
+   drop persona intent into the goal text, and never guess between
+   candidates.
+
+**Confirm before starting**: present the filled table briefly. If every
+field was explicit and unambiguous, proceed straight away, stating the table
+as what you're about to do. If anything was missing (a URL is required —
+never guess one), inferred, or fuzzy-matched, ask about exactly those fields
+first — one compact question, not an interrogation.
 
 ### 2. Start the run
 
 Call the `start_run` tool from the `archetype-setup` MCP server with:
 
-- `goal`: the parsed free text (omit if you're running purely by
-  `feature_id`).
+- `goal`: the parsed goal (omit if you're running purely by `feature_id`).
 - `url`: the target URL (required).
 - `feature_id`: only if the user named a feature you have an id for.
-- `persona_id`: only if the user gave a `persona=<id>` token.
+- `persona_id`: the confirmed persona's id from intake, if any.
+
+The tool itself guards persona selection: if the backend does not honor the
+requested persona (e.g. an outdated deployment), `start_run` returns an
+error instead of a briefing — relay it and stop; never proceed as a persona
+the user didn't pick. As a final check, the brief's persona name should
+match the confirmed persona; on any mismatch, stop and tell the user.
 
 The tool's result text is **authoritative guidance**. It contains: the mission
 brief, a first-person persona card, numbered scenarios (each with steps and an

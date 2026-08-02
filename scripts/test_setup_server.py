@@ -948,16 +948,46 @@ def case_20_create_persona_final(srv: ServerProc, data_dir: Path) -> None:
 
 
 def case_21_start_run_persona_id(srv: ServerProc, data_dir: Path) -> None:
+    # persona-9001 matches RUN_RESPONSE's persona.personaId -> honored, happy path.
     write_auth(data_dir)
-    call_tool(
+    result = call_tool(
+        srv,
+        "start_run",
+        {"goal": "g", "url": "http://x", "persona_id": "persona-9001"},
+    )
+    expect(not result.get("isError"), "honored persona_id must succeed")
+    req = STATE.last_for("/api/plugin/runs")
+    body = req["body"]
+    expect(body.get("personaId") == "persona-9001", f"persona_id -> personaId, got {body}")
+    assert_no_snake_case(body, "start_run body (with persona)")
+    entry = read_run_log(data_dir)[-1]
+    expect(
+        entry.get("persona_id") == "persona-9001",
+        f"run log must record persona_id, got {entry}",
+    )
+
+
+def case_22_start_run_persona_not_honored(srv: ServerProc, data_dir: Path) -> None:
+    # Backend (e.g. an outdated deploy) ignores personaId and returns a
+    # different persona -> the tool must FAIL LOUDLY, never hand the actor a
+    # briefing for the wrong persona.
+    write_auth(data_dir)
+    result = call_tool(
         srv,
         "start_run",
         {"goal": "g", "url": "http://x", "persona_id": "vp-fiona-001"},
     )
-    req = STATE.last_for("/api/plugin/runs")
-    body = req["body"]
-    expect(body.get("personaId") == "vp-fiona-001", f"persona_id -> personaId, got {body}")
-    assert_no_snake_case(body, "start_run body (with persona)")
+    expect(result.get("isError") is True, "unhonored persona_id must be an error")
+    text = result_text(result)
+    expect(
+        "vp-fiona-001" in text and "persona-9001" in text,
+        f"error names requested vs returned persona ids, got {text!r}",
+    )
+    expect(
+        "did not honor" in text.lower() or "ignored" in text.lower(),
+        f"error explains the backend ignored the selection, got {text!r}",
+    )
+    expect(len(read_run_log(data_dir)) == 0, "aborted run must not be logged as started")
 
 
 CASES = [
@@ -982,7 +1012,8 @@ CASES = [
     ("list_personas: empty -> creation nudge", case_18_list_personas_empty),
     ("create_persona preview (camelCase body, both candidates)", case_19_create_persona_preview),
     ("create_persona final -> personaId + usage hint", case_20_create_persona_final),
-    ("start_run maps persona_id -> personaId", case_21_start_run_persona_id),
+    ("start_run maps persona_id -> personaId + logs it", case_21_start_run_persona_id),
+    ("start_run aborts when backend ignores personaId", case_22_start_run_persona_not_honored),
 ]
 
 

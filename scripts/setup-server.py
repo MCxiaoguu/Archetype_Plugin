@@ -470,6 +470,7 @@ def record_run_start(run_body: dict[str, Any], arguments: dict[str, Any]) -> Non
         "goal": arguments.get("goal"),
         "url": arguments.get("url"),
         "feature_id": arguments.get("feature_id"),
+        "persona_id": arguments.get("persona_id"),
         "started_at": int(time.time()),
     }
     entries.append({k: v for k, v in entry.items() if v is not None})
@@ -578,6 +579,23 @@ def handle_start_run(arguments: dict[str, Any]) -> dict[str, Any]:
     status, resp = result
     if not (200 <= status < 300):
         return backend_error_text(status, resp)
+
+    # Persona guard: if a persona was requested, the backend must have used
+    # it. An outdated backend silently ignores unknown fields — that must
+    # abort the run, never brief the actor as the wrong persona.
+    requested_persona = arguments.get("persona_id")
+    returned_persona = (resp.get("persona") or {}).get("personaId")
+    if requested_persona and returned_persona != requested_persona:
+        return tool_text(
+            f"Run aborted before starting: the backend did not honor the "
+            f"requested persona (asked for {requested_persona}, got "
+            f"{returned_persona or 'none'}). The backend deployment likely "
+            f"predates persona selection — deploy the current backend, or "
+            f"retry without persona= to run as the replay-derived persona. "
+            f"Do NOT act on this run; a stray run doc "
+            f"({resp.get('runId', '?')}) may exist server-side.",
+            is_error=True,
+        )
 
     record_run_start(resp, arguments)
     return tool_text(_render_run(resp))
