@@ -63,10 +63,18 @@ Then:
 9. Relay the saved persona (name, story, need — no raw id) and close with:
    `/archetype:validation "<goal>" url=<...> persona="<name>"`.
 
+## Low-resistance shortcut
+
+If the user already gave a rich description (or says "just make it"), offer
+to skip the remaining questions AND the preview round: one confirmation,
+then save directly from their description. The full questionnaire + preview
+flow is for when they want guidance, never a gate.
+
 ## Boundaries
 
 - Only show personas/ids the tools actually returned — never invent ids.
-- One SAVE per flow: `create_persona` without `preview_only` exactly once,
-  after the user chose a direction. Previews are free to repeat.
+- One SAVE per flow: `create_persona` without `preview_only` at most once,
+  after the user confirmed (a direction or a direct save). Previews are free
+  to repeat.
 - Persona generation is LLM-backed and can take up to a couple of minutes per
   call — tell the user before the first preview call.

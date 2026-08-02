@@ -26,7 +26,8 @@ so they can pick one to validate.
    | `<_id>` | `<title>` | `<updatedAt>` |
 
    If the tool reports no features (or none matching the query), relay that
-   plainly.
+   plainly — and offer to create one on the spot (`create_feature`, one
+   confirmation, title + one-line description).
 4. Suggest the next step: `/archetype:validate-feature <title>` to run a
    validation for one of the listed features.
 

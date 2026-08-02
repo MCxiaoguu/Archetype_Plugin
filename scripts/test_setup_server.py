@@ -186,6 +186,19 @@ VIBE_CREATE_RESPONSE = {
     "createdAt": "2026-08-01T00:00:00Z",
 }
 
+FEATURE_CREATE_RESPONSE = {
+    "ok": True,
+    "feature": {
+        "_id": "feat-new-001",
+        "title": "Trial signup",
+        "fields": {
+            "description": "New users start a free trial from the landing page",
+            "expected-usage": "Click CTA, fill the form, land in the app",
+            "strategic-goals": "",
+        },
+    },
+}
+
 
 # ---------------------------------------------------------------------------
 # Recording HTTP stub
@@ -293,6 +306,8 @@ class Handler(BaseHTTPRequestHandler):
             return 201, RUN_RESPONSE
         if path.startswith("/api/plugin/runs") and method == "GET":
             return 200, GET_RUN_RESPONSE
+        if path.startswith("/api/features") and method == "POST":
+            return 201, FEATURE_CREATE_RESPONSE
         if path.startswith("/api/features"):
             return 200, FEATURES_RESPONSE
         return 404, {"error": "not_found", "message": f"no stub for {method} {path}"}
@@ -512,9 +527,10 @@ def case_1_tools_list(srv: ServerProc, data_dir: Path) -> None:
                 "status",
                 "list_personas",
                 "create_persona",
+                "create_feature",
             ]
         ),
-        f"tools/list should show exactly the 8 tools, got {names}",
+        f"tools/list should show exactly the 9 tools, got {names}",
     )
 
 
@@ -990,8 +1006,38 @@ def case_22_start_run_persona_not_honored(srv: ServerProc, data_dir: Path) -> No
     expect(len(read_run_log(data_dir)) == 0, "aborted run must not be logged as started")
 
 
+def case_23_create_feature(srv: ServerProc, data_dir: Path) -> None:
+    write_auth(data_dir)
+    result = call_tool(
+        srv,
+        "create_feature",
+        {
+            "title": "Trial signup",
+            "description": "New users start a free trial from the landing page",
+            "expected_usage": "Click CTA, fill the form, land in the app",
+        },
+    )
+    req = STATE.last_for("/api/features")
+    expect(req is not None and req["method"] == "POST", "create_feature should POST /api/features")
+    expect(req["headers"].get("Authorization") == "Bearer test-token-123", "missing bearer")
+    body = req["body"]
+    expect(body.get("title") == "Trial signup", f"title passed, got {body}")
+    fields = body.get("fields") or {}
+    expect(
+        fields.get("description") == "New users start a free trial from the landing page",
+        f"description -> fields.description, got {fields}",
+    )
+    expect(
+        fields.get("expected-usage") == "Click CTA, fill the form, land in the app",
+        f"expected_usage -> fields.expected-usage, got {fields}",
+    )
+    text = result_text(result)
+    contains(text, "Trial signup", "create_feature echoes title")
+    contains(text, "feat-new-001", "create_feature returns the feature id for start_run")
+
+
 CASES = [
-    ("initialize + tools/list shows 8 tools", case_1_tools_list),
+    ("initialize + tools/list shows 9 tools", case_1_tools_list),
     ("start_run happy path (camelCase body, rich tool text)", case_2_start_run_happy),
     ("start_run maps feature_id -> featureId", case_2b_start_run_feature_id),
     ("start_run no auth + declined login -> login hint error", case_3_start_run_no_auth_declined),
@@ -1014,6 +1060,7 @@ CASES = [
     ("create_persona final -> personaId + usage hint", case_20_create_persona_final),
     ("start_run maps persona_id -> personaId + logs it", case_21_start_run_persona_id),
     ("start_run aborts when backend ignores personaId", case_22_start_run_persona_not_honored),
+    ("create_feature POSTs title+fields, returns id", case_23_create_feature),
 ]
 
 

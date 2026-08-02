@@ -72,10 +72,22 @@ description):
 3. Propose the match conversationally before using it: "I found
    **<name>** (<one-line story>) — largely fits your description. Test with
    them, or create a new persona?" Multiple plausible → show candidates and
-   ask. None plausible → say so and offer `/archetype:persona new`.
-4. Only a persona the user confirmed becomes `persona_id`. NEVER silently
+   ask.
+4. **None plausible → create from blank, right here.** One confirmation:
+   "No existing persona fits — create one from your description and run
+   with it?" On yes, call `create_persona` directly with their description
+   as the `vibe_prompt` (plus whatever controls their words imply) — skip
+   previews unless they ask to see options — then continue the run with the
+   fresh persona's id. Never dead-end the user into a separate command;
+   `/archetype:persona` is for when they want the full guided flow.
+5. Only a persona the user confirmed becomes `persona_id`. NEVER silently
    drop persona intent into the goal text, and never guess between
    candidates.
+
+**Feature resolution**: a named feature that doesn't exist gets the same
+treatment — offer to create it on the spot (`create_feature` with a title
+and a one-line description distilled from their words; ask only for what
+you genuinely can't infer), then run with the new `feature_id`.
 
 **Confirm before starting**: present the filled table briefly. If every
 field was explicit and unambiguous, proceed straight away, stating the table

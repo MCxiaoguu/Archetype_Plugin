@@ -725,6 +725,42 @@ def handle_list_features(arguments: dict[str, Any]) -> dict[str, Any]:
     return tool_text("\n".join(lines))
 
 
+# ---------- tool: create_feature ----------
+
+
+def handle_create_feature(arguments: dict[str, Any]) -> dict[str, Any]:
+    title = (arguments.get("title") or "").strip()
+    if not title:
+        return tool_text(
+            "title is required — a short name for the feature under test.",
+            is_error=True,
+        )
+
+    fields = {
+        "description": arguments.get("description") or "",
+        "expected-usage": arguments.get("expected_usage") or "",
+        "strategic-goals": arguments.get("strategic_goals") or "",
+    }
+    body = {"title": title, "fields": fields}
+
+    result = authed_call(
+        lambda token: backend_post("/api/features", body, auth_token=token)
+    )
+    if result is None:
+        return not_connected()
+    status, resp = result
+    if not (200 <= status < 300):
+        return backend_error_text(status, resp)
+
+    feature = resp.get("feature") or {}
+    feature_id = feature.get("_id", "")
+    return tool_text(
+        f"Feature saved: {feature.get('title', title)}\n"
+        f"(id for tool calls: {feature_id} — pass it as start_run's feature_id)\n\n"
+        f"Validate it now: /archetype:validate-feature {feature.get('title', title)}"
+    )
+
+
 # ---------- tools: list_personas / create_persona ----------
 
 # Persona generation runs the LLM server-side (one call per preview candidate);
@@ -1125,6 +1161,33 @@ TOOLS: dict[str, dict[str, Any]] = {
             "required": ["vibe_prompt"],
         },
         "handler": handle_create_persona,
+    },
+    "create_feature": {
+        "description": (
+            "Create a saved feature (title + natural-language fields) so runs "
+            "can target it via feature_id. Use when the user references a "
+            "feature that doesn't exist yet and confirms creating it."
+        ),
+        "schema": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "description": "Short feature name."},
+                "description": {
+                    "type": "string",
+                    "description": "What the feature is, in plain language.",
+                },
+                "expected_usage": {
+                    "type": "string",
+                    "description": "How a user is expected to exercise it.",
+                },
+                "strategic_goals": {
+                    "type": "string",
+                    "description": "Optional: why this feature matters.",
+                },
+            },
+            "required": ["title"],
+        },
+        "handler": handle_create_feature,
     },
 }
 

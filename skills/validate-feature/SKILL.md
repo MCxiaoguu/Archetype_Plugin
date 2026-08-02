@@ -23,7 +23,11 @@ tool returns a list of features, each with an `_id`, `title`, and `updatedAt`.
 - **Exact/clear single match** → use that feature's `_id` as `feature_id`.
 - **Multiple plausible matches or ambiguous input** → show the candidates to
   the user and ask which one they mean. Never guess.
-- **No match** → tell the user, show what features exist (or none), and stop.
+- **No match** → show what exists (or none), then offer to create it right
+  here: one confirmation, then `create_feature` with a title and one-line
+  description distilled from what they said (ask only for what you can't
+  infer), and continue the run with the new feature's `_id`. Don't make the
+  user go elsewhere first.
 - Auth is self-healing: if the session isn't connected, the tool itself opens
   the login modal and then completes the request — do not pre-call `login`.
   A "Not connected" error only comes back if the user declined the login;
