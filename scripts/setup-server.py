@@ -22,7 +22,7 @@ Tools:
                      (their ``_id`` is the ``feature_id`` for ``start_run``).
 
 All tools other than ``login`` require a Bearer token; any 401 tells the user
-to run ``/archetype:validation`` to log in.
+to run ``/archetype:setup`` to log in.
 
 Stdlib-only. Backend base URL is configurable via the
 ``ARCHETYPE_BACKEND_URL`` environment variable
@@ -44,7 +44,7 @@ from typing import Any, Callable
 
 PROTOCOL_VERSION = "2025-06-18"
 SERVER_NAME = "archetype-setup"
-SERVER_VERSION = "0.3.0"
+SERVER_VERSION = "0.3.2"
 
 # The synchronous run-assembly endpoint runs the persona/scenario LLM chain,
 # which the MCP server tolerates for up to ~90 s; give it generous headroom.
@@ -56,7 +56,7 @@ RUN_TIMEOUT = 180
 RESULT_TIMEOUT = 60
 
 # Standard hint appended to any auth-related failure so the actor knows the fix.
-LOGIN_HINT = "Run /archetype:validation to log in."
+LOGIN_HINT = "Run /archetype:setup to log in."
 
 BACKEND_BASE = os.environ.get(
     "ARCHETYPE_BACKEND_URL", "https://api.syntheticarchetype.com"
@@ -327,7 +327,7 @@ def perform_device_login() -> tuple[str | None, str]:
 
     log(f"prompting user with verification URL: {verify_url}")
     if not request_user_approval(verify_url, user_code):
-        return None, "Login cancelled. Re-run /archetype:validation to try again."
+        return None, "Login cancelled. Re-run /archetype:setup to try again."
 
     ok, token_body = poll_for_token(device_code, interval, expires_in)
     if not ok:
@@ -355,7 +355,8 @@ def perform_device_login() -> tuple[str | None, str]:
 
     return token_body["access_token"], (
         f"Connected to Archetype. Access token saved to {auth_path} (mode 0600).\n"
-        "Run `/archetype:validation <instruction>` to start a validation run."
+        "Next: /archetype:persona to meet your testers, or "
+        "`/archetype:validation <goal> url=<...>` to start a validation run."
     )
 
 
@@ -373,7 +374,7 @@ def handle_login() -> dict[str, Any]:
         user_id = (info or {}).get("user_id", "unknown user")
         return tool_text(
             f"Already connected to Archetype as {user_id}.\n"
-            f"Token at {auth_path}. To re-login, delete that file and re-run /archetype:validation."
+            f"Token at {auth_path}. To re-login, delete that file and re-run /archetype:setup."
         )
 
     token, message = perform_device_login()
@@ -400,7 +401,7 @@ def load_token() -> str | None:
 
 def not_connected() -> dict[str, Any]:
     return tool_text(
-        "Not connected. Run /archetype:validation to log in.", is_error=True
+        "Not connected. Run /archetype:setup to log in.", is_error=True
     )
 
 
@@ -885,7 +886,7 @@ def handle_status(_arguments: dict[str, Any]) -> dict[str, Any]:
     if not token:
         return tool_text(
             f"{header}\n\n"
-            f"Account: Not connected — run /archetype:validation to log in.\n"
+            f"Account: Not connected — run /archetype:setup to log in.\n"
             f"Backend: {BACKEND_BASE}\n"
             f"Portal:  {PORTAL_URL}"
         )
@@ -925,7 +926,7 @@ def handle_status(_arguments: dict[str, Any]) -> dict[str, Any]:
         who = " ".join(identity_bits) if identity_bits else "previously connected"
         lines.append(f"Account: {who}")
         lines.append(
-            "Token:   expired or invalid — run /archetype:validation to log in "
+            "Token:   expired or invalid — run /archetype:setup to log in "
             "(any archetype command will also re-login automatically)"
         )
         lines.append(f"Backend: {BACKEND_BASE} — reachable")

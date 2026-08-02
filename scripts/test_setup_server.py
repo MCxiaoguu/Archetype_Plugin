@@ -568,7 +568,7 @@ def case_3_start_run_no_auth_declined(srv: ServerProc, data_dir: Path) -> None:
     srv.elicit_action = "decline"
     result = call_tool(srv, "start_run", {"goal": "g", "url": "http://x"})
     expect(result.get("isError") is True, "start_run without auth must be isError")
-    contains(result_text(result), "Run /archetype:validation to log in", "start_run no-auth text")
+    contains(result_text(result), "Run /archetype:setup to log in", "start_run no-auth text")
     expect(len(srv.elicitations) == 1, "self-heal should have offered the login modal once")
 
 
@@ -689,7 +689,7 @@ def case_6_401_declined_heal_appends_login_hint(srv: ServerProc, data_dir: Path)
     expect(result.get("isError") is True, "401 must be isError")
     text = result_text(result)
     contains(text, "Token expired or invalid.", "401 surfaces backend message")
-    contains(text, "Run /archetype:validation to log in.", "401 appends login hint")
+    contains(text, "Run /archetype:setup to log in.", "401 appends login hint")
 
 
 def case_7_get_run(srv: ServerProc, data_dir: Path) -> None:
@@ -728,7 +728,7 @@ def case_9_status_not_connected(srv: ServerProc, data_dir: Path) -> None:
     text = result_text(result)
     contains(text, "Not connected", "status not-connected text")
     contains(text, "https://www.syntheticarchetype.com", "status portal link")
-    contains(text, "/archetype:validation", "status login hint")
+    contains(text, "/archetype:setup", "status login hint")
     expect(len(srv.elicitations) == 0, "status must not trigger the login modal")
     expect(
         STATE.last_for("/api/oauth/device/code") is None,
@@ -771,7 +771,7 @@ def case_11_status_invalid_token(srv: ServerProc, data_dir: Path) -> None:
         f"status should flag the stale token, got: {text!r}",
     )
     contains(text, "https://www.syntheticarchetype.com", "status portal link (stale token)")
-    contains(text, "/archetype:validation", "status login hint (stale token)")
+    contains(text, "/archetype:setup", "status login hint (stale token)")
 
 
 def case_12_run_log_start_report_status(srv: ServerProc, data_dir: Path) -> None:

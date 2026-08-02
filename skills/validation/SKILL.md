@@ -12,7 +12,9 @@ of test scenarios, and you drive a real browser through the product under test
 
 Branch on `$ARGUMENTS`:
 
-- **Empty `$ARGUMENTS`** → run the **Login wizard** (below) and stop.
+- **Empty `$ARGUMENTS`** → run the **Login wizard** (below) and stop. (The
+  canonical onboarding command is `/archetype:setup`; this branch is kept so
+  a bare `/archetype:validation` still connects.)
 - **Non-empty `$ARGUMENTS`** → run the **Validation run flow** (below).
 
 Never simulate the backend, invent run/persona data, or fabricate steps and

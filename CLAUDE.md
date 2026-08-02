@@ -18,9 +18,11 @@ The actor half of the pipeline is now wired to the real backend contract. The
 `archetype-setup` MCP server (`scripts/setup-server.py`) exposes eight tools —
 `login`, `start_run`, `report_result`, `get_run`, `list_features`, `status`,
 `list_personas`, `create_persona` — talking to the backend's `/api/plugin`,
-`/api/features`, and `/api/persona` endpoints. The six skills (`validation`,
-`validate-feature`, `list-features`, `check-run-status`, `status`, `persona`)
-and the `feature-validator` agent drive the actor loop over those tools: `start_run` → become the persona → drive Claude-in-Chrome through the
+`/api/features`, and `/api/persona` endpoints. The seven skills (`setup`,
+`validation`, `validate-feature`, `list-features`, `check-run-status`,
+`status`, `persona`) and the `feature-validator` agent drive the actor loop
+over those tools — `/archetype:setup` is the onboarding command (login wizard
++ status dashboard): `start_run` → become the persona → drive Claude-in-Chrome through the
 scenarios → keep a snake_case step log → `report_result` once → render a local
 report. Auth is a single device-flow Bearer scheme and is self-healing: any
 authed tool that finds a missing/expired token runs the login elicitation

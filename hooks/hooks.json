@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "test -f \"$CLAUDE_PLUGIN_DATA/auth.json\" || echo 'archetype: not connected. Run /archetype:validation to start the interactive login wizard.'"
+            "command": "test -f \"$CLAUDE_PLUGIN_DATA/auth.json\" || echo 'archetype: not connected. Run /archetype:setup to get started.'"
           }
         ]
       }
