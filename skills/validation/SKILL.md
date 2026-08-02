@@ -54,10 +54,12 @@ Run this when `$ARGUMENTS` is non-empty. Follow the steps in order.
 - Free text is the **goal** (e.g. "test the signup flow").
 - A `url=<...>` token overrides the target URL (e.g.
   `url=http://localhost:8321`). Strip it out of the goal text.
-- A `persona=<personaId>` token selects an explicit persona for the run
-  (ids come from `/archetype:persona`). Strip it out of the goal text and
-  pass it to `start_run` as `persona_id`. Without it, the backend uses the
-  replay-derived persona.
+- A `persona=<name-or-id>` token selects an explicit persona for the run.
+  Strip it out of the goal text. `start_run` needs the persona's ID: if the
+  value is a name (or you're unsure), call `list_personas` and resolve it by
+  case-insensitive name match — ambiguous or no match → show the candidates
+  and ask, never guess. Pass the resolved id as `persona_id`. Without the
+  token, the backend uses the replay-derived persona.
 - If the user names a specific feature and you already have its id, treat that
   as `feature_id`. (If they want to test a named feature but you don't have an
   id, prefer the `validate-feature` skill instead.)

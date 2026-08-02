@@ -22,10 +22,11 @@ Auth is self-healing: the tools log the user in if needed — never pre-call
 ## Dashboard
 
 1. Call `list_personas` (no arguments).
-2. Render the result as a table: **personaId · name · source · occupation ·
-   story (one line)**. Keep ids verbatim — they are what `persona=<id>` takes.
+2. Render the result as a table: **name · source · occupation · story (one
+   line)**. Do NOT show personaIds — they're tool-plane noise. Only include
+   an id column if the user explicitly asks (e.g. "show ids").
 3. Close with the run hint:
-   `/archetype:validation "<goal>" url=<...> persona=<personaId>`.
+   `/archetype:validation "<goal>" url=<...> persona="<name>"`.
 4. If the tool says there are no personas, relay that plainly and ask ONE
    question: would they like to create one now? If yes → Creation flow.
 
@@ -59,8 +60,8 @@ Then:
 8. On choice, call `create_persona` WITHOUT `preview_only`, with the same
    controls and the vibe_prompt extended by the chosen candidate's summary
    (e.g. "... similar in spirit to: <vibeSummary>").
-9. Relay the saved persona (name, id, story, need) and close with:
-   `/archetype:validation "<goal>" url=<...> persona=<personaId>`.
+9. Relay the saved persona (name, story, need — no raw id) and close with:
+   `/archetype:validation "<goal>" url=<...> persona="<name>"`.
 
 ## Boundaries
 

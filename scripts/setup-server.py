@@ -733,7 +733,7 @@ def handle_list_personas(arguments: dict[str, Any]) -> dict[str, Any]:
     lines = [f"{len(personas)} persona(s):", ""]
     for p in personas:
         demo = p.get("demographics") or {}
-        head = f"{p.get('personaId', '?')}  {p.get('name', '(unnamed)')}  [{p.get('source') or 'unknown'}]"
+        head = f"{p.get('name', '(unnamed)')}  [{p.get('source') or 'unknown'}]"
         occupation = demo.get("occupation")
         if occupation:
             head += f"  · {occupation}"
@@ -744,8 +744,12 @@ def handle_list_personas(arguments: dict[str, Any]) -> dict[str, Any]:
         story = (p.get("story") or "").strip()
         if story:
             lines.append(f"    {story[:200]}")
+        lines.append(f"    id: {p.get('personaId', '?')}")
     lines.append(
-        "\nUse one in a run: /archetype:validation \"<goal>\" url=<...> persona=<personaId>"
+        "\nUse one in a run: /archetype:validation \"<goal>\" url=<...> persona=\"<name>\""
+        "\n(ids are for tool calls: when starting a run, resolve the name to its "
+        "id above and pass it as start_run's persona_id — don't show ids to the "
+        "user unless asked)"
     )
     return tool_text("\n".join(lines))
 
@@ -810,15 +814,15 @@ def handle_create_persona(arguments: dict[str, Any]) -> dict[str, Any]:
         return tool_text("\n".join(lines))
 
     persona_id = resp.get("personaId", "")
-    lines = [
-        f"Persona saved: {resp.get('name', '(unnamed)')} ({persona_id})",
-    ]
+    name = resp.get("name", "(unnamed)")
+    lines = [f"Persona saved: {name}"]
     if resp.get("story"):
         lines.append(str(resp["story"])[:300])
     if resp.get("personaNeed"):
         lines.append(f"Need: {resp['personaNeed']}")
     lines.append(
-        f"\nUse it in a run: /archetype:validation \"<goal>\" url=<...> persona={persona_id}"
+        f"\nUse it in a run: /archetype:validation \"<goal>\" url=<...> persona=\"{name}\""
+        f"\n(id for tool calls only, not for display: {persona_id})"
     )
     return tool_text("\n".join(lines))
 

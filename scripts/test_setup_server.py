@@ -878,10 +878,14 @@ def case_17_list_personas(srv: ServerProc, data_dir: Path) -> None:
     expect(req["headers"].get("Authorization") == "Bearer test-token-123", "missing bearer")
     text = result_text(result)
     contains(text, "Fiona Founder", "list_personas shows name")
-    contains(text, "vp-fiona-001", "list_personas shows personaId")
+    contains(text, "vp-fiona-001", "list_personas keeps ids for the actor")
     contains(text, "vibe", "list_personas labels vibe source")
     contains(text, "replay", "list_personas labels replay source")
-    contains(text, "persona=", "list_personas shows run-usage hint")
+    contains(text, 'persona="<name>"', "run hint is name-based, not id-based")
+    expect(
+        "ids are for tool calls" in text.lower(),
+        f"tool text tells the actor ids are internal, got {text!r}",
+    )
 
 
 def case_18_list_personas_empty(srv: ServerProc, data_dir: Path) -> None:
@@ -939,8 +943,8 @@ def case_20_create_persona_final(srv: ServerProc, data_dir: Path) -> None:
     body = req["body"]
     expect(not body.get("previewOnly"), "final create must not set previewOnly")
     text = result_text(result)
-    contains(text, "vp-new-123", "create returns the saved personaId")
-    contains(text, "persona=vp-new-123", "create shows how to use it in a run")
+    contains(text, "vp-new-123", "create still carries the id for the actor")
+    contains(text, 'persona="Fiona Founder"', "usage hint is name-based")
 
 
 def case_21_start_run_persona_id(srv: ServerProc, data_dir: Path) -> None:
