@@ -9,17 +9,17 @@ Render the Archetype connection dashboard in one tool call.
 
 ## Workflow
 
-1. Call the `status` tool from the `archetype-setup` MCP server with no
+1. Call the `status` tool from the `core` MCP server with no
    arguments.
-   - The `archetype-setup` tools may be deferred; if so, load this one first
+   - The `core` tools may be deferred; if so, load this one first
      with ToolSearch (query
-     `select:mcp__plugin_archetype_archetype-setup__status`).
+     `select:mcp__plugin_archetype_core__status`).
 2. Relay the dashboard the tool returns, lightly formatted as markdown:
    - Keep the Account / Token / Backend / Features lines as-is.
    - Render the recent-runs block as a short list (run id · goal · outcome).
    - Render the portal URL as a clickable markdown link labeled
      **Open Archetype portal**.
-3. If the dashboard says "Not connected", suggest `/archetype:validation` to
+3. If the dashboard says "Not connected", suggest `/archetype:setup` to
    run the login wizard. Do not call the `login` tool from this skill — status
    is read-only.
 

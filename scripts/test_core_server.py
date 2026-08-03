@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Scripted stdio test harness for scripts/setup-server.py.
+"""Scripted stdio test harness for scripts/core-server.py.
 
 Runs the MCP server as a subprocess, driving line-delimited JSON-RPC over
 stdin/stdout, while a stdlib http.server stub records every backend request
 (method, path, headers, parsed JSON body) and replays canned responses.
 
-Run:  python3 scripts/test_setup_server.py
+Run:  python3 scripts/test_core_server.py
 Exits non-zero on the first failing assertion in any case; prints per-case
 PASS/FAIL and a final ``ALL PASS`` line when every case passes.
 
@@ -25,7 +25,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-SERVER = HERE / "setup-server.py"
+SERVER = HERE / "core-server.py"
 
 
 # ---------------------------------------------------------------------------

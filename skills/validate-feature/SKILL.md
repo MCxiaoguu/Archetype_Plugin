@@ -16,7 +16,7 @@ it here. This skill only covers how to resolve the feature and the deltas.
 
 ### 1. Resolve the feature
 
-Call the `list_features` tool from the `archetype-setup` MCP server. Pass
+Call the `list_features` tool from the `core` MCP server. Pass
 `$ARGUMENTS` as the `query` (an optional case-insensitive title filter). The
 tool returns a list of features, each with an `_id`, `title`, and `updatedAt`.
 

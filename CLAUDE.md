@@ -15,7 +15,7 @@ Central ref that you must read:
 ## Status: actor contract implemented
 
 The actor half of the pipeline is now wired to the real backend contract. The
-`archetype-setup` MCP server (`scripts/setup-server.py`) exposes nine tools —
+`core` MCP server (`scripts/core-server.py`) exposes nine tools —
 `login`, `start_run`, `report_result`, `get_run`, `list_features`,
 `create_feature`, `status`, `list_personas`, `create_persona` — talking to
 the backend's `/api/plugin`,

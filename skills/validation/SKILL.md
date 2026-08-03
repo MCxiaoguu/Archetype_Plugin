@@ -25,16 +25,16 @@ browser, and every run must be created by the `start_run` tool.
 
 ## Login wizard
 
-Invoke the `login` tool from the `archetype-setup` MCP server (its full tool
+Invoke the `login` tool from the `core` MCP server (its full tool
 name in your tools list ends with `__login`). The tool encapsulates the entire
 connection flow — cached-token check, device-code request, browser launch,
 elicitation modal, polling, and the on-disk token save — in a single call.
 
 Steps for you (Claude):
 
-1. Locate the `login` tool from `archetype-setup` in your available tools. The
-   `archetype-setup` tools may be deferred; if so, load them first with
-   ToolSearch (query `select:mcp__plugin_archetype_archetype-setup__login`).
+1. Locate the `login` tool from `core` in your available tools. The
+   `core` tools may be deferred; if so, load them first with
+   ToolSearch (query `select:mcp__plugin_archetype_core__login`).
 2. Call it with an empty arguments object — no parameters.
 3. **On success**: report the tool's response verbatim (it will say either
    "already connected as X" or "connected and token saved at <path>").
@@ -141,7 +141,7 @@ When the confirmed list has more than one run:
 
 ### 2. Start the run (single)
 
-Call the `start_run` tool from the `archetype-setup` MCP server with:
+Call the `start_run` tool from the `core` MCP server with:
 
 - `goal`: the parsed goal (omit if you're running purely by `feature_id`).
 - `url`: the target URL (required).
@@ -166,7 +166,7 @@ the user declined the login; surface it and stop — do not fabricate a run.
 
 Tip: this flow also needs `report_result` later — load both in one ToolSearch
 query
-(`select:mcp__plugin_archetype_archetype-setup__start_run,mcp__plugin_archetype_archetype-setup__report_result`).
+(`select:mcp__plugin_archetype_core__start_run,mcp__plugin_archetype_core__report_result`).
 
 Record the `runId` and `sessionId` — you need them for `report_result`.
 
@@ -233,7 +233,7 @@ Conduct rules while acting:
 ### 6. Report results
 
 When you have worked through all scenarios (or exhausted them), call the
-`report_result` tool from the `archetype-setup` MCP server with the full
+`report_result` tool from the `core` MCP server with the full
 payload. Make exactly one SUCCESSFUL call: if the call itself errors, you may
 retry with the same payload (auth is self-healing — an expired token re-opens
 the login modal inside the tool call); but once you receive a success

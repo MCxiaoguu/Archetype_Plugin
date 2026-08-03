@@ -13,9 +13,9 @@ You are responding to `/archetype:persona`. Two modes, branched on `$ARGUMENTS`:
   free text was given, treat it as raw material for the vibe prompt and skip
   the questions it already answers.
 
-The `archetype-setup` tools may be deferred; load both persona tools in one
+The `core` tools may be deferred; load both persona tools in one
 ToolSearch query
-(`select:mcp__plugin_archetype_archetype-setup__list_personas,mcp__plugin_archetype_archetype-setup__create_persona`).
+(`select:mcp__plugin_archetype_core__list_personas,mcp__plugin_archetype_core__create_persona`).
 Auth is self-healing: the tools log the user in if needed — never pre-call
 `login`.
 

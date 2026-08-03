@@ -10,11 +10,11 @@ so they can pick one to validate.
 
 ## Workflow
 
-1. Call the `list_features` tool from the `archetype-setup` MCP server. If the
+1. Call the `list_features` tool from the `core` MCP server. If the
    user gave a search term, pass `$ARGUMENTS` as the `query` (an optional
    case-insensitive title filter); otherwise call it with no arguments.
-   - The `archetype-setup` tools may be deferred; if so, load them first with
-     ToolSearch (query `select:mcp__plugin_archetype_archetype-setup__list_features`).
+   - The `core` tools may be deferred; if so, load them first with
+     ToolSearch (query `select:mcp__plugin_archetype_core__list_features`).
 2. Auth is self-healing: if the session isn't connected, the tool itself opens
    the login modal and then completes the request — do not pre-call `login`.
    A "Not connected" error only comes back if the user declined the login;

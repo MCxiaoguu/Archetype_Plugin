@@ -17,7 +17,7 @@ Everything marked **[verified]** was actually executed on this machine
 |---|---|
 | tmux installed? | **GO** — tmux 3.5a `[verified]` |
 | Claude Code version | 2.1.170 at `~/.nvm/versions/node/v22.16.0/bin/claude` `[verified]` |
-| Plugin loads via `--plugin-dir`? | **GO** — 4 skills + 1 agent + hooks + MCP server `archetype-setup` all load `[verified]` |
+| Plugin loads via `--plugin-dir`? | **GO** — 4 skills + 1 agent + hooks + MCP server `core` all load `[verified]` |
 | Elicitation modal renders in tmux TUI? | **GO** — rendered, interacted with, cancelled `[verified]` |
 | Does `--dangerously-skip-permissions` auto-accept elicitation? | **NO** — elicitation ALWAYS needs interactive keys (docs + observed: modal appeared even though auto mode had already approved the tool call) |
 | Headless `claude -p` viable? | Plugins + plugin MCP servers load in `-p` `[verified]`, but print mode does **not** support elicitation (official docs) → interactive TUI in tmux is REQUIRED for the wizard |
@@ -61,12 +61,12 @@ MCP configuration (`~/.claude.json`, secrets redacted):
 ## 2. Plugin facts `[verified]`
 
 - Manifest: `.claude-plugin/plugin.json` → plugin name `archetype`, MCP server
-  `archetype-setup` = `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/setup-server.py`.
+  `core` = `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/core-server.py`.
 - Backend URL for the MCP server comes from env `ARCHETYPE_BACKEND_URL`
   (default `https://api.syntheticarchetype.com`). **Export it before launching
   the inner claude** — the MCP server inherits the CLI's environment.
 - Full MCP tool name (confirmed in both TUI debug log and `-p` mode):
-  `mcp__plugin_archetype_archetype-setup__login`
+  `mcp__plugin_archetype_core__login`
 - Plugin data dir (`CLAUDE_PLUGIN_DATA`) for a `--plugin-dir` load resolves to:
   `~/.claude/plugins/data/archetype-inline/` — an `auth.json` from May 2026
   already exists there (expired, 24 h TTL). **Delete it before an E2E run** to
@@ -146,7 +146,7 @@ tmux send-keys -t inner Enter
 Use `-l` (literal) for text so nothing is interpreted as a key name; send
 `Enter` as a separate `send-keys` call. `-x/-y` sets a generous pane so dialogs
 don't truncate. `--debug-file` gives a greppable log (MCP connect lines,
-`[archetype-setup]` stderr, tool names) without polluting the TUI.
+`[archetype-core]` stderr, tool names) without polluting the TUI.
 
 ### 4.2 Trust dialog (appears for a fresh cwd) `[verified]`
 
@@ -178,11 +178,11 @@ clearing typed text.
 
 Useful checks:
 - `/mcp` panel `[verified]` shows:
-  `plugin:archetype:archetype-setup · ✔ connected · 1 tool` and
+  `plugin:archetype:core · ✔ connected · 1 tool` and
   `claude-in-chrome · ✔ connected · 22 tools` (Built-in). `Esc` closes it.
 - Debug log markers: `grep "archetype" /tmp/e2e_inner_debug.log` →
   `Loaded 4 skills from plugin archetype`, `MCP server "plugin:archetype:
-  archetype-setup": Successfully connected`, `[archetype-setup] server
+  core": Successfully connected`, `[archetype-core] server
   starting; backend=...` (confirms which backend URL the MCP server got).
 
 ### 4.4 The MCP elicitation modal `[verified]` — exact rendering & keys
@@ -190,7 +190,7 @@ Useful checks:
 After `/archetype:validation` (no cached token), the TUI shows:
 
 ```
-  MCP server “plugin:archetype:archetype-setup” requests your input
+  MCP server “plugin:archetype:core” requests your input
 
   Connect to Archetype
   1) ... https://dev-....us.auth0.com/activate?user_code=XXXX-XXXX
@@ -234,7 +234,7 @@ Two important verified facts:
   first-run bypassPermissions warning dialog — that one appears once per user
   and needs an interactive accept; this user's default is auto mode, which
   already ran the MCP tool without prompting `[verified]`).
-- `--allowedTools "mcp__plugin_archetype_archetype-setup__login"` pre-approves
+- `--allowedTools "mcp__plugin_archetype_core__login"` pre-approves
   just the login tool in default/manual mode.
 - First Chrome action in a session asks permission to use the
   `claude-in-chrome` skill (docs); in auto mode it goes through the classifier.
@@ -280,7 +280,7 @@ From `https://code.claude.com/docs/en/chrome.md` + local observation:
 cd /tmp/e2e_inner && claude -p \
   --plugin-dir /Users/hanyanggu/Personal_Files/Coding/Archetype_all/Archetype_Plugins \
   'Output only the exact full tool name of the archetype login MCP tool available to you, nothing else.'
-# → mcp__plugin_archetype_archetype-setup__login
+# → mcp__plugin_archetype_core__login
 ```
 
 So `-p` is fine for *non-wizard* plugin smoke tests (skills, MCP server

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""archetype-setup MCP server — the data plane between Claude (the actor LLM
+"""archetype-core MCP server (registered as `core`) — the data plane between Claude (the actor LLM
 inside Claude Code) and the Archetype backend.
 
 Claude never handles tokens or raw HTTP: it calls these five MCP tools and
@@ -43,7 +43,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 PROTOCOL_VERSION = "2025-06-18"
-SERVER_NAME = "archetype-setup"
+SERVER_NAME = "archetype-core"
 SERVER_VERSION = "0.3.2"
 
 # The synchronous run-assembly endpoint runs the persona/scenario LLM chain,
@@ -84,7 +84,7 @@ USER_AGENT = os.environ.get(
 
 
 def log(msg: str) -> None:
-    sys.stderr.write(f"[archetype-setup] {msg}\n")
+    sys.stderr.write(f"[archetype-core] {msg}\n")
     sys.stderr.flush()
 
 

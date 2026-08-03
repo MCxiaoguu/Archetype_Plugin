@@ -15,10 +15,10 @@ customer-like feedback on your work without leaving your editor or terminal.
 | Skill | `skills/list-features/` | Browse the saved features available for validation |
 | Skill | `skills/check-run-status/` | Look up the status / results of a run |
 | Agent | `agents/feature-validator.md` | Headless orchestration of the same actor loop in one invocation |
-| MCP   | `archetype-setup` (stdio) — `scripts/setup-server.py` | The data plane: 5 tools between Claude and the backend, declared inline in `plugin.json` |
+| MCP   | `core` (stdio) — `scripts/core-server.py` | The data plane: 5 tools between Claude and the backend, declared inline in `plugin.json` |
 | Hook  | `hooks/hooks.json` | Session-start sanity check for the auth state |
 
-### MCP tools (`archetype-setup`)
+### MCP tools (`core`)
 
 The plugin never handles tokens or raw HTTP. Claude calls these five tools and
 reads their natural-language results.
@@ -93,7 +93,7 @@ Inside the session:
 
 ```text
 /plugin    # `archetype` should be listed as enabled
-/mcp       # `archetype-setup` should be `running`
+/mcp       # `core` should be `running`
 /help      # skills appear under the `archetype:` namespace
 ```
 
@@ -121,7 +121,7 @@ The token lives at `~/.claude/plugins/data/archetype-<scope>/auth.json`
 | Edit a skill / Python server / hook | Save the file. |
 | Pick up your changes in-session | `/reload-plugins` (no relaunch needed) |
 | Force the wizard to re-run from scratch | `rm ~/.claude/plugins/data/archetype-*/auth.json`, then `/archetype:validation` |
-| Watch MCP server logs | Already on stderr if you launched with `--debug` — lines prefixed `[archetype-setup]` |
+| Watch MCP server logs | Already on stderr if you launched with `--debug` — lines prefixed `[archetype-core]` |
 | Point at a local backend | `export ARCHETYPE_BACKEND_URL=http://localhost:5001` before launching (the MCP server inherits the CLI's environment) |
 | Override the HTTP User-Agent | `export ARCHETYPE_PLUGIN_USER_AGENT="custom/1.0"` (default: `archetype-claude-plugin/<version>`) |
 
@@ -159,8 +159,8 @@ backend endpoint (`/api/plugin/runs`, `/api/features`, etc.).
 
 ### How it works under the hood
 
-The `archetype-setup` stdio MCP server (Python 3, stdlib only,
-`scripts/setup-server.py`) is the data plane between Claude and the backend,
+The `core` stdio MCP server (Python 3, stdlib only,
+`scripts/core-server.py`) is the data plane between Claude and the backend,
 declared inline in `plugin.json` under `mcpServers`. It exposes five tools
 (`login`, `start_run`, `report_result`, `get_run`, `list_features`; see the
 table above). The `login` tool sequences the cached-token check, the
@@ -205,11 +205,11 @@ local `--plugin-dir` copy takes precedence for that session.
 - **Hook not firing?** Run `claude --debug` and watch for `SessionStart`
   hook output.
 - **MCP server failing?** `/mcp` shows the connection state and the
-  last error. `archetype-setup` should be `running`; if it shows
+  last error. `core` should be `running`; if it shows
   `failed`, check that `python3` resolves on your PATH and re-run with
   `claude --debug` to see the launcher error.
 - **Wizard didn't open a modal?** Verify Claude Code lists the `login`
-  tool from `archetype-setup` in `/mcp`. If the server failed to start,
+  tool from `core` in `/mcp`. If the server failed to start,
   the skill can't elicit.
 - **Cloudflare 1010 on the backend?** The default
   `archetype-claude-plugin/<version>` User-Agent passes; if you've

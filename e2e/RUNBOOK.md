@@ -124,8 +124,8 @@ e2e_send "mkdir -p /tmp/e2e_inner && cd /tmp/e2e_inner && ARCHETYPE_BACKEND_URL=
 
 Sanity (optional): `grep archetype /tmp/e2e_inner_debug.log` →
 `Loaded N skills from plugin archetype`,
-`MCP server "plugin:archetype:archetype-setup": Successfully connected`,
-`[archetype-setup] server starting; backend=http://localhost:5001`.
+`MCP server "plugin:archetype:core": Successfully connected`,
+`[archetype-core] server starting; backend=http://localhost:5001`.
 
 ## Step 5 — Accept the folder-trust dialog if it appears  → A1
 
