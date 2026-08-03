@@ -1,6 +1,6 @@
 ---
 name: validation
-description: The core Archetype actor loop. Use for the /archetype:validation command. With no arguments, connects the session to Archetype (login wizard). With arguments, parses the natural language into one or MORE run objects (goal, url, persona, feature) — comparison phrasing like "as Veda and as Marcus" fans out into multiple runs executed via the feature-validator agent and summarized as a cross-persona comparison. Single runs execute inline: become the assigned persona, drive Chrome through each scenario, report structured results back.
+description: The core Archetype actor loop. Use for the /archetype:validation command. With no arguments, connects the session to Archetype (login wizard). With arguments, parses the natural language into one or MORE run objects (goal, url, persona, feature) — comparison phrasing like "as <persona A> and as <persona B>" fans out into multiple runs. Every run executes in a freshly launched feature-validator agent (zero dev context) and multi-run output is a cross-persona comparison report.
 ---
 
 # Validation
@@ -65,13 +65,13 @@ so parse like one intelligent reader, not a regex. The output of intake is a
 | :-- | :-- |
 | `goal` | what to test — the free text minus everything captured below |
 | `url` | a `url=<...>` token or any URL in the text |
-| `persona` | ANY persona intent: a `persona=<...>` token, a name ("as Veda", "with Marcus"), or a description ("as a cautious non-technical first-timer", "from the perspective of ...") |
+| `persona` | ANY persona intent: a `persona=<...>` token, a saved persona's name ("as <name>", "with <name>"), or a description ("as a cautious non-technical first-timer", "from the perspective of ...") |
 | `feature` | a named saved feature (prefer the `validate-feature` skill when feature-first) |
 
 **One command can mean several runs.** Comparison or fan-out phrasing
 produces one object per combination the user actually means:
 
-- "as Veda **and** as Marcus" / "compare Veda vs Marcus" → 2 runs, same
+- "as <name A> **and** as <name B>" / "compare <name A> vs <name B>" → 2 runs, same
   goal+url, different personas.
 - "with each of my personas" → resolve via `list_personas`, one run per
   persona (confirm the count before starting).

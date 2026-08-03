@@ -35,8 +35,8 @@ portal default `https://www.syntheticarchetype.com`, override via
 ones questionnaire-style (vibe prompt + controls → preview → save); runs accept
 `persona=<personaId>` which `start_run` forwards as `personaId` so the backend
 uses that persona instead of the replay-derived one. Validation intake parses
-natural language into a LIST of run objects — comparison phrasing ("as Veda
-and as Marcus") fans out to multiple runs. EVERY run (single included)
+natural language into a LIST of run objects — comparison phrasing ("as <persona A>
+and as <persona B>") fans out to multiple runs. EVERY run (single included)
 executes in a freshly launched `feature-validator` agent so the persona
 actor carries zero dev context (sequential dispatch — one Chrome); the agent
 file is the single source of truth for the actor loop, and multi-run output
