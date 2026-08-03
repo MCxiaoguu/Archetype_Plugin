@@ -36,8 +36,11 @@ ones questionnaire-style (vibe prompt + controls → preview → save); runs acc
 `persona=<personaId>` which `start_run` forwards as `personaId` so the backend
 uses that persona instead of the replay-derived one. Validation intake parses
 natural language into a LIST of run objects — comparison phrasing ("as Veda
-and as Marcus") fans out to sequential `feature-validator` agent dispatches
-and a cross-persona comparison report.
+and as Marcus") fans out to multiple runs. EVERY run (single included)
+executes in a freshly launched `feature-validator` agent so the persona
+actor carries zero dev context (sequential dispatch — one Chrome); the agent
+file is the single source of truth for the actor loop, and multi-run output
+is a cross-persona comparison report.
 
 Authoritative references for this work:
 - Design spec: `docs/superpowers/specs/2026-07-22-plugin-backend-pipeline-design.md` (§4.2 covers the skills).

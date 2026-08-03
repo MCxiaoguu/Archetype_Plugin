@@ -115,192 +115,62 @@ inferred, or fuzzy-matched → ask about exactly those fields first — one
 compact question, not an interrogation. **Multiple runs → always confirm the
 list once** (they each cost real minutes) before starting.
 
-### 2a. Multiple runs: fan out, then compare
+### 2. Execute every run in a FRESH agent
 
-When the confirmed list has more than one run:
+The persona must be performed by a **newly launched agent with no dev
+context**. An actor that has read this session's code, plans, or prior
+findings cannot get lost the way a real user does — it "knows" where the
+buttons are and unconsciously routes around known bugs. Never run the actor
+loop in the main session (one exception below).
+
+For the confirmed run list (one run or many):
 
 1. Make sure the session is connected FIRST (intake's `list_personas` call
    self-heals auth in the main session; subagents cannot render the login
    modal).
-2. For each run object, dispatch the `feature-validator` agent with a prompt
-   carrying its resolved fields verbatim: goal, url, `feature_id`,
-   `persona_id` + the persona's name (so the agent can sanity-check the
-   brief). Run them **sequentially** — the agents share one Chrome; parallel
-   dispatch makes them fight over the browser.
-3. If a run comes back with the "backend did not honor the persona" error,
+2. Dispatch the `feature-validator` agent once per run object. The dispatch
+   prompt carries ONLY the run's resolved fields — goal, url, `feature_id`,
+   `persona_id` plus the persona's display name (for the agent's sanity
+   check against the brief). Deliberately include nothing else: no product
+   background, no known issues, no prior run results — a clean actor is the
+   point.
+3. Multiple runs execute **sequentially** — the agents share one Chrome;
+   parallel dispatch makes them fight over the browser.
+4. If a run comes back with the "backend did not honor the persona" error,
    stop the remaining persona-selected runs (they will fail the same way)
    and surface it once.
-4. After all runs finish, render a **comparison report**, not N stacked
-   reports:
-   - Header: one row per run — persona · verdict · run id.
-   - Scenario outcomes side by side where scenarios align.
-   - Findings split into "hit by all personas" vs "only <name> hit this"
-     (the per-persona deltas are the interesting part).
-   - Each persona's reaction quote.
-   - Close with `/archetype:check-run-status <run_id>` per run.
 
-### 2. Start the run (single)
+The full actor loop (become the persona, drive Chrome, keep the step log,
+`report_result` exactly once) is defined in the `feature-validator` agent —
+that file is the single source of truth for run execution.
 
-Call the `start_run` tool from the `core` MCP server with:
+**Watch-live exception**: only if the user explicitly asks to watch the
+persona act live, run the loop inline in the main session by following the
+`feature-validator` operating procedure verbatim — and tell the user the
+trade-off first: an in-session actor carries dev context and gives less
+faithful feedback.
 
-- `goal`: the parsed goal (omit if you're running purely by `feature_id`).
-- `url`: the target URL (required).
-- `feature_id`: only if the user named a feature you have an id for.
-- `persona_id`: the confirmed persona's id from intake, if any.
+### 3. Render the report
 
-The tool itself guards persona selection: if the backend does not honor the
-requested persona (e.g. an outdated deployment), `start_run` returns an
-error instead of a briefing — relay it and stop; never proceed as a persona
-the user didn't pick. As a final check, the brief's persona name should
-match the confirmed persona; on any mismatch, stop and tell the user.
+Relay the agent's report; don't re-investigate it. Single run:
 
-The tool's result text is **authoritative guidance**. It contains: the mission
-brief, a first-person persona card, numbered scenarios (each with steps and an
-expected result), conduct rules, the `runId` and `sessionId`, and the full
-`report_result` contract. Read all of it.
-
-**Error handling:** auth is self-healing — if the session isn't connected (or
-the token expired), `start_run` itself opens the login modal and then starts
-the run; do not pre-call `login`. A "Not connected" error only comes back if
-the user declined the login; surface it and stop — do not fabricate a run.
-
-Tip: this flow also needs `report_result` later — load both in one ToolSearch
-query
-(`select:mcp__plugin_archetype_core__start_run,mcp__plugin_archetype_core__report_result`).
-
-Record the `runId` and `sessionId` — you need them for `report_result`.
-
-### 3. Become the persona
-
-The brief, persona card, and conduct rules from the `start_run` result are
-authoritative. Adopt them fully. Summarize to the user in about three lines:
-who you are (persona name + one-line character), and what you are about to test
-(the goal and the target URL). Then begin.
-
-From here on, act *as this persona*: their patience, skill level, reading
-speed, and mood. Narrate your actions in the persona's first-person voice.
-
-### 4. Open the browser
-
-The Claude-in-Chrome browser tools are deferred and must be loaded before use.
-
-1. Load them with ToolSearch (query `claude-in-chrome`). At minimum you need
-   `tabs_context_mcp`, `tabs_create_mcp`, `navigate`, `computer`,
-   `get_page_text`/`read_page`, and `find`.
-2. Call `tabs_context_mcp` FIRST to see the current browser/tab state.
-3. Create a **NEW** tab (`tabs_create_mcp`) for the target URL — do not hijack
-   an existing tab.
-4. Navigate that tab to the target URL.
-
-**Whole-run browser failure:** if the target site never loads, Chrome isn't
-connected, or the browser tools are unusable, do NOT abandon the run silently.
-Mark all scenarios `blocked`, call `report_result` with status `"failed"` and a
-finding describing exactly what you observed, then tell the user.
-
-### 5. Execute the scenarios
-
-Work through each scenario **in order**, acting at the persona's
-patience/skill/reading level.
-
-Keep a running **step log** as you go. For every meaningful action, record an
-object with these keys (snake_case — this is the shape `report_result` wants):
-
-- `seq`: a 1-based integer, strictly increasing across the whole run.
-- `scenario_id`: the id of the scenario you're on (e.g. `"SC-1"`).
-- `action_text`: what you actually did, plain and factual (e.g. "clicked Start
-  free trial").
-- `narration`: a short persona-voice inner monologue (e.g. "Ugh, nothing
-  happened when I clicked — is it broken?").
-- `url`: the page URL at that moment.
-- `observation_page_type`: one or two words describing the page
-  (`"landing"`, `"pricing"`, `"signup-form"`, etc.).
-- `success`: `true` if the action did what you intended, `false` otherwise.
-- `error`: optional string if something went wrong.
-- `screenshot_b64`: OPTIONAL. The browser/computer tools return screenshots;
-  only attach one for a few key moments and only if it's readily available.
-  Never exceed 6 screenshots total across the whole run, and keep each under
-  1 MB. When in doubt, omit it.
-
-Conduct rules while acting:
-
-- Time-box each scenario to about 3 minutes. If a scenario is blocked (a flaw,
-  a dead end, something you genuinely can't complete as this persona), mark
-  that scenario `blocked` and move on to the next one.
-- Stay on the target site. Do not wander to unrelated URLs.
-- Never fabricate steps, observations, or results. If you didn't see it, don't
-  report it.
-
-### 6. Report results
-
-When you have worked through all scenarios (or exhausted them), call the
-`report_result` tool from the `core` MCP server with the full
-payload. Make exactly one SUCCESSFUL call: if the call itself errors, you may
-retry with the same payload (auth is self-healing — an expired token re-opens
-the login modal inside the tool call); but once you receive a success
-confirmation, never re-send. Top-level keys are snake_case; the tool maps them
-to the backend. The `feedback` object's nested keys are already camelCase.
-
-The shape below mirrors the contract rendered by `start_run`; if they ever
-differ, the `start_run` text wins.
-
-```jsonc
-{
-  "run_id": "<runId from start_run>",
-  "session_id": "<sessionId from start_run>",
-  "status": "completed",            // one of: completed | failed | aborted
-  "duration_seconds": 312,          // approximate wall-clock of the run
-  "steps": [
-    {
-      "seq": 1,
-      "scenario_id": "SC-1",
-      "action_text": "clicked Start free trial",
-      "narration": "Nothing happened for a second — did it register?",
-      "url": "http://localhost:8321/",
-      "observation_page_type": "landing",
-      "success": true
-      // "error": "<only when something went wrong>"
-      // "screenshot_b64": "<optional, ≤1MB, ≤6 total>"
-    }
-    // ... one object per meaningful action, seq strictly increasing
-  ],
-  "feedback": {
-    "verdict": "mixed",             // one of: pass | fail | mixed
-    "summary": "<a few sentences: what worked, what broke, overall impression>",
-    "scenarioResults": [
-      {"scenarioId": "SC-1", "status": "pass", "actualResult": "<what actually happened>"}
-      // status is one of: pass | fail | blocked
-    ],
-    "findings": [
-      {
-        "scenarioId": "SC-1",
-        "category": "ux",           // bug | ux | content | performance | other
-        "severity": "high",         // critical | high | medium | low
-        "description": "<the problem, concretely>",
-        "evidenceStepSeq": 4        // the step.seq that demonstrates it
-      }
-    ],
-    "personaReaction": "<a first-person quote capturing how the persona felt>"
-  }
-}
-```
-
-Choose `status`: `completed` if you ran the scenarios through, `failed` if the
-run broke down, `aborted` if you deliberately stopped early. Choose `verdict`
-from the *product's* performance: `pass` (everything worked), `fail`
-(core goal couldn't be achieved), or `mixed`.
-
-### 7. Render the local report
-
-After `report_result` succeeds, present a concise report to the user:
-
-- A **scenario verdict table**: scenario id · title · status (pass/fail/blocked)
-  · actualResult (what actually happened, in a few words).
-- **Findings by severity** (critical first), each with category and a one-line
-  description.
+- A **scenario verdict table**: scenario id · title · status
+  (pass/fail/blocked) · actualResult (what actually happened, in a few
+  words).
+- **Findings by severity** (critical first), each with category and a
+  one-line description.
 - The **persona quote** (`personaReaction`) as a pull-quote.
-- The **run id**.
-- A closing line: "Check status later with
+- The **run id**, and "Check status later with
   `/archetype:check-run-status <run_id>`."
+
+Multiple runs get a **comparison report**, not N stacked reports:
+
+- Header: one row per run — persona · verdict · run id.
+- Scenario outcomes side by side where scenarios align.
+- Findings split into "hit by all personas" vs "only <name> hit this" (the
+  per-persona deltas are the interesting part).
+- Each persona's reaction quote.
+- Close with `/archetype:check-run-status <run_id>` per run.
 
 ---
 
@@ -310,4 +180,6 @@ After `report_result` succeeds, present a concise report to the user:
   `start_run`; results go only through `report_result`.
 - Exactly one SUCCESSFUL `report_result` call per run: retry on error, never
   re-send after a success confirmation.
+- The persona actor is always a freshly launched `feature-validator` agent —
+  inline execution only on the user's explicit ask to watch live.
 - Everything you report must reflect what you actually did in the browser.
