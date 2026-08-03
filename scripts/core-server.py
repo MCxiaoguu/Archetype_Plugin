@@ -44,7 +44,7 @@ from typing import Any, Callable
 
 PROTOCOL_VERSION = "2025-06-18"
 SERVER_NAME = "archetype-core"
-SERVER_VERSION = "0.3.2"
+SERVER_VERSION = "0.3.6"
 
 # The synchronous run-assembly endpoint runs the persona/scenario LLM chain,
 # which the MCP server tolerates for up to ~90 s; give it generous headroom.
