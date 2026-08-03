@@ -34,7 +34,10 @@ portal default `https://www.syntheticarchetype.com`, override via
 `ARCHETYPE_PORTAL_URL`). `/archetype:persona` lists personas and creates new
 ones questionnaire-style (vibe prompt + controls → preview → save); runs accept
 `persona=<personaId>` which `start_run` forwards as `personaId` so the backend
-uses that persona instead of the replay-derived one.
+uses that persona instead of the replay-derived one. Validation intake parses
+natural language into a LIST of run objects — comparison phrasing ("as Veda
+and as Marcus") fans out to sequential `feature-validator` agent dispatches
+and a cross-persona comparison report.
 
 Authoritative references for this work:
 - Design spec: `docs/superpowers/specs/2026-07-22-plugin-backend-pipeline-design.md` (§4.2 covers the skills).

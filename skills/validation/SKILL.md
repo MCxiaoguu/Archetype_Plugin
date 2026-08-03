@@ -1,6 +1,6 @@
 ---
 name: validation
-description: The core Archetype actor loop. Use for the /archetype:validation command. With no arguments, connects the session to Archetype (login wizard). With arguments (a natural-language goal and/or a url=<...> token), it starts a validation run, becomes the assigned persona, drives Chrome through each scenario as that persona, and reports structured results back to the backend.
+description: The core Archetype actor loop. Use for the /archetype:validation command. With no arguments, connects the session to Archetype (login wizard). With arguments, parses the natural language into one or MORE run objects (goal, url, persona, feature) — comparison phrasing like "as Veda and as Marcus" fans out into multiple runs executed via the feature-validator agent and summarized as a cross-persona comparison. Single runs execute inline: become the assigned persona, drive Chrome through each scenario, report structured results back.
 ---
 
 # Validation
@@ -51,10 +51,15 @@ only authorized path.
 
 Run this when `$ARGUMENTS` is non-empty. Follow the steps in order.
 
-### 1. Intake: understand `$ARGUMENTS` with judgment, then confirm
+### 1. Intake: parse `$ARGUMENTS` into a RUN LIST with judgment, then confirm
 
-`$ARGUMENTS` is natural language, not a token grammar. YOU parse and
-categorize it. Fill this field table:
+`$ARGUMENTS` is natural language, not a token grammar — you are the parser,
+so parse like one intelligent reader, not a regex. The output of intake is a
+**list of run objects**, each:
+
+```jsonc
+{ "goal": "...", "url": "...", "persona": "<intent or null>", "feature": "<name or null>" }
+```
 
 | field | what to look for |
 | :-- | :-- |
@@ -63,8 +68,21 @@ categorize it. Fill this field table:
 | `persona` | ANY persona intent: a `persona=<...>` token, a name ("as Veda", "with Marcus"), or a description ("as a cautious non-technical first-timer", "from the perspective of ...") |
 | `feature` | a named saved feature (prefer the `validate-feature` skill when feature-first) |
 
-**Persona resolution** (whenever the persona field is non-empty — name OR
-description):
+**One command can mean several runs.** Comparison or fan-out phrasing
+produces one object per combination the user actually means:
+
+- "as Veda **and** as Marcus" / "compare Veda vs Marcus" → 2 runs, same
+  goal+url, different personas.
+- "with each of my personas" → resolve via `list_personas`, one run per
+  persona (confirm the count before starting).
+- "on staging and on prod" (two URLs) → one run per URL.
+- Unmentioned fields are SHARED: one url + two personas → both objects carry
+  that url. Don't multiply dimensions the user didn't ask to cross.
+
+A single-intent command is simply a list of one — behavior unchanged.
+
+**Persona resolution** (for every distinct persona intent in the list — name
+OR description; call `list_personas` once and reuse it):
 
 1. Call `list_personas` so you know what actually exists.
 2. Match the intent against the real personas — exact/close name match, or
@@ -89,13 +107,39 @@ treatment — offer to create it on the spot (`create_feature` with a title
 and a one-line description distilled from their words; ask only for what
 you genuinely can't infer), then run with the new `feature_id`.
 
-**Confirm before starting**: present the filled table briefly. If every
-field was explicit and unambiguous, proceed straight away, stating the table
-as what you're about to do. If anything was missing (a URL is required —
-never guess one), inferred, or fuzzy-matched, ask about exactly those fields
-first — one compact question, not an interrogation.
+**Confirm before starting**: present the run list as a table (one row per
+run: goal · url · persona · feature). Single run with every field explicit
+and unambiguous → proceed straight away, stating the row as what you're
+about to do. Anything missing (a URL is required — never guess one),
+inferred, or fuzzy-matched → ask about exactly those fields first — one
+compact question, not an interrogation. **Multiple runs → always confirm the
+list once** (they each cost real minutes) before starting.
 
-### 2. Start the run
+### 2a. Multiple runs: fan out, then compare
+
+When the confirmed list has more than one run:
+
+1. Make sure the session is connected FIRST (intake's `list_personas` call
+   self-heals auth in the main session; subagents cannot render the login
+   modal).
+2. For each run object, dispatch the `feature-validator` agent with a prompt
+   carrying its resolved fields verbatim: goal, url, `feature_id`,
+   `persona_id` + the persona's name (so the agent can sanity-check the
+   brief). Run them **sequentially** — the agents share one Chrome; parallel
+   dispatch makes them fight over the browser.
+3. If a run comes back with the "backend did not honor the persona" error,
+   stop the remaining persona-selected runs (they will fail the same way)
+   and surface it once.
+4. After all runs finish, render a **comparison report**, not N stacked
+   reports:
+   - Header: one row per run — persona · verdict · run id.
+   - Scenario outcomes side by side where scenarios align.
+   - Findings split into "hit by all personas" vs "only <name> hit this"
+     (the per-persona deltas are the interesting part).
+   - Each persona's reaction quote.
+   - Close with `/archetype:check-run-status <run_id>` per run.
+
+### 2. Start the run (single)
 
 Call the `start_run` tool from the `archetype-setup` MCP server with:
 

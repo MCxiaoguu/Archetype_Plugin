@@ -1,7 +1,7 @@
 {
   "name": "archetype",
   "description": "Plugin for Run Feature Validation Testing through Synthetic Archetype",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "author": {
     "name": "Synthetic Archetype"
   },
