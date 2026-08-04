@@ -125,9 +125,11 @@ loop in the main session (one exception below).
 
 For the confirmed run list (one run or many):
 
-1. Make sure the session is connected FIRST (intake's `list_personas` call
-   self-heals auth in the main session; subagents cannot render the login
-   modal).
+1. Make sure the session is connected FIRST — subagents cannot render the
+   login modal. Persona/feature resolution during intake already self-heals
+   auth in the main session; if intake made NO authed call (e.g. a plain
+   goal+url run), call `status` now, and if it reports a missing or expired
+   token, run the `login` tool here in the main session before dispatching.
 2. Dispatch the `feature-validator` agent once per run object. The dispatch
    prompt carries ONLY the run's resolved fields — goal, url, `feature_id`,
    `persona_id` plus the persona's display name (for the agent's sanity
