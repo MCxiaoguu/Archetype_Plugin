@@ -15,13 +15,13 @@ Central ref that you must read:
 ## Status: actor contract implemented
 
 The actor half of the pipeline is now wired to the real backend contract. The
-`core` MCP server (`scripts/core-server.py`) exposes nine tools —
-`login`, `start_run`, `report_result`, `get_run`, `list_features`,
+`core` MCP server (`scripts/core-server.py`) exposes ten tools —
+`login`, `logout`, `start_run`, `report_result`, `get_run`, `list_features`,
 `create_feature`, `status`, `list_personas`, `create_persona` — talking to
 the backend's `/api/plugin`,
-`/api/features`, and `/api/persona` endpoints. The seven skills (`setup`,
+`/api/features`, and `/api/persona` endpoints. The eight skills (`setup`,
 `validation`, `validate-feature`, `list-features`, `check-run-status`,
-`status`, `persona`) and the `feature-validator` agent drive the actor loop
+`status`, `persona`, `logout`) and the `feature-validator` agent drive the actor loop
 over those tools — `/archetype:setup` is the onboarding command (login wizard
 + status dashboard): `start_run` → become the persona → drive Claude-in-Chrome through the
 scenarios → keep a snake_case step log → `report_result` once → render a local

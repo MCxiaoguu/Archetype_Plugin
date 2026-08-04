@@ -250,7 +250,7 @@ after server-side storage would surface as a confusing 409 on retry); `PERSONA_T
 cannot obtain a token at all, the tool returns `Not connected. Run /archetype:setup to log in.`
 (`isError`).
 
-### The nine tools
+### The ten tools
 
 #### `login`
 
@@ -699,4 +699,12 @@ hooks, and agents live at the plugin root):
 
 ---
 
-Verified against plugin version 0.3.6 (`.claude-plugin/plugin.json`, server `archetype-core` 0.3.6) on 2026-08-03.
+### `logout`
+
+Delete the locally cached credentials (`auth.json`) — purely local: the old
+token is not revoked server-side and lapses within its normal lifetime. Run
+history (`runs.json`) is preserved. No arguments; never triggers a login;
+friendly no-op when not connected. Surfaced as `/archetype:logout` (added
+v0.3.9).
+
+Verified against plugin version 0.3.9 (`.claude-plugin/plugin.json`, server `archetype-core` 0.3.6) on 2026-08-04.

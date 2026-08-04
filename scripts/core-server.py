@@ -725,6 +725,49 @@ def handle_list_features(arguments: dict[str, Any]) -> dict[str, Any]:
     return tool_text("\n".join(lines))
 
 
+# ---------- tool: logout ----------
+
+
+def handle_logout(_arguments: dict[str, Any]) -> dict[str, Any]:
+    """Delete the locally cached credentials. Purely local: the old token is
+    not revoked server-side, it just lapses within its normal lifetime."""
+    plugin_data = os.environ.get("CLAUDE_PLUGIN_DATA")
+    if not plugin_data:
+        return tool_text(
+            "CLAUDE_PLUGIN_DATA is not set; there are no credentials to remove.",
+            is_error=True,
+        )
+    auth_path = Path(plugin_data) / "auth.json"
+    if not auth_path.exists():
+        return tool_text(
+            "Not connected — no local credentials to remove. "
+            "Run /archetype:setup to log in."
+        )
+
+    who = ""
+    try:
+        auth = json.loads(auth_path.read_text())
+        claims = _decode_jwt_claims(auth.get("id_token") or "")
+        who = claims.get("email") or claims.get("name") or ""
+    except Exception as exc:
+        log(f"could not read identity before logout: {exc}")
+
+    try:
+        auth_path.unlink()
+    except Exception as exc:
+        return tool_text(
+            f"Could not remove credentials at {auth_path}: {exc}", is_error=True
+        )
+
+    subject = f" ({who})" if who else ""
+    return tool_text(
+        f"Logged out{subject}. Local credentials at {auth_path} were deleted; "
+        "the old token is not revoked server-side and lapses on its own within "
+        "its normal lifetime. Run history (runs.json) is kept. "
+        "Reconnect anytime with /archetype:setup."
+    )
+
+
 # ---------- tool: create_feature ----------
 
 
@@ -1188,6 +1231,15 @@ TOOLS: dict[str, dict[str, Any]] = {
             "required": ["title"],
         },
         "handler": handle_create_feature,
+    },
+    "logout": {
+        "description": (
+            "Log out of Archetype: delete the locally cached credentials "
+            "(auth.json). Local-only — the old token lapses on its own; run "
+            "history is preserved. Never triggers a login."
+        ),
+        "schema": {"type": "object", "properties": {}, "required": []},
+        "handler": handle_logout,
     },
 }
 

@@ -528,9 +528,10 @@ def case_1_tools_list(srv: ServerProc, data_dir: Path) -> None:
                 "list_personas",
                 "create_persona",
                 "create_feature",
+                "logout",
             ]
         ),
-        f"tools/list should show exactly the 9 tools, got {names}",
+        f"tools/list should show exactly the 10 tools, got {names}",
     )
 
 
@@ -1036,8 +1037,30 @@ def case_23_create_feature(srv: ServerProc, data_dir: Path) -> None:
     contains(text, "feat-new-001", "create_feature returns the feature id for start_run")
 
 
+def case_24_logout_connected(srv: ServerProc, data_dir: Path) -> None:
+    write_auth_full(data_dir, id_token=fake_id_token("priya@example.com", "Priya Nair"))
+    (data_dir / "runs.json").write_text(json.dumps([{"run_id": "r1", "goal": "g"}]))
+    result = call_tool(srv, "logout", {})
+    expect(not result.get("isError"), "logout while connected must succeed")
+    text = result_text(result)
+    expect("logged out" in text.lower(), f"logout says so plainly, got {text!r}")
+    contains(text, "priya@example.com", "logout names who was logged out")
+    contains(text, "/archetype:setup", "logout points at how to reconnect")
+    expect(not (data_dir / "auth.json").exists(), "auth.json must be deleted")
+    expect((data_dir / "runs.json").exists(), "run history must be preserved")
+    expect(len(srv.elicitations) == 0, "logout must never trigger the login modal")
+
+
+def case_25_logout_not_connected(srv: ServerProc, data_dir: Path) -> None:
+    clear_auth(data_dir)
+    result = call_tool(srv, "logout", {})
+    expect(not result.get("isError"), "logout when not connected is a no-op, not an error")
+    text = result_text(result)
+    expect("not connected" in text.lower(), f"no-op logout says so, got {text!r}")
+
+
 CASES = [
-    ("initialize + tools/list shows 9 tools", case_1_tools_list),
+    ("initialize + tools/list shows 10 tools", case_1_tools_list),
     ("start_run happy path (camelCase body, rich tool text)", case_2_start_run_happy),
     ("start_run maps feature_id -> featureId", case_2b_start_run_feature_id),
     ("start_run no auth + declined login -> login hint error", case_3_start_run_no_auth_declined),
@@ -1061,6 +1084,8 @@ CASES = [
     ("start_run maps persona_id -> personaId + logs it", case_21_start_run_persona_id),
     ("start_run aborts when backend ignores personaId", case_22_start_run_persona_not_honored),
     ("create_feature POSTs title+fields, returns id", case_23_create_feature),
+    ("logout deletes auth.json, keeps run history", case_24_logout_connected),
+    ("logout when not connected is a friendly no-op", case_25_logout_not_connected),
 ]
 
 
