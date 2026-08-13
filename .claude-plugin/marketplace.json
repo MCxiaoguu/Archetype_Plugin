@@ -1,14 +1,40 @@
 {
   "name": "archetype",
-  "owner": { "name": "Synthetic Archetype" },
+  "description": "Synthetic Archetype for Claude Code — test your product as if your customers were sitting beside you. Persona-driven browser validation runs with faithful, structured feedback.",
+  "owner": {
+    "name": "Synthetic Archetype",
+    "url": "https://www.syntheticarchetype.com"
+  },
   "plugins": [
     {
       "name": "archetype",
+      "displayName": "Archetype",
       "source": {
         "source": "url",
         "url": "https://github.com/MCxiaoguu/Archetype_Plugin.git"
       },
-      "description": "Testing your product with synthetic personas"
+      "description": "Testing your product with synthetic personas: create personas from a description, run persona-driven validation tests in a real browser, compare how different personas experience your product, and get verdicts, findings, and reactions persisted to your Archetype workspace.",
+      "author": {
+        "name": "Synthetic Archetype",
+        "url": "https://www.syntheticarchetype.com"
+      },
+      "homepage": "https://www.syntheticarchetype.com",
+      "repository": "https://github.com/MCxiaoguu/Archetype_Plugin",
+      "category": "testing",
+      "keywords": [
+        "testing",
+        "personas",
+        "user-testing",
+        "validation",
+        "ux",
+        "browser-automation",
+        "feedback"
+      ],
+      "tags": [
+        "product-testing",
+        "synthetic-users",
+        "qa"
+      ]
     }
   ]
 }
