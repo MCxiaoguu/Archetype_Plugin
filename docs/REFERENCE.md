@@ -3,8 +3,11 @@
 This plugin is the actor half of the Archetype pipeline: it lets a builder test their product as if
 customers were sitting beside them. The backend supplies a persona, goal, and scenarios; the plugin's
 skills and agent drive Claude-in-Chrome through the product as that persona and report structured
-results back for persistence, plus a local report in the session. All backend traffic flows through
-one stdio MCP server (`core`, `scripts/core-server.py`); Claude never touches tokens or raw HTTP.
+results back for persistence, plus a local report in the session. Personas are **pool-first**
+(v0.4.0): a persona pool is a distribution spec, and each pool-targeted run spins off one fresh
+tester from it — the spun-off member is the persona the actor becomes. All backend traffic flows
+through one stdio MCP server (`core`, `scripts/core-server.py`); Claude never touches tokens or raw
+HTTP.
 
 Contents:
 
@@ -51,57 +54,62 @@ Source: `skills/validation/SKILL.md`. Branches on `$ARGUMENTS`:
 
 **Intake (step 1).** `$ARGUMENTS` is natural language, not a token grammar — the model is the parser
 ("parse like one intelligent reader, not a regex"). The output of intake is a **list of run
-objects**, each `{ "goal": "...", "url": "...", "persona": "<intent or null>", "feature": "<name or null>" }`:
+objects**, each `{ "goal": "...", "url": "...", "pool": "<intent or null>", "feature": "<name or null>" }`:
 
 | field | semantics |
 | :-- | :-- |
 | `goal` | what to test — the free text minus everything else captured |
 | `url` | a `url=<...>` token or any URL in the text |
-| `persona` | ANY persona intent: `persona=<...>` token, a name ("as Veda", "with Marcus"), or a description ("as a cautious non-technical first-timer") |
+| `pool` | ANY tester/persona intent: `pool=<...>` token, a pool's name ("as Veda", "with Marcus"), or a description ("as cautious non-technical first-timers") |
 | `feature` | a named saved feature (prefer `validate-feature` when feature-first) |
 
 **Multi-run fan-out.** One command can mean several runs. Comparison/fan-out phrasing produces one
 object per combination the user actually means: "as Veda and as Marcus" / "compare Veda vs Marcus" →
-2 runs sharing goal+url; "with each of my personas" → resolve via `list_personas`, one run per
-persona (confirm the count first); two URLs ("on staging and on prod") → one run per URL.
-Unmentioned fields are SHARED (one url + two personas → both objects carry that url); dimensions the
+2 runs sharing goal+url; "with each of my pools" (or "personas") → resolve via `list_pools`, one run
+per pool (confirm the count first); two URLs ("on staging and on prod") → one run per URL.
+Unmentioned fields are SHARED (one url + two pools → both objects carry that url); dimensions the
 user didn't ask to cross are never multiplied. A single-intent command is simply a list of one.
 
-**Persona resolution** (for every distinct persona intent; `list_personas` is called once and
-reused): match the intent — name or description — against real personas; propose the match
-conversationally before using it ("I found **<name>** (<one-line story>) — … Test with them, or
-create a new persona?"); multiple plausible → show candidates and ask. **None plausible → create
-from blank, right there**: one confirmation, then `create_persona` directly with the user's
-description as `vibe_prompt` (plus whatever controls their words imply), skipping previews unless
-asked — never dead-end the user into a separate command (`/archetype:persona` is only for the full
-guided flow). Only a persona the user confirmed becomes `persona_id`; persona intent is never
+**Pool resolution** (for every distinct tester intent; `list_pools` is called once and reused):
+match the intent — name or description — against real pools, **case-insensitively on the pool's
+name** with the archetype name (the `archetype:` line in the tool output, from
+`metadata.primary_archetype_name`) as fallback, or best description fit; propose the match
+conversationally before using it ("I found **<name>** (<one-line description>) — … Test with a
+member of that pool, or create a new pool?"); **several pools matching the same name → list the
+candidates (name · description · created) and ask — never guess.** **None plausible → create from
+blank, right there**: one confirmation, then `create_pool` directly with the user's description as
+`vibe_prompt` (plus whatever controls their words imply and a short `name`), skipping previews
+unless asked — never dead-end the user into a separate command (`/archetype:persona` is only for
+the full guided flow). Only a pool the user confirmed becomes `pool_id`; tester intent is never
 silently dropped into the goal text, and candidates are never guessed between.
 
 **Feature resolution**: a named feature that doesn't exist gets the same treatment — offer to create
 it on the spot (`create_feature` with a title + one-line description distilled from the user's
 words; ask only for what can't be inferred), then run with the new `feature_id`.
 
-**Confirmation rules**: present the run list as a table (goal · url · persona · feature). A single
+**Confirmation rules**: present the run list as a table (goal · url · pool · feature). A single
 run with every field explicit and unambiguous → proceed straight away, stating the row. Anything
 missing (a URL is required — never guessed), inferred, or fuzzy-matched → one compact question about
 exactly those fields. **Multiple runs → always confirm the list once** before starting (each run
-costs real minutes).
+costs real minutes). When a run targets a pool, warn at kickoff that spinning off a fresh tester
+adds up to ~a minute before the browser session starts.
 
-**Multi-run execution (step 2a).** Ensure the session is connected FIRST (intake's `list_personas`
+**Multi-run execution (step 2a).** Ensure the session is connected FIRST (intake's `list_pools`
 self-heals auth in the main session; subagents cannot render the login modal). Then dispatch the
 `feature-validator` agent once per run object with its resolved fields verbatim (goal, url,
-`feature_id`, `persona_id` + the persona's name for sanity-checking), run **sequentially** — the
+`feature_id`, `pool_id` + the pool's display name for sanity-checking), run **sequentially** — the
 agents share one Chrome, parallel dispatch makes them fight over the browser. If a run returns the
-"backend did not honor the persona" error (see [Persona guard](#persona-guard-in-start_run)), stop
-remaining persona-selected runs and surface it once. Afterwards render a **comparison report**, not
-N stacked reports: header row per run (persona · verdict · run id), scenario outcomes side by side,
-findings split into "hit by all personas" vs "only <name> hit this", each persona's reaction quote,
-and a `/archetype:check-run-status <run_id>` line per run.
+"backend did not honor the pool" error (see [Pool guard](#pool-guard-in-start_run)), stop
+remaining pool-selected runs and surface it once. Afterwards render a **comparison report**, not
+N stacked reports: header row per run (tester + the pool they were spun from · verdict · run id),
+scenario outcomes side by side, findings split into "hit by all testers" vs "only <name> hit this",
+each tester's reaction quote, and a `/archetype:check-run-status <run_id>` line per run.
 
 **Single-run execution (steps 2–7).** Call `start_run` with `goal` (omit if running purely by
-`feature_id`), `url` (required), optional `feature_id`, optional `persona_id`. The tool guards
-persona selection: if the backend does not honor the requested persona, it returns an error instead
-of a briefing — relay and stop. The result text is authoritative (mission brief, first-person
+`feature_id`), `url` (required), optional `feature_id`, optional `pool_id`. The tool guards
+pool selection: if the backend does not honor the requested pool, it returns an error instead
+of a briefing — relay and stop. The result text is authoritative (mission brief, the "running as
+<member>, spun from pool <name>" line for pool runs, first-person
 persona card, numbered scenarios with steps + expected result, conduct rules, `runId`/`sessionId`,
 the full `report_result` contract — see
 [`report_result` payload contract](#report_result-payload-contract-in-full)). Then: become the
@@ -128,8 +136,10 @@ Source: `skills/validate-feature/SKILL.md`. Same actor loop as `validation`, ent
 2. If no `url=<...>` token was given, **ask** for the product URL — never guess.
 3. Run the validation skill's run flow with deltas: pass `feature_id` to `start_run`; `goal` is
    **optional** (the backend derives it from the feature's fields when `feature_id` is given — only
-   pass a goal for extra free-text intent). Persona intent in `$ARGUMENTS` works here too via the
-   validation skill's persona resolution.
+   pass a goal for extra free-text intent). Tester/persona intent in `$ARGUMENTS` works here too
+   via the validation skill's pool resolution (list_pools → case-insensitive name match with the
+   archetype-name fallback → confirm; duplicates → list candidates and ask), passing the confirmed
+   id as `pool_id` and warning that spin-off adds up to ~a minute.
 
 ### /archetype:list-features
 
@@ -159,31 +169,37 @@ call `login`, list features, or look up runs.
 
 Source: `skills/persona/SKILL.md`. Two modes on `$ARGUMENTS`:
 
-- **Empty → Dashboard.** `list_personas` (no arguments), rendered as **name · source · occupation ·
-  story (one line)**. PersonaIds are deliberately hidden ("tool-plane noise") — an id column appears
-  only if the user explicitly asks. Closes with the run hint
-  `/archetype:validation "<goal>" url=<...> persona="<name>"`. Empty list → ask ONE question (create
+- **Empty → Dashboard.** `list_pools` (no arguments), rendered as **name · description · members ·
+  created**. PoolIds and member-level ids are deliberately hidden ("tool-plane noise") — an id
+  column appears only if the user explicitly asks. Closes with the run hint
+  `/archetype:validation "<goal>" url=<...> pool="<name>"`. Empty list → ask ONE question (create
   one now?) and branch to creation.
 - **`new` or any free text → Creation flow.** Free text is raw material for the vibe prompt;
   questions it already answers are skipped. The questionnaire (asked one at a time, conversational):
-  (1) who are they — role/occupation + a phrase of character; (2) age range — brackets 18–25 /
-  26–35 / 36–50 / 50+ or custom; (3) tech-savviness — novice / comfortable / power-user /
-  builds-their-own, mapped to `skills_range` roughly [10,35] / [35,65] / [65,85] / [80,100];
-  (4) what they care about / what annoys them; (5) product context — one line, pre-proposed if the
-  session already knows the target. Then compose a plain-English 2–3 sentence `vibe_prompt` (no
-  key:value dumps) and call `create_persona` with `preview_only: true`, `preview_count: 2`, plus the
-  mapped `age_range`, `skills_range`, `occupation`, `product_description`. Present both candidates
-  side by side (name, vibe, story, need) as **directions** — the saved persona is regenerated along
-  the chosen direction, not stored verbatim. On choice, call `create_persona` WITHOUT
-  `preview_only`, same controls, vibe_prompt extended by the chosen candidate's summary ("... similar
-  in spirit to: <vibeSummary>"). Relay the saved persona (name, story, need — no raw id).
+  (1) who are they — the kind of tester the pool describes, role/occupation + a phrase of
+  character; (2) age range — brackets 18–25 / 26–35 / 36–50 / 50+ or custom; (3) tech-savviness —
+  novice / comfortable / power-user / builds-their-own, mapped to `skills_range` roughly [10,35] /
+  [35,65] / [65,85] / [80,100]; (4) what they care about / what annoys them; (5) product context —
+  one line, pre-proposed if the session already knows the target. Then compose a plain-English 2–3
+  sentence `vibe_prompt` (no key:value dumps) and call `create_pool` with `preview_only: true`,
+  `preview_count: 2`, plus the mapped `age_range`, `skills_range`, `occupation`,
+  `product_description`. Present both candidates side by side (name, vibe, story, need) as
+  **directions for the pool's distribution** — the candidates themselves are not saved; the pool
+  stores the spec and generates fresh testers along the chosen direction at validation time. On
+  choice, call `create_pool` WITHOUT `preview_only`, same controls, vibe_prompt extended by the
+  chosen candidate's summary ("... similar in spirit to: <vibeSummary>") and `name` set to a short
+  display name (the chosen candidate's name or the user's own phrase, confirmed in the same breath
+  as the direction). Relay the saved pool (name, description — no raw id) and say plainly that it
+  starts EMPTY — members are spun off at validation time, one fresh tester per run. If the tool
+  reports the pool was saved but the rename failed (auto-generated `Pool_<hex>` name), relay that
+  verbatim — the pool is fully usable.
 - **Low-resistance shortcut.** A rich description (or "just make it") → offer to skip the remaining
   questions AND the preview round: one confirmation, then save directly. The full flow is guidance,
   never a gate.
 
-Boundaries: only show personas/ids the tools returned; **one SAVE per flow** (`create_persona`
+Boundaries: only show pools/ids the tools returned; **one SAVE per flow** (`create_pool`
 without `preview_only` at most once, after user confirmation — previews are free to repeat); warn
-the user that generation is LLM-backed and can take up to a couple of minutes per call.
+the user that pool creation is LLM-backed and can take up to a couple of minutes per call.
 
 ### feature-validator agent
 
@@ -196,10 +212,10 @@ ToolSearch (query `claude-in-chrome`).
 
 **Dispatch contract.** The prompt should carry: the product URL (required — the agent asks rather
 than guesses), a `goal` and/or `feature_id` (a named saved feature is resolved via `list_features`;
-ambiguous → ask once, never guess an id), and optionally a **pre-resolved** `persona_id` plus the
-persona's name — the agent carries it as-is and never invents or substitutes one. If `start_run`
-reports the backend did not honor the requested persona, the agent surfaces the error verbatim and
-stops.
+ambiguous → ask once, never guess an id), and optionally a **pre-resolved** `pool_id` plus the
+pool's display name — the agent carries it as-is and never invents or substitutes one (the backend
+spins off one fresh tester from the pool, which can add up to ~a minute). If `start_run` reports
+the backend did not honor the requested pool, the agent surfaces the error verbatim and stops.
 
 **Why login can't happen inside it.** The `login` tool is deliberately absent from its tool list:
 the login elicitation modal cannot render inside a subagent, so authentication must happen in the
@@ -233,14 +249,15 @@ exists, it prints nothing.
 The server is a stdlib-only Python stdio MCP server at `scripts/core-server.py`, registered in
 `.claude-plugin/plugin.json` under `mcpServers.core`
 (`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/core-server.py`). It reports itself as `archetype-core`
-v`0.3.2` (protocol `2025-06-18`) and is the data plane between the actor LLM and the Archetype
+v`0.4.0` (protocol `2025-06-18`) and is the data plane between the actor LLM and the Archetype
 backend — Claude never touches tokens or raw HTTP. Configuration comes from environment variables
 (see [Environment variables](#environment-variables)).
 
 **Timeouts:** default `HTTP_TIMEOUT = 15` s; `RUN_TIMEOUT = 180` s (run assembly runs a server-side
-LLM chain, ~90 s tolerated); `RESULT_TIMEOUT = 60` s (multi-MB screenshot payloads; a client timeout
-after server-side storage would surface as a confusing 409 on retry); `PERSONA_TIMEOUT = 180` s
-(one server-side LLM call per preview candidate).
+LLM chain, ~90 s tolerated, plus up to ~a minute of pool spin-off); `RESULT_TIMEOUT = 60` s
+(multi-MB screenshot payloads; a client timeout after server-side storage would surface as a
+confusing 409 on retry); `PERSONA_TIMEOUT = 180` s (one server-side LLM call per preview candidate,
+and one for the pool's reference persona on save).
 
 **Shared error rendering:** any non-2xx backend response becomes an `isError` text result via
 `backend_error_text` — it prefers the backend's `message`, falls back to the `error` slug, then
@@ -278,17 +295,20 @@ follows verbatim.
   - `url` (string, **required**) — the product URL under test.
   - `goal` (string, optional) — what to test, e.g. `test the signup flow`.
   - `feature_id` (string, optional) — saved-feature `_id` from `list_features`.
-  - `persona_id` (string, optional) — `personaId` from `list_personas`, to run AS that persona
-    instead of the replay-derived one.
+  - `pool_id` (string, optional) — `poolId` from `list_pools`, to run AS a fresh member spun off
+    from that pool's distribution instead of the replay-derived persona (spin-off adds up to ~a
+    minute before the run starts).
 - **Backend:** `POST /api/plugin/runs` (timeout **180 s**), body keys camelCased (`goal`,
-  `featureId`, `url`, `personaId`; `None` values dropped), via `authed_call`.
-- **Result text:** the rendered briefing — backend `brief`, `— YOUR PERSONA —` + persona card,
-  `— YOUR SCENARIOS —` (with `(goal: … · target: …)` when present), each scenario numbered as
-  `[id] title` with `- step` lines and an `Expected:` line, `— CONDUCT RULES —`,
-  `runId`/`sessionId`, and the full `report_result` contract (see
+  `featureId`, `url`, `poolId`; `None` values dropped), via `authed_call`.
+- **Result text:** the rendered briefing — backend `brief`, for pool runs a
+  `Running as {member name}, spun from pool {pool name}.` line (from the response's `pool` +
+  `persona` blocks), `— YOUR PERSONA —` + persona card, `— YOUR SCENARIOS —` (with
+  `(goal: … · target: …)` when present), each scenario numbered as `[id] title` with `- step`
+  lines and an `Expected:` line, `— CONDUCT RULES —`, `runId`/`sessionId`, and the full
+  `report_result` contract (see
   [`report_result` payload contract](#report_result-payload-contract-in-full)).
 - **Errors:** `not_connected()` when no token could be obtained; `backend_error_text` for non-2xx;
-  the [persona guard](#persona-guard-in-start_run) can abort a *successful* response as `isError`.
+  the [pool guard](#pool-guard-in-start_run) can abort a *successful* response as `isError`.
   The local run log records the start only after the guard passes.
 
 #### `report_result`
@@ -376,30 +396,34 @@ Render the connection dashboard. Read-only — **never** triggers a login.
 - **Errors:** never returns `isError`; every state (including no token and corrupt `auth.json`)
   renders as a normal dashboard.
 
-#### `list_personas`
+#### `list_pools`
 
-List the user's personas (replay-derived, vibe, custom) with `personaId`, source, occupation, and
-story.
+List the user's persona pools with name, description, member count, and created date.
 
 - **Arguments:** none.
-- **Backend:** `GET /api/persona` (default **15 s**), via `authed_call`.
-- **Result text:** `{N} persona(s):`, then per persona: `{name}  [{source}]` with `· {occupation}`
-  and `· created {createdAt}` when present, the story truncated to 200 chars, and an indented
-  `id: {personaId}` line. A footer shows the run-usage pattern
-  (`/archetype:validation "<goal>" url=<...> persona="<name>"`) and instructs the actor to resolve
-  names to ids for `start_run`'s `persona_id` without displaying ids to the user unless asked.
-  Empty: `No personas yet. Create one with /archetype:persona — say 'new' and I'll walk you through
-  a short questionnaire.`
+- **Backend:** `GET /api/persona/pools` (default **15 s**), via `authed_call`.
+- **Result text:** `{N} persona pool(s):`, then per pool: `{name}  · {personaCount} member(s)` with
+  `· created {createdAt}` when present, the description truncated to 200 chars, an
+  `archetype: {metadata.primary_archetype_name}` line when it differs from the pool name (the
+  fallback key skills match against), and an indented `id: {poolId}` line. A footer shows the
+  run-usage pattern (`/archetype:validation "<goal>" url=<...> pool="<name>"`) and instructs the
+  actor to resolve names to ids for `start_run`'s `pool_id` without displaying ids to the user
+  unless asked. Empty: `No persona pools yet. Create one with /archetype:persona — say 'new' and
+  I'll walk you through a short questionnaire.`
 - **Errors:** `not_connected()` / `backend_error_text`.
 
-#### `create_persona`
+#### `create_pool`
 
-Create a persona from a natural-language vibe prompt (plus optional demographic controls);
-`preview_only=true` returns unsaved candidates instead of saving.
+Create a persona pool from a natural-language vibe prompt (plus optional demographic controls);
+`preview_only=true` returns unsaved candidate directions instead of saving. The saved pool is
+**EMPTY** — it stores the distribution spec only, and fresh testers are spun off from it at
+validation time (each run adds one member).
 
 - **Arguments:**
-  - `vibe_prompt` (string, **required**) — who they are, how they behave, what they care about;
-    blank/missing returns an `isError` without a backend call.
+  - `vibe_prompt` (string, **required**) — who the pool's testers are, how they behave, what they
+    care about; blank/missing returns an `isError` without a backend call.
+  - `name` (string, optional) — display name for the pool (the archetype name); when omitted, the
+    name derives from the server's vibe summary (then the reference persona's generated name).
   - `age_range` (array of numbers, optional) — `[low, high]`, e.g. `[28, 35]` → sent as
     `controls.ageRange`.
   - `skills_range` (array of numbers, optional) — `[low, high]` tech-savviness on a 0–100 scale →
@@ -407,19 +431,42 @@ Create a persona from a natural-language vibe prompt (plus optional demographic 
   - `occupation` (string, optional) → `controls.occupation`.
   - `education` (string, optional) → `controls.education`.
   - `product_description` (string, optional) — one-line product description used to derive the
-    persona's need → `productDescription`.
+    testers' need → `productDescription`.
   - `preview_only` (boolean, optional) — return unsaved candidates; sets `previewOnly: true`.
   - `preview_count` (number, optional) — how many previews (1–5, default **2**); sent as
     `previewCount` only in preview mode.
-- **Backend:** `POST /api/persona/vibe` (timeout **180 s**), via `authed_call`; body always includes
-  `mode: "vibe"` and `vibePrompt`; `controls` is included only if at least one control was given.
-- **Result text:** *preview mode* — `{N} persona preview(s) — directions, not saved yet…`, each
-  candidate with name, `vibe:` summary, story (truncated to 300 chars), and `need:`, plus
-  instructions to call `create_persona` again without `preview_only`, folding the chosen candidate's
-  summary into `vibe_prompt`. *Save mode* — `Persona saved: {name}`, story (300 chars), `Need: …`,
-  the run-usage line with `persona="{name}"`, and
-  `(id for tool calls only, not for display: {personaId})`.
-- **Errors:** local `vibe_prompt` validation, then `not_connected()` / `backend_error_text`.
+- **Backend, preview mode:** `POST /api/persona/vibe` (timeout **180 s**), via `authed_call`; body
+  always includes `mode: "vibe"` and `vibePrompt`; `controls` is included only if at least one
+  control was given. Nothing is persisted.
+- **Backend, save mode — a THREE-call sequence** (each via `authed_call`, timeouts **180 s** /
+  **180 s** / **15 s**):
+  1. `POST /api/persona/custom` — persists the distribution spec as a customized preset plus one
+     reference persona (intrinsic: distributions are derived from the generated sample). Body:
+     `mode: "vibe"`, `vibePrompt`, `controls?`, `productDescription?`, `archetypeName` (only when
+     `name` was given). The response yields `persona.personaId` (the reference) and
+     `customPersonaId`.
+  2. `POST /api/persona/pool/create` with `selectedPersonaIds: [<reference personaId>]`,
+     `archetypeName`, `description` (the vibe prompt, truncated to 300 chars) → `personaPoolId`.
+     The reference persona carries a `custom_persona_id`, so the backend stores the spec link as
+     `metadata.selected_custom_persona_ids` and attaches **no members**. This route hard-codes the
+     pool's name to `Pool_<8-hex>` and does not return a name.
+  3. `PATCH /api/persona/pools/<poolId>` with body `{"name": <pool name>, "description": …}` — the
+     route only recognizes the body key `name` (`pool_name` would be silently ignored and the
+     rename dropped).
+- **Failure semantics (the sequence is non-atomic by design):** a step-2 failure is an `isError`
+  with retry guidance — only an orphaned preset is left behind (benign: its reference persona is
+  unattached and invisible to pool listings). A step-3 failure is **not** an error: the pool is
+  fully usable under its auto-generated `Pool_<hex>` name — the result reports the `poolId` and
+  says so. Step 1 is never auto-retried.
+- **Result text:** *preview mode* — `{N} persona preview(s) — directions for the pool's
+  distribution, not saved yet…`, each candidate with name, `vibe:` summary, story (truncated to
+  300 chars), and `need:`, plus instructions to call `create_pool` again without `preview_only`,
+  folding the chosen candidate's summary into `vibe_prompt` (and passing its name as `name`).
+  *Save mode* — `Persona pool saved: {name}` (or the rename-failure variant above), `Spec: {vibe
+  summary}`, the `Members: 0 — fresh testers are spun off … each run adds one.` line, the
+  run-usage line with `pool="{name}"`, and `(id for tool calls only, not for display: {poolId})`.
+- **Errors:** local `vibe_prompt` validation, then `not_connected()` / `backend_error_text` /
+  the step-2 and step-3 semantics above.
 
 ### Self-healing auth (`authed_call`)
 
@@ -441,24 +488,25 @@ line instead of a modal. One consequence for skills and agents: the login elicit
 render in the main session, so multi-run dispatch must ensure the session is connected before
 spawning the `feature-validator` agent, which does not carry the `login` tool at all.
 
-### Persona guard in `start_run`
+### Pool guard in `start_run`
 
-After a 2xx response, if the caller passed `persona_id` but the response's `persona.personaId` does
-not match it, the run is aborted with an `isError` result *before* the briefing is rendered or the
-run log is written. Rationale (from the code comment): an outdated backend silently ignores unknown
-fields, which would brief the actor as the wrong persona. The error text names both ids
-(`asked for {requested}, got {returned or 'none'}`), suggests deploying the current backend or
-retrying without `persona=` to use the replay-derived persona, and warns:
-`Do NOT act on this run; a stray run doc ({runId}) may exist server-side.`
+After a 2xx response, if the caller passed `pool_id` but the response's `pool.poolId` does not
+match it (or the response carries no `pool` block at all), the run is aborted with an `isError`
+result *before* the briefing is rendered or the run log is written. Rationale (from the code
+comment): an outdated backend silently ignores unknown fields, which would brief the actor as the
+wrong tester. The error text names both ids (`asked for {requested}, got {returned or 'none'}`),
+suggests deploying the current backend or retrying without `pool=` to use the replay-derived
+persona, and warns: `Do NOT act on this run; a stray run doc ({runId}) may exist server-side.`
 
 ### Local run log
 
 - **Path:** `${CLAUDE_PLUGIN_DATA}/runs.json` (per-machine; cross-device history lives in the
   portal). Best-effort only — write failures are logged to stderr, never fatal.
 - **On `start_run` success** (`record_run_start`): appends
-  `{run_id, session_id, goal, url, feature_id, persona_id, started_at}` (`started_at` is epoch
+  `{run_id, session_id, goal, url, feature_id, pool_id, started_at}` (`started_at` is epoch
   seconds; `None` values dropped). `run_id`/`session_id` come from the response; the rest from the
-  tool arguments.
+  tool arguments. Pre-0.4.0 entries carry `persona_id` instead of `pool_id`; the `status`
+  dashboard tolerates them (it renders run id, goal/url, and outcome only).
 - **On `report_result` success** (`record_run_result`): scans entries newest-first for the matching
   `run_id` and sets `status`, `verdict`, `reported_at` on that entry.
 - **Cap:** only the last **20** entries (`RUN_LOG_LIMIT`) are kept on each save; `status` displays
@@ -503,11 +551,12 @@ never issues raw HTTP — it calls MCP tools, and the server maps them to these 
   `/` stripped).
 - Auth: single `Authorization: Bearer <access_token>` scheme; the token is an Auth0 RS256 JWT cached
   at `${CLAUDE_PLUGIN_DATA}/auth.json` (mode `0600`).
-- `User-Agent`: `archetype-claude-plugin/0.3.2` (override via `ARCHETYPE_PLUGIN_USER_AGENT`).
+- `User-Agent`: `archetype-claude-plugin/0.4.0` (override via `ARCHETYPE_PLUGIN_USER_AGENT`).
   Required — the Cloudflare WAF in front of the API returns HTTP 403 (error 1010) for the default
   Python-urllib UA.
 - Timeouts: as listed under [MCP tools](#mcp-tools-server-core) — 15 s default, 180 s for
-  `POST /api/plugin/runs` and `POST /api/persona/vibe`, 60 s for results ingestion.
+  `POST /api/plugin/runs`, `POST /api/persona/vibe`, `POST /api/persona/custom`, and
+  `POST /api/persona/pool/create`, 60 s for results ingestion.
 - Network failures are mapped client-side to status `0` with body
   `{"error": "network_error", "message": ...}`.
 
@@ -518,26 +567,29 @@ never issues raw HTTP — it calls MCP tools, and the server maps them to these 
 | POST | `/api/oauth/device/code` | none | `login` / self-healing path | `{}` | 200 — Auth0 device-code response verbatim: `device_code`, `user_code`, `verification_uri`, `verification_uri_complete`, `expires_in`, `interval` (URIs may be rewritten to a branded `DEVICE_AUTH_PUBLIC_BASE` domain) |
 | POST | `/api/oauth/device/token` | none | `login` / self-healing path (polled) | `{"device_code": "<...>"}` | 200 — `access_token`, `token_type`, `expires_in`, `scope`, `refresh_token?`, `id_token?`. While pending, Auth0's 403 with `error: "authorization_pending"` (keep polling) or `"slow_down"` (plugin adds 2 s to the poll interval) |
 | POST | `/api/oauth/validate-token` | Bearer | `login`, `status` | `{}` (token in header) | 200 — `{"valid": true, "user_id", "audience", "issuer", "expires_at", "issued_at", "scope", "payload"}`; invalid token → 401 `{"valid": false, "error": "invalid_token", "reason"}`; no token → 400 `{"valid": false, "error": "missing_token"}` |
-| POST | `/api/plugin/runs` | Bearer | `start_run` | `{"goal", "featureId", "url", "personaId"}` — plugin maps `feature_id`→`featureId`, `persona_id`→`personaId`; `None` fields dropped; only `url` is required tool-side | 201 — run body: `runId`, `sessionId`, `brief`, `persona{personaId, personaCard, ...}`, `instructions{goal, targetUrl, scenarios[{id, title, steps[], expectedResult}], conduct[]}` |
+| POST | `/api/plugin/runs` | Bearer | `start_run` | `{"goal", "featureId", "url", "poolId"}` — plugin maps `feature_id`→`featureId`, `pool_id`→`poolId`; `None` fields dropped; only `url` is required tool-side. Legacy `personaId` payloads (pre-0.4.0 plugins) get 400 `plugin_outdated` ("update your plugin") from a pool-aware backend | 201 — run body: `runId`, `sessionId`, `brief`, `persona{personaId, personaCard, ...}` (for pool runs, the freshly spun-off member appended to the pool), `pool{poolId, name}` when a pool was targeted, `instructions{goal, targetUrl, scenarios[{id, title, steps[], expectedResult}], conduct[]}` |
 | POST | `/api/plugin/runs/<run_id>/results` | Bearer | `report_result` | See full contract below | 200 — `{"message": "<confirmation>", "summary": {"steps": n, "findings": n, "verdict": "..."}}` |
 | GET | `/api/plugin/runs/<run_id>` | Bearer | `get_run` | — | 200 — `{"runId", "status", "progress", "analyticsReady", "feedback"?: {"verdict", "summary"}}` |
 | GET | `/api/features` | Bearer | `list_features`, `status` (feature count) | — | 200 — `{"ok": true, "features": [{"_id", "title", "updatedAt", ...}]}`; a feature's `_id` is the `feature_id` for `start_run`. (The `query` title filter on `list_features` is applied client-side, not a query param.) |
 | POST | `/api/features` | Bearer | `create_feature` | `{"title", "fields": {"description", "expected-usage", "strategic-goals"}}` — plugin maps `expected_usage`→`expected-usage`, `strategic_goals`→`strategic-goals`; missing fields sent as `""` | 201 — `{"ok": true, "feature": {"_id", "title", ...}}` |
-| GET | `/api/persona` | Bearer (401 on bad token — never degrades to anonymous listing, which would break self-healing) | `list_personas` | — | 200 — `{"personas": [{"personaId", "name", "story", "createdAt", "source", "demographics": {"occupation", ...}, "psychographics", "behavioralTraits", "goalsMotivations", "painPoints", "preferredChannels", "controls", "preview", ...}]}` |
-| POST | `/api/persona/vibe` | Bearer | `create_persona` | `{"mode": "vibe", "vibePrompt", "controls"?: {"ageRange", "skillsRange", "occupation", "education"}, "productDescription"?, "previewOnly"?: true, "previewCount"?: n}` — plugin maps `vibe_prompt`→`vibePrompt`, `age_range`→`controls.ageRange`, `skills_range`→`controls.skillsRange`, `product_description`→`productDescription`, `preview_only`→`previewOnly`, `preview_count`→`previewCount` (default 2 when previewing) | Preview: 200 — `{"examples": [{"name", "vibeSummary", "story", "personaNeed", ...}]}` (unsaved). Save: 201 — persona summary incl. `personaId`, `name`, `story`, `personaNeed` |
+| GET | `/api/persona/pools` | Bearer (401 on bad token — never degrades to anonymous listing, which would break self-healing) | `list_pools` | — | 200 — `{"personaPools": [{"poolId", "name", "description", "personaCount", "activePersonaCount", "createdAt", "metadata": {"primary_archetype_name"?, "selected_custom_persona_ids"?, ...}, ...}], "totalCount", "limit", "offset"}` |
+| POST | `/api/persona/vibe` | Bearer | `create_pool` (preview only) | `{"mode": "vibe", "vibePrompt", "controls"?: {"ageRange", "skillsRange", "occupation", "education"}, "productDescription"?, "previewOnly": true, "previewCount": n}` — plugin maps `vibe_prompt`→`vibePrompt`, `age_range`→`controls.ageRange`, `skills_range`→`controls.skillsRange`, `product_description`→`productDescription`, `preview_count`→`previewCount` (default 2) | 200 — `{"examples": [{"name", "vibeSummary", "story", "personaNeed", ...}]}` (unsaved) |
+| POST | `/api/persona/custom` | Bearer | `create_pool` (save, call 1 of 3) | `{"mode": "vibe", "vibePrompt", "controls"?, "productDescription"?, "archetypeName"?}` (`archetypeName` only when the `name` argument was given) | 201 — `{"persona": {"personaId", "name", "vibePromptSummary", ...}, "customPersonaId", "preset": {...}}` — the reference persona + spec preset |
+| POST | `/api/persona/pool/create` | Bearer | `create_pool` (save, call 2 of 3) | `{"selectedPersonaIds": [<reference personaId>], "archetypeName", "description"}` — creates an EMPTY pool linked to the spec via `metadata.selected_custom_persona_ids`; hard-codes `pool_name` to `Pool_<8-hex>` | 201 — `{"personaPoolId", "selectedPersonaIds", "customPersonaIds", "archetypeName", "createdAt"}` — no pool name; the plugin echoes the name it already holds |
+| PATCH | `/api/persona/pools/<pool_id>` | Bearer | `create_pool` (save, call 3 of 3) | `{"name": <pool name>, "description"}` — the route only recognizes the body key `name` (mapped to stored `pool_name`); `pool_name` would be silently ignored | 200 — the updated pool (same shape as a `personaPools` entry, plus `personas`) |
 
 The backend also exposes `POST /api/plugin/replay/sessions` (body
 `{"sessions": [{sessionId?, events, meta?}], "source"?: "upload"}` → 200
 `{"ok", "ingested", "poolSize"}`), plus feature `GET/PUT/DELETE /api/features/<id>`, persona
-`manual` mode, `/api/persona/custom`, pool routes, and `GET /api/oauth/me` — none of which the
-plugin's MCP server calls.
+`manual` mode, `GET /api/persona`, `GET/DELETE /api/persona/pools/<pool_id>`, and
+`GET /api/oauth/me` — none of which the plugin's MCP server calls.
 
 ### snake_case → camelCase mapping
 
 The MCP tool surface is snake_case (actor-facing); the wire format is camelCase (backend). The
 server performs the mapping:
 
-- **`start_run` top level:** `feature_id`→`featureId`, `persona_id`→`personaId` (`goal`, `url`
+- **`start_run` top level:** `feature_id`→`featureId`, `pool_id`→`poolId` (`goal`, `url`
   unchanged).
 - **`report_result` top level:** `session_id`→`sessionId`, `duration_seconds`→`durationSeconds`
   (only included when provided); `status`, `steps`, `feedback` keys unchanged.
@@ -547,9 +599,11 @@ server performs the mapping:
   `error`) pass through unchanged.
 - **`report_result` `feedback` is passed through untouched** — its nested keys must already be
   camelCase (`scenarioResults`, `evidenceStepSeq`, …) per the contract rendered by `start_run`.
-- **`create_persona`:** `vibe_prompt`→`vibePrompt`, `age_range`→`controls.ageRange`,
-  `skills_range`→`controls.skillsRange`, `product_description`→`productDescription`,
-  `preview_only`→`previewOnly`, `preview_count`→`previewCount`.
+- **`create_pool`:** `vibe_prompt`→`vibePrompt`, `name`→`archetypeName` (step 1; also the pool
+  name in steps 2–3), `age_range`→`controls.ageRange`, `skills_range`→`controls.skillsRange`,
+  `product_description`→`productDescription`, `preview_only`→`previewOnly`,
+  `preview_count`→`previewCount`. The PATCH rename sends the camelCase-free body key `name` —
+  never `pool_name`.
 - **`create_feature`:** `expected_usage`→`fields["expected-usage"]`,
   `strategic_goals`→`fields["strategic-goals"]`, `description`→`fields.description`.
 
@@ -601,13 +655,14 @@ slug, then `backend returned <status>`. (Persona-route errors use
 | 404 | `run_not_found` (plugin routes) / `not_found` (persona routes) | Rendered as the backend's natural-language `message`; no retry. |
 | 409 | `conflict` | Rendered as-is — e.g. results already stored for the run (which the generous `RESULT_TIMEOUT` exists to avoid triggering spuriously). |
 | 400 | `bad_request` / `validation_error` / `invalid_request` | Rendered as-is (malformed payload; e.g. missing `vibePrompt`). |
-| 502 | `persona_generation_failed` | Upstream LLM fault during run assembly/results/read-back; the message states no run was created (or results were not stored) and that it is **safe to retry** in a moment. Distinct from `PluginRunError` — mapped to its own branch server-side. |
+| 400 | `plugin_outdated` | A pool-aware backend rejecting a legacy `personaId` run payload: "Your Archetype plugin is outdated — personas are now pools. Update the plugin … and retry." The 0.4.0 plugin never sends `personaId`, so seeing this means an older plugin version is talking to the new backend. |
+| 502 | `persona_generation_failed` | Upstream LLM fault during run assembly (including pool spin-off), results, or read-back; the message states no run was created (or results were not stored) and that it is **safe to retry** in a moment. Distinct from `PluginRunError` — mapped to its own branch server-side. |
 | 500 | `internal_error` | "Safe to retry" NL message. |
 | 0 | `network_error` (client-synthesized) | Backend unreachable; `status` dashboard reports "backend unreachable". |
 
 One non-HTTP guard sits on top of the contract: the
-[persona guard in `start_run`](#persona-guard-in-start_run), which aborts after a 2xx if the
-response's `persona.personaId` does not match the requested `persona_id`.
+[pool guard in `start_run`](#pool-guard-in-start_run), which aborts after a 2xx if the
+response's `pool.poolId` does not match the requested `pool_id` (or the `pool` block is missing).
 
 ---
 
@@ -620,9 +675,9 @@ inherits the environment of the Claude Code CLI, so export these **before** laun
 
 | Variable | Default | Effect |
 | :--- | :--- | :--- |
-| `ARCHETYPE_BACKEND_URL` | `https://api.syntheticarchetype.com` | Base URL for every backend call (device-flow OAuth, `/api/plugin/*`, `/api/features`, `/api/persona`). Trailing slashes are stripped. Set to `http://localhost:5001` for local backend development. |
+| `ARCHETYPE_BACKEND_URL` | `https://api.syntheticarchetype.com` | Base URL for every backend call (device-flow OAuth, `/api/plugin/*`, `/api/features`, `/api/persona/*`). Trailing slashes are stripped. Set to `http://localhost:5001` for local backend development. |
 | `ARCHETYPE_PORTAL_URL` | `https://www.syntheticarchetype.com` | Portal link rendered in the `/archetype:status` dashboard. Trailing slashes are stripped. |
-| `ARCHETYPE_PLUGIN_USER_AGENT` | `archetype-claude-plugin/<server version>` (currently `archetype-claude-plugin/0.3.2`, from the `SERVER_VERSION` constant in `core-server.py`) | HTTP `User-Agent` sent on every backend request. The Cloudflare WAF in front of `api.syntheticarchetype.com` returns HTTP 403 (error 1010) for the default Python-urllib UA; any real, identifiable UA passes. If you override this and hit a 1010, switch back to the default. |
+| `ARCHETYPE_PLUGIN_USER_AGENT` | `archetype-claude-plugin/<server version>` (currently `archetype-claude-plugin/0.4.0`, from the `SERVER_VERSION` constant in `core-server.py`) | HTTP `User-Agent` sent on every backend request. The Cloudflare WAF in front of `api.syntheticarchetype.com` returns HTTP 403 (error 1010) for the default Python-urllib UA; any real, identifiable UA passes. If you override this and hit a 1010, switch back to the default. |
 | `CLAUDE_PLUGIN_DATA` | *(set by Claude Code)* | Directory holding `auth.json` (credentials) and `runs.json` (run log); see below. |
 
 ### Plugin data files (`${CLAUDE_PLUGIN_DATA}`)
@@ -670,9 +725,12 @@ was launched from inside the plugin folder), the server refuses to store credent
 - **Live E2E:** the operator runbook is `e2e/RUNBOOK.md`. An outer orchestrator session drives an
   inner Claude Code session in tmux (session name `archetype-e2e`, helpers in `e2e/tmux.sh`,
   override via `E2E_SESSION`) through the real Auth0 device flow, a Chrome-driven validation of the
-  demo app at `http://localhost:8321`, and backend verification via `e2e/verify_backend.py`.
-  Artifacts land in `e2e/artifacts/` (gitignored); steps map to acceptance criteria A1–A5, B1–B2, C
-  in `docs/GOAL_AND_TEST_CRITERIA.md`.
+  demo app at `http://localhost:8321`, and backend verification via `e2e/verify_backend.py` —
+  whose required checks now include the pool-first happy path: the run's pool exists, its listed
+  `pool_name` equals `metadata.primary_archetype_name` (catches a silently dropped `create_pool`
+  rename), and the spun-off member was appended to the pool. Artifacts land in `e2e/artifacts/`
+  (gitignored); steps map to acceptance criteria A1–A5, B1–B2, C in
+  `docs/GOAL_AND_TEST_CRITERIA.md`.
 
 ### Manifests
 
@@ -683,7 +741,7 @@ hooks, and agents live at the plugin root):
 | :--- | :--- |
 | `name` | `archetype` |
 | `description` | `Plugin for Run Feature Validation Testing through Synthetic Archetype` |
-| `version` | `0.3.6` |
+| `version` | `0.4.0` |
 | `author.name` | `Synthetic Archetype` |
 | `mcpServers.core` | `{"type": "stdio", "command": "python3", "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/core-server.py"]}` — the MCP server is declared inline, no separate `.mcp.json` |
 
@@ -707,4 +765,5 @@ history (`runs.json`) is preserved. No arguments; never triggers a login;
 friendly no-op when not connected. Surfaced as `/archetype:logout` (added
 v0.3.9).
 
-Verified against plugin version 0.3.9 (`.claude-plugin/plugin.json`, server `archetype-core` 0.3.6) on 2026-08-04.
+Verified against plugin version 0.4.0 (`.claude-plugin/plugin.json`, server `archetype-core` 0.4.0;
+pool-first persona semantics per `2026-08-27-persona-pool-semantics-design.md`) on 2026-08-27.
