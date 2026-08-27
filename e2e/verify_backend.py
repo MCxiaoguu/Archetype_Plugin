@@ -30,13 +30,23 @@ VERIFY (default; requires --run-id):
       [4] Archetype_Test.session_log — doc for test_meta.plugin_session_id with
                                     >=1 step carrying BOTH narration and action_text
       [5] Archetype_Test.feedback    — >=1 doc type=="plugin_finding" for the run
+      [6] Persona.user_persona_pools — pool-first happy path (plugin >=0.4.0):
+                                    the run's test_meta.persona_pool_id resolves
+                                    to a pool owned by the user whose LISTED
+                                    name (pool_name) equals its archetype name
+                                    (metadata.primary_archetype_name) — i.e. the
+                                    create_pool PATCH rename actually landed and
+                                    was not silently dropped (no Pool_<hex>
+                                    placeholder) — and the run's spun-off member
+                                    was appended to the pool's persona_ids
       [INFO] Archetype_Test.session_extraction — presence only (analytics is
                                     best-effort, never a hard fail)
 
 CLEANUP (--cleanup; --run-id optional):
     Deletes this user's docs across all pipeline collections and prints a
     per-collection delete count. Used between E2E attempts. Linkage:
-      - Replay.sessions, Persona.user_personas: by user_id.
+      - Replay.sessions, Persona.user_personas, Persona.user_persona_pools:
+        by user_id.
       - Archetype_Test.test, feedback: carry user_id directly.
       - Archetype_Test.session_log: NO user_id — deleted by the test_ids /
         plugin_session_ids discovered from the user's test docs.
@@ -47,6 +57,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import sys
 
 # Resolve backend packages from the invocation cwd (must be the backend repo).
@@ -68,6 +79,11 @@ REPLAY_DB = "Replay"
 REPLAY_COLL = "sessions"
 PERSONA_DB = "Persona"
 PERSONA_COLL = "user_personas"
+POOL_COLL = "user_persona_pools"
+
+# The pool/create route hard-codes this placeholder name; the plugin's PATCH
+# rename must replace it — seeing it here means the rename was dropped.
+POOL_PLACEHOLDER_RE = re.compile(r"^Pool_[0-9a-f]{8}$")
 TEST_DB = "Archetype_Test"
 TEST_COLL = "test"
 SESSION_LOG_COLL = "session_log"
@@ -167,6 +183,39 @@ def verify(user_id: str, run_id: str) -> int:
     print(f"[5] {_fmt(c5)}  Archetype_Test.feedback: {len(findings)} "
           f"plugin_finding doc(s) for the run (need >=1)")
 
+    # [6] Persona.user_persona_pools -- pool-first happy path: the run targeted
+    # a pool, that pool's LISTED name equals its archetype name (the create_pool
+    # rename landed; a silently dropped rename leaves the Pool_<hex>
+    # placeholder), and the spun-off member was appended to the pool.
+    pool_id = test_meta.get("persona_pool_id")
+    pool_doc = (
+        find_one(PERSONA_DB, POOL_COLL, {"pool_id": pool_id, "user_id": user_id})
+        if pool_id else None
+    )
+    member_ids = test_meta.get("persona_pool") or []
+    member_id = member_ids[0] if member_ids else None
+    if pool_doc:
+        pool_name = pool_doc.get("pool_name") or ""
+        archetype_name = (pool_doc.get("metadata") or {}).get("primary_archetype_name")
+        name_ok = (
+            bool(pool_name)
+            and pool_name == archetype_name
+            and not POOL_PLACEHOLDER_RE.match(pool_name)
+        )
+        member_ok = bool(member_id) and member_id in (pool_doc.get("persona_ids") or [])
+        c6 = name_ok and member_ok
+        all_ok &= c6
+        print(f"[6] {_fmt(c6)}  Persona.user_persona_pools[{pool_id}]: "
+              f"pool_name={pool_name!r} archetype={archetype_name!r} "
+              f"(need equal, non-placeholder) · member {member_id!r} "
+              f"{'appended' if member_ok else 'MISSING from persona_ids'}")
+    else:
+        c6 = False
+        all_ok &= c6
+        print(f"[6] {_fmt(c6)}  Persona.user_persona_pools: no pool for "
+              f"test_meta.persona_pool_id={pool_id!r} owned by user "
+              f"(pool-first run required)")
+
     # [INFO] session_extraction -- informational only
     extraction = (
         find_one(TEST_DB, EXTRACTION_COLL, {"session_id": plugin_session_id})
@@ -230,8 +279,9 @@ def cleanup(user_id: str) -> int:
     total = 0
     # 1. Replay.sessions — by user_id.
     total += _del(REPLAY_DB, REPLAY_COLL, {"user_id": user_id}, "by user_id")
-    # 2. Persona.user_personas — by user_id.
+    # 2. Persona.user_personas + user_persona_pools — by user_id.
     total += _del(PERSONA_DB, PERSONA_COLL, {"user_id": user_id}, "by user_id")
+    total += _del(PERSONA_DB, POOL_COLL, {"user_id": user_id}, "by user_id")
     # 3. Archetype_Test.feedback — carries user_id directly (belt) plus any
     #    stragglers linked by the discovered test_ids (braces).
     total += _del(TEST_DB, FEEDBACK_COLL, {"user_id": user_id}, "by user_id")

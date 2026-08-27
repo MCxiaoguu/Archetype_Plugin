@@ -139,25 +139,28 @@ VALIDATE_RESPONSE = {
     "issuer": "https://dev.auth0.test/",
 }
 
-PERSONAS_RESPONSE = {
-    "personas": [
+POOLS_RESPONSE = {
+    "personaPools": [
         {
-            "personaId": "vp-fiona-001",
-            "name": "Fiona Founder",
-            "story": "A vibe-coding solo founder who ships fast and trusts her gut.",
-            "source": "vibe",
+            "poolId": "pool-fiona-001",
+            "name": "Impatient Founders",
+            "description": "Vibe-coding solo founders who ship fast and trust their gut.",
+            "personaCount": 3,
+            "activePersonaCount": 3,
             "createdAt": "2026-08-01T00:00:00Z",
-            "demographics": {"occupation": "startup founder"},
+            "metadata": {"primary_archetype_name": "Impatient Founders"},
         },
         {
-            "personaId": "rp-replay-001",
-            "name": "Priya Nair",
-            "story": "A busy PM who skims fast and abandons at the first snag.",
-            "source": "replay",
+            "poolId": "pool-default-001",
+            "name": "My Personas",
+            "description": "Replay-derived testers.",
+            "personaCount": 1,
+            "activePersonaCount": 1,
             "createdAt": "2026-07-22T00:00:00Z",
-            "demographics": {},
+            "metadata": {},
         },
-    ]
+    ],
+    "totalCount": 2,
 }
 
 VIBE_PREVIEW_RESPONSE = {
@@ -177,13 +180,36 @@ VIBE_PREVIEW_RESPONSE = {
     ]
 }
 
-VIBE_CREATE_RESPONSE = {
-    "personaId": "vp-new-123",
-    "name": "Fiona Founder",
-    "story": "A vibe-coding solo founder who ships fast and trusts her gut.",
-    "personaNeed": "see whether this product saves her time",
-    "source": "vibe",
-    "createdAt": "2026-08-01T00:00:00Z",
+# POST /api/persona/custom — the spec preset + one reference persona.
+CUSTOM_CREATE_RESPONSE = {
+    "persona": {
+        "personaId": "ref-persona-001",
+        "name": "Fiona Founder",
+        "story": "A vibe-coding solo founder who ships fast and trusts her gut.",
+        "vibePromptSummary": "impatient vibe-coder founder",
+        "customPersonaId": "cp-preset-001",
+        "source": "vibe",
+    },
+    "customPersonaId": "cp-preset-001",
+    "preset": {"custom_persona_id": "cp-preset-001"},
+}
+
+# POST /api/persona/pool/create — note: NO pool name in the response (the
+# route hard-codes pool_name to Pool_<hex>; the plugin renames via PATCH).
+POOL_CREATE_RESPONSE = {
+    "personaPoolId": "pool-new-123",
+    "selectedPersonaIds": [],
+    "customPersonaIds": ["cp-preset-001"],
+    "archetypeName": "Impatient Founders",
+    "createdAt": "2026-08-27T00:00:00Z",
+}
+
+# PATCH /api/persona/pools/<pool_id> — the renamed pool.
+POOL_PATCH_RESPONSE = {
+    "poolId": "pool-new-123",
+    "name": "Impatient Founders",
+    "description": "Vibe-coding solo founders.",
+    "personaCount": 0,
 }
 
 FEATURE_CREATE_RESPONSE = {
@@ -287,7 +313,8 @@ class Handler(BaseHTTPRequestHandler):
         # NOTE: ordering is load-bearing — the "/results" check must precede
         # the "/api/plugin/runs" prefix check, or result POSTs (which live
         # under /api/plugin/runs/<id>/results) would get RUN_RESPONSE instead.
-        # Likewise "/api/persona/vibe" must precede the "/api/persona" prefix.
+        # Likewise "/api/persona/pool/create" must precede "/api/persona/pools"
+        # would-be prefixes if any ever overlap.
         if path.startswith("/api/oauth/device/code"):
             return 200, DEVICE_CODE_RESPONSE
         if path.startswith("/api/oauth/device/token"):
@@ -295,14 +322,25 @@ class Handler(BaseHTTPRequestHandler):
         if path.startswith("/api/oauth/validate-token"):
             return 200, VALIDATE_RESPONSE
         if path.startswith("/api/persona/vibe"):
-            if (body or {}).get("previewOnly"):
-                return 200, VIBE_PREVIEW_RESPONSE
-            return 201, VIBE_CREATE_RESPONSE
-        if path.startswith("/api/persona"):
-            return 200, PERSONAS_RESPONSE
+            return 200, VIBE_PREVIEW_RESPONSE
+        if path.startswith("/api/persona/custom"):
+            return 201, CUSTOM_CREATE_RESPONSE
+        if path.startswith("/api/persona/pool/create"):
+            return 201, POOL_CREATE_RESPONSE
+        if path.startswith("/api/persona/pools/") and method == "PATCH":
+            return 200, POOL_PATCH_RESPONSE
+        if path.startswith("/api/persona/pools"):
+            return 200, POOLS_RESPONSE
         if path.endswith("/results"):
             return 200, RESULTS_RESPONSE
         if path.startswith("/api/plugin/runs") and method == "POST":
+            # Mirror the pool-aware backend: a poolId in the body comes back
+            # as a pool block (spun-off member = RUN_RESPONSE's persona).
+            pool_id = (body or {}).get("poolId")
+            if pool_id:
+                payload = dict(RUN_RESPONSE)
+                payload["pool"] = {"poolId": pool_id, "name": "Impatient Founders"}
+                return 201, payload
             return 201, RUN_RESPONSE
         if path.startswith("/api/plugin/runs") and method == "GET":
             return 200, GET_RUN_RESPONSE
@@ -325,6 +363,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):  # noqa: N802
         self._dispatch("GET")
+
+    def do_PATCH(self):  # noqa: N802
+        self._dispatch("PATCH")
 
 
 # ---------------------------------------------------------------------------
@@ -525,8 +566,8 @@ def case_1_tools_list(srv: ServerProc, data_dir: Path) -> None:
                 "get_run",
                 "list_features",
                 "status",
-                "list_personas",
-                "create_persona",
+                "list_pools",
+                "create_pool",
                 "create_feature",
                 "logout",
             ]
@@ -887,41 +928,42 @@ def case_16_self_heal_401_retry(srv: ServerProc, data_dir: Path) -> None:
     expect(auth.get("access_token") == "new-token-456", "fresh token persisted after 401 heal")
 
 
-def case_17_list_personas(srv: ServerProc, data_dir: Path) -> None:
+def case_17_list_pools(srv: ServerProc, data_dir: Path) -> None:
     write_auth(data_dir)
-    result = call_tool(srv, "list_personas", {})
-    req = STATE.last_for("/api/persona")
-    expect(req is not None and req["method"] == "GET", "list_personas should GET /api/persona")
+    result = call_tool(srv, "list_pools", {})
+    req = STATE.last_for("/api/persona/pools")
+    expect(req is not None and req["method"] == "GET", "list_pools should GET /api/persona/pools")
     expect(req["headers"].get("Authorization") == "Bearer test-token-123", "missing bearer")
     text = result_text(result)
-    contains(text, "Fiona Founder", "list_personas shows name")
-    contains(text, "vp-fiona-001", "list_personas keeps ids for the actor")
-    contains(text, "vibe", "list_personas labels vibe source")
-    contains(text, "replay", "list_personas labels replay source")
-    contains(text, 'persona="<name>"', "run hint is name-based, not id-based")
+    contains(text, "Impatient Founders", "list_pools shows pool name")
+    contains(text, "pool-fiona-001", "list_pools keeps poolIds for the actor")
+    contains(text, "3 member(s)", "list_pools shows member count")
+    contains(text, "Vibe-coding solo founders", "list_pools shows description")
+    contains(text, "created 2026-08-01T00:00:00Z", "list_pools shows created date")
+    contains(text, 'pool="<name>"', "run hint is name-based, not id-based")
     expect(
         "ids are for tool calls" in text.lower(),
         f"tool text tells the actor ids are internal, got {text!r}",
     )
 
 
-def case_18_list_personas_empty(srv: ServerProc, data_dir: Path) -> None:
+def case_18_list_pools_empty(srv: ServerProc, data_dir: Path) -> None:
     write_auth(data_dir)
-    STATE.error_overrides["/api/persona"] = (200, {"personas": []})
-    result = call_tool(srv, "list_personas", {})
-    expect(not result.get("isError"), "empty persona list is not an error")
+    STATE.error_overrides["/api/persona/pools"] = (200, {"personaPools": [], "totalCount": 0})
+    result = call_tool(srv, "list_pools", {})
+    expect(not result.get("isError"), "empty pool list is not an error")
     text = result_text(result)
-    expect("no personas" in text.lower(), f"empty list says so plainly, got {text!r}")
-    expect("create" in text.lower(), f"empty list nudges toward creation, got {text!r}")
+    expect("no persona pools" in text.lower(), f"empty list says so plainly, got {text!r}")
+    contains(text, "/archetype:persona", "empty list points at pool creation")
 
 
-def case_19_create_persona_preview(srv: ServerProc, data_dir: Path) -> None:
+def case_19_create_pool_preview(srv: ServerProc, data_dir: Path) -> None:
     write_auth(data_dir)
     result = call_tool(
         srv,
-        "create_persona",
+        "create_pool",
         {
-            "vibe_prompt": "a vibe-coding solo founder who ships fast",
+            "vibe_prompt": "vibe-coding solo founders who ship fast",
             "age_range": [28, 35],
             "skills_range": [70, 90],
             "occupation": "startup founder",
@@ -931,10 +973,10 @@ def case_19_create_persona_preview(srv: ServerProc, data_dir: Path) -> None:
         },
     )
     req = STATE.last_for("/api/persona/vibe")
-    expect(req is not None and req["method"] == "POST", "create_persona should POST /api/persona/vibe")
+    expect(req is not None and req["method"] == "POST", "create_pool preview should POST /api/persona/vibe")
     body = req["body"]
     expect(body.get("mode") == "vibe", "mode is vibe")
-    expect(body.get("vibePrompt") == "a vibe-coding solo founder who ships fast", "vibe_prompt -> vibePrompt")
+    expect(body.get("vibePrompt") == "vibe-coding solo founders who ship fast", "vibe_prompt -> vibePrompt")
     expect(body.get("previewOnly") is True, "preview_only -> previewOnly")
     expect(body.get("previewCount") == 2, "preview_count -> previewCount")
     expect(body.get("productDescription") == "Lumina Notes, a note-taking app", "product_description -> productDescription")
@@ -942,69 +984,180 @@ def case_19_create_persona_preview(srv: ServerProc, data_dir: Path) -> None:
     expect(controls.get("ageRange") == [28, 35], f"age_range -> controls.ageRange, got {controls}")
     expect(controls.get("skillsRange") == [70, 90], f"skills_range -> controls.skillsRange, got {controls}")
     expect(controls.get("occupation") == "startup founder", "occupation -> controls.occupation")
-    assert_no_snake_case(body, "create_persona body")
+    assert_no_snake_case(body, "create_pool preview body")
+    expect(STATE.last_for("/api/persona/custom") is None, "preview must not persist a spec")
+    expect(STATE.last_for("/api/persona/pool/create") is None, "preview must not create a pool")
     text = result_text(result)
     contains(text, "Fiona Founder", "preview shows candidate 1")
     contains(text, "Gary Garage", "preview shows candidate 2")
     expect("preview" in text.lower(), "preview result says these are previews")
 
 
-def case_20_create_persona_final(srv: ServerProc, data_dir: Path) -> None:
+def case_20_create_pool_final(srv: ServerProc, data_dir: Path) -> None:
+    # The save path is a THREE-call sequence: POST /api/persona/custom ->
+    # POST /api/persona/pool/create -> PATCH /api/persona/pools/<poolId>.
     write_auth(data_dir)
+    vibe = "vibe-coding solo founders who ship fast"
     result = call_tool(
         srv,
-        "create_persona",
-        {"vibe_prompt": "a vibe-coding solo founder who ships fast"},
+        "create_pool",
+        {"vibe_prompt": vibe, "name": "Impatient Founders"},
     )
-    req = STATE.last_for("/api/persona/vibe")
-    body = req["body"]
-    expect(not body.get("previewOnly"), "final create must not set previewOnly")
+
+    custom_req = STATE.last_for("/api/persona/custom")
+    expect(custom_req is not None and custom_req["method"] == "POST",
+           "save should POST /api/persona/custom first")
+    custom_body = custom_req["body"]
+    expect(custom_body.get("mode") == "vibe", "custom body mode is vibe")
+    expect(custom_body.get("vibePrompt") == vibe, "vibe_prompt -> vibePrompt")
+    expect(custom_body.get("archetypeName") == "Impatient Founders",
+           f"name -> archetypeName, got {custom_body}")
+    expect(not custom_body.get("previewOnly"), "final save must not set previewOnly")
+
+    pool_req = STATE.last_for("/api/persona/pool/create")
+    expect(pool_req is not None and pool_req["method"] == "POST",
+           "save should POST /api/persona/pool/create second")
+    pool_body = pool_req["body"]
+    expect(pool_body.get("selectedPersonaIds") == ["ref-persona-001"],
+           f"pool links the reference persona, got {pool_body}")
+    expect(pool_body.get("archetypeName") == "Impatient Founders",
+           f"pool carries the archetype name, got {pool_body}")
+    expect(pool_body.get("description") == vibe, f"pool description is the spec, got {pool_body}")
+
+    patch_req = STATE.last_for("/api/persona/pools/pool-new-123")
+    expect(patch_req is not None and patch_req["method"] == "PATCH",
+           "save should PATCH /api/persona/pools/<poolId> third")
+    patch_body = patch_req["body"]
+    # CRITICAL: the route only recognizes the body key "name" — "pool_name"
+    # is silently ignored and the rename would be dropped.
+    expect(patch_body.get("name") == "Impatient Founders",
+           f"rename must use body key 'name', got {patch_body}")
+    expect("pool_name" not in patch_body, "rename must NOT send 'pool_name'")
+    expect(patch_body.get("description") == vibe, f"rename carries description, got {patch_body}")
+
+    persona_paths = [r["path"] for r in STATE.requests if "/api/persona" in r["path"]]
+    expect(
+        persona_paths == [
+            "/api/persona/custom",
+            "/api/persona/pool/create",
+            "/api/persona/pools/pool-new-123",
+        ],
+        f"save must be exactly the three-call sequence in order, got {persona_paths}",
+    )
+
+    expect(not result.get("isError"), "create_pool save happy path must not error")
     text = result_text(result)
-    contains(text, "vp-new-123", "create still carries the id for the actor")
-    contains(text, 'persona="Fiona Founder"', "usage hint is name-based")
+    contains(text, "Impatient Founders", "save echoes the pool name")
+    contains(text, "pool-new-123", "save carries the poolId for the actor")
+    contains(text, 'pool="Impatient Founders"', "usage hint is name-based")
+    expect("spun off" in text.lower(), f"save explains members are spun off later, got {text!r}")
 
 
-def case_21_start_run_persona_id(srv: ServerProc, data_dir: Path) -> None:
-    # persona-9001 matches RUN_RESPONSE's persona.personaId -> honored, happy path.
+def case_20b_create_pool_rename_fails(srv: ServerProc, data_dir: Path) -> None:
+    # Step 3 (rename) failing leaves a WORKING pool under Pool_<hex>: report
+    # the poolId and continue — never an error result.
+    write_auth(data_dir)
+    STATE.error_overrides["/api/persona/pools/pool-new-123"] = (
+        500,
+        {"error": "internal_error", "message": "rename blew up"},
+    )
+    result = call_tool(
+        srv,
+        "create_pool",
+        {"vibe_prompt": "skeptical IT admins", "name": "Skeptical Admins"},
+    )
+    expect(not result.get("isError"), "rename failure must not fail the save")
+    text = result_text(result)
+    contains(text, "pool-new-123", "rename failure still reports the poolId")
+    contains(text, "Pool_", "rename failure names the Pool_<hex> placeholder")
+    expect("usable" in text.lower(), f"rename failure says the pool is usable, got {text!r}")
+    contains(text, "rename blew up", "rename failure surfaces the backend message")
+
+
+def case_20c_create_pool_step2_fails(srv: ServerProc, data_dir: Path) -> None:
+    # Step 2 failing leaves only an orphan preset (benign): error out with
+    # retry guidance and never attempt the rename.
+    write_auth(data_dir)
+    STATE.error_overrides["/api/persona/pool/create"] = (
+        500,
+        {"error": "internal_error", "message": "pool store down"},
+    )
+    result = call_tool(
+        srv,
+        "create_pool",
+        {"vibe_prompt": "skeptical IT admins", "name": "Skeptical Admins"},
+    )
+    expect(result.get("isError") is True, "step-2 failure must be an error")
+    text = result_text(result)
+    contains(text, "pool store down", "step-2 failure surfaces the backend message")
+    expect("retry" in text.lower(), f"step-2 failure tells the user to retry, got {text!r}")
+    patch_reqs = [r for r in STATE.requests if r["method"] == "PATCH"]
+    expect(not patch_reqs, "no rename attempt after a failed pool create")
+
+
+def case_21_start_run_pool_id(srv: ServerProc, data_dir: Path) -> None:
+    # The stub echoes the requested poolId back in the pool block -> honored.
     write_auth(data_dir)
     result = call_tool(
         srv,
         "start_run",
-        {"goal": "g", "url": "http://x", "persona_id": "persona-9001"},
+        {"goal": "g", "url": "http://x", "pool_id": "pool-fiona-001"},
     )
-    expect(not result.get("isError"), "honored persona_id must succeed")
+    expect(not result.get("isError"), "honored pool_id must succeed")
     req = STATE.last_for("/api/plugin/runs")
     body = req["body"]
-    expect(body.get("personaId") == "persona-9001", f"persona_id -> personaId, got {body}")
-    assert_no_snake_case(body, "start_run body (with persona)")
+    expect(body.get("poolId") == "pool-fiona-001", f"pool_id -> poolId, got {body}")
+    expect("personaId" not in body, f"legacy personaId must never be sent, got {body}")
+    assert_no_snake_case(body, "start_run body (with pool)")
+    text = result_text(result)
+    contains(text, "spun from pool Impatient Founders", "briefing names the source pool")
     entry = read_run_log(data_dir)[-1]
     expect(
-        entry.get("persona_id") == "persona-9001",
-        f"run log must record persona_id, got {entry}",
+        entry.get("pool_id") == "pool-fiona-001",
+        f"run log must record pool_id, got {entry}",
     )
+    expect("persona_id" not in entry, f"run log must not record persona_id, got {entry}")
 
 
-def case_22_start_run_persona_not_honored(srv: ServerProc, data_dir: Path) -> None:
-    # Backend (e.g. an outdated deploy) ignores personaId and returns a
-    # different persona -> the tool must FAIL LOUDLY, never hand the actor a
-    # briefing for the wrong persona.
+def case_22_start_run_pool_not_honored(srv: ServerProc, data_dir: Path) -> None:
+    # Backend (e.g. an outdated deploy) ignores poolId and returns no pool
+    # block -> the tool must FAIL LOUDLY, never hand the actor a briefing for
+    # a tester the caller didn't pick.
     write_auth(data_dir)
+    STATE.error_overrides["/api/plugin/runs"] = (201, RUN_RESPONSE)
     result = call_tool(
         srv,
         "start_run",
-        {"goal": "g", "url": "http://x", "persona_id": "vp-fiona-001"},
+        {"goal": "g", "url": "http://x", "pool_id": "pool-fiona-001"},
     )
-    expect(result.get("isError") is True, "unhonored persona_id must be an error")
+    expect(result.get("isError") is True, "unhonored pool_id must be an error")
     text = result_text(result)
-    expect(
-        "vp-fiona-001" in text and "persona-9001" in text,
-        f"error names requested vs returned persona ids, got {text!r}",
-    )
+    contains(text, "pool-fiona-001", "error names the requested pool id")
     expect(
         "did not honor" in text.lower() or "ignored" in text.lower(),
         f"error explains the backend ignored the selection, got {text!r}",
     )
     expect(len(read_run_log(data_dir)) == 0, "aborted run must not be logged as started")
+
+
+def case_22b_status_tolerates_legacy_run_log(srv: ServerProc, data_dir: Path) -> None:
+    # Pre-0.4.0 run-log entries carry persona_id; status must render anyway.
+    write_auth(data_dir)
+    (data_dir / "runs.json").write_text(json.dumps([
+        {
+            "run_id": "legacy-run-1",
+            "goal": "old persona run",
+            "persona_id": "vp-fiona-001",
+            "started_at": 1,
+            "status": "completed",
+            "verdict": "pass",
+        }
+    ]))
+    result = call_tool(srv, "status", {})
+    expect(not result.get("isError"), "status must tolerate legacy run-log entries")
+    text = result_text(result)
+    contains(text, "legacy-run-1", "legacy entry still renders in recent runs")
+    contains(text, "old persona run", "legacy entry goal still renders")
 
 
 def case_23_create_feature(srv: ServerProc, data_dir: Path) -> None:
@@ -1077,12 +1230,15 @@ CASES = [
     ("run log: corrupt file tolerated", case_14_run_log_corrupt),
     ("self-heal: missing token -> inline login -> original call", case_15_self_heal_missing_token),
     ("self-heal: 401 -> re-login -> retry once", case_16_self_heal_401_retry),
-    ("list_personas renders dashboard rows", case_17_list_personas),
-    ("list_personas: empty -> creation nudge", case_18_list_personas_empty),
-    ("create_persona preview (camelCase body, both candidates)", case_19_create_persona_preview),
-    ("create_persona final -> personaId + usage hint", case_20_create_persona_final),
-    ("start_run maps persona_id -> personaId + logs it", case_21_start_run_persona_id),
-    ("start_run aborts when backend ignores personaId", case_22_start_run_persona_not_honored),
+    ("list_pools renders dashboard rows", case_17_list_pools),
+    ("list_pools: empty -> creation nudge", case_18_list_pools_empty),
+    ("create_pool preview (camelCase body, both candidates, nothing saved)", case_19_create_pool_preview),
+    ("create_pool save = custom -> pool/create -> PATCH rename", case_20_create_pool_final),
+    ("create_pool: rename failure -> pool usable under Pool_<hex>", case_20b_create_pool_rename_fails),
+    ("create_pool: pool-create failure -> retryable error, no rename", case_20c_create_pool_step2_fails),
+    ("start_run maps pool_id -> poolId + logs it", case_21_start_run_pool_id),
+    ("start_run aborts when backend ignores poolId", case_22_start_run_pool_not_honored),
+    ("status tolerates legacy persona_id run-log entries", case_22b_status_tolerates_legacy_run_log),
     ("create_feature POSTs title+fields, returns id", case_23_create_feature),
     ("logout deletes auth.json, keeps run history", case_24_logout_connected),
     ("logout when not connected is a friendly no-op", case_25_logout_not_connected),
