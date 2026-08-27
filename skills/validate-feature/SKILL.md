@@ -48,14 +48,19 @@ deltas:
   `_id`, and `url` set to the target URL. The **goal is optional** — the
   backend derives it from the feature's fields when `feature_id` is given. Only
   pass a `goal` if the user gave you extra free-text intent to layer on top.
-- Persona intent in `$ARGUMENTS` (token, name, or description) works here
-  too — run the `validation` skill's persona resolution (list_personas →
-  propose match → confirm) and pass the confirmed id as `persona_id`.
+- Tester/persona intent in `$ARGUMENTS` (a `pool=<...>` token, a pool's
+  name, or a description) works here too — run the `validation` skill's pool
+  resolution (list_pools → match name case-insensitively, archetype-name
+  fallback → confirm; several matches → list candidates and ask, never
+  guess) and pass the confirmed id as `pool_id`. Warn at kickoff that
+  spinning off a fresh tester from the pool adds up to ~a minute before the
+  browser session starts.
 - Everything else is the same as the `validation` skill: the run executes in
   a freshly launched `feature-validator` agent (dispatch prompt carries only
-  goal/url/`feature_id`/`persona_id` + persona name — no dev context), and
-  you relay its report (scenario verdict table, findings by severity, persona
-  quote, run id, and the `/archetype:check-run-status <run_id>` follow-up).
+  goal/url/`feature_id`/`pool_id` + the pool's display name — no dev
+  context), and you relay its report (scenario verdict table, findings by
+  severity, persona quote, run id, and the
+  `/archetype:check-run-status <run_id>` follow-up).
 
 ## Boundaries
 

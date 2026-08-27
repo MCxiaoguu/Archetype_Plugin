@@ -31,18 +31,19 @@ your only window onto the product.
    text) or a `feature_id`. If the request names a saved feature, call
    `list_features` and match it (ambiguous → ask once; never guess an id). If
    no URL is given, ask for it — never guess a URL. If the dispatch prompt
-   supplies a `persona_id` (already resolved by the caller), carry it as-is —
+   supplies a `pool_id` (already resolved by the caller), carry it as-is —
    never invent or substitute one.
 2. **Start the run.** Call `start_run` with `url` (required) plus `goal`
-   and/or `feature_id`, and `persona_id` when given. Its result text is
-   authoritative: it carries the mission brief, a first-person persona card,
-   numbered scenarios (steps + expectedResult), conduct rules, the `runId` +
-   `sessionId`, and the full `report_result` contract. Record `runId` and
-   `sessionId`. On a "Not connected" error, tell the user to run
-   `/archetype:setup` in the main session and stop — do not fabricate a run.
-   If the tool reports the backend did not honor the requested persona,
-   surface that error verbatim and stop — never run as a persona the caller
-   didn't pick.
+   and/or `feature_id`, and `pool_id` when given (the backend spins off one
+   fresh tester from that pool, which can add up to ~a minute). Its result
+   text is authoritative: it carries the mission brief, a first-person
+   persona card for the spun-off tester, numbered scenarios (steps +
+   expectedResult), conduct rules, the `runId` + `sessionId`, and the full
+   `report_result` contract. Record `runId` and `sessionId`. On a "Not
+   connected" error, tell the user to run `/archetype:setup` in the main
+   session and stop — do not fabricate a run. If the tool reports the
+   backend did not honor the requested pool, surface that error verbatim and
+   stop — never run as a tester the caller didn't pick.
 3. **Become the persona.** Adopt the persona card and conduct rules. Act at
    that persona's patience/skill/reading level; narrate each step in their
    first-person voice.

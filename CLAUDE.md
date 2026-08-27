@@ -17,7 +17,7 @@ Central ref that you must read:
 The actor half of the pipeline is now wired to the real backend contract. The
 `core` MCP server (`scripts/core-server.py`) exposes ten tools —
 `login`, `logout`, `start_run`, `report_result`, `get_run`, `list_features`,
-`create_feature`, `status`, `list_personas`, `create_persona` — talking to
+`create_feature`, `status`, `list_pools`, `create_pool` — talking to
 the backend's `/api/plugin`,
 `/api/features`, and `/api/persona` endpoints. The eight skills (`setup`,
 `validation`, `validate-feature`, `list-features`, `check-run-status`,
@@ -31,16 +31,20 @@ inline and retries once (`status` is read-only and never triggers login).
 `status` renders a dashboard (account from the id_token, token health, feature
 count, recent runs from `${CLAUDE_PLUGIN_DATA}/runs.json`, portal link;
 portal default `https://www.syntheticarchetype.com`, override via
-`ARCHETYPE_PORTAL_URL`). `/archetype:persona` lists personas and creates new
-ones questionnaire-style (vibe prompt + controls → preview → save); runs accept
-`persona=<personaId>` which `start_run` forwards as `personaId` so the backend
-uses that persona instead of the replay-derived one. Validation intake parses
-natural language into a LIST of run objects — comparison phrasing ("as <persona A>
-and as <persona B>") fans out to multiple runs. EVERY run (single included)
+`ARCHETYPE_PORTAL_URL`). Personas are POOL-FIRST (v0.4.0):
+`/archetype:persona` lists persona pools and creates new ones
+questionnaire-style (vibe prompt + controls → preview → save as an EMPTY pool;
+`create_pool` chains POST /api/persona/custom → POST /api/persona/pool/create
+→ PATCH /api/persona/pools/<poolId>, and members are spun off at validation
+time). Runs accept `pool="<name>"` which the skills resolve via `list_pools`
+and `start_run` forwards as `poolId` so the backend spins off a fresh member
+of that pool instead of the replay-derived persona. Validation intake parses
+natural language into a LIST of run objects — comparison phrasing ("as <pool A>
+and as <pool B>") fans out to multiple runs. EVERY run (single included)
 executes in a freshly launched `feature-validator` agent so the persona
 actor carries zero dev context (sequential dispatch — one Chrome); the agent
 file is the single source of truth for the actor loop, and multi-run output
-is a cross-persona comparison report.
+is a cross-pool comparison report.
 
 Authoritative references for this work:
 - Design spec: `docs/superpowers/specs/2026-07-22-plugin-backend-pipeline-design.md` (§4.2 covers the skills).
