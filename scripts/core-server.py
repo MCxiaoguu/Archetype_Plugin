@@ -12,7 +12,8 @@ Tools:
                      validates it, otherwise runs the device flow and saves
                      the new token (mode ``0600``). Unchanged from v0.2.
 - ``start_run``    — ``POST /api/plugin/runs``: assemble a persona-enriched
-                     validation run; renders the brief, persona card,
+                     validation run (optionally spun off from a persona
+                     pool via ``pool_id``); renders the brief, persona card,
                      scenarios, conduct rules and reporting contract.
 - ``report_result``— ``POST /api/plugin/runs/<id>/results``: ingest the
                      actor's structured results; renders the backend
@@ -44,7 +45,7 @@ from typing import Any, Callable
 
 PROTOCOL_VERSION = "2025-06-18"
 SERVER_NAME = "archetype-core"
-SERVER_VERSION = "0.3.6"
+SERVER_VERSION = "0.4.0"
 
 # The synchronous run-assembly endpoint runs the persona/scenario LLM chain,
 # which the MCP server tolerates for up to ~90 s; give it generous headroom.
@@ -159,6 +160,28 @@ def backend_post(
             "User-Agent": USER_AGENT,
         },
         method="POST",
+    )
+    if auth_token:
+        req.add_header("Authorization", f"Bearer {auth_token}")
+    return _send(req, timeout)
+
+
+def backend_patch(
+    path: str,
+    body: dict[str, Any],
+    auth_token: str | None = None,
+    timeout: int = HTTP_TIMEOUT,
+) -> tuple[int, dict[str, Any]]:
+    """PATCH JSON to the Archetype backend. Returns (status, parsed-body)."""
+    req = urllib.request.Request(
+        f"{BACKEND_BASE}{path}",
+        data=json.dumps(body).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "User-Agent": USER_AGENT,
+        },
+        method="PATCH",
     )
     if auth_token:
         req.add_header("Authorization", f"Bearer {auth_token}")
@@ -355,7 +378,7 @@ def perform_device_login() -> tuple[str | None, str]:
 
     return token_body["access_token"], (
         f"Connected to Archetype. Access token saved to {auth_path} (mode 0600).\n"
-        "Next: /archetype:persona to meet your testers, or "
+        "Next: /archetype:persona to meet your persona pools, or "
         "`/archetype:validation <goal> url=<...>` to start a validation run."
     )
 
@@ -470,7 +493,7 @@ def record_run_start(run_body: dict[str, Any], arguments: dict[str, Any]) -> Non
         "goal": arguments.get("goal"),
         "url": arguments.get("url"),
         "feature_id": arguments.get("feature_id"),
-        "persona_id": arguments.get("persona_id"),
+        "pool_id": arguments.get("pool_id"),
         "started_at": int(time.time()),
     }
     entries.append({k: v for k, v in entry.items() if v is not None})
@@ -488,8 +511,8 @@ def record_run_result(run_id: str, status_str: str | None, verdict: str | None) 
     _save_run_log(entries)
 
 
-def backend_error_text(status: int, body: dict[str, Any]) -> dict[str, Any]:
-    """Render a non-2xx backend response as an error tool result.
+def backend_error_message(status: int, body: dict[str, Any]) -> str:
+    """The user-facing line for a non-2xx backend response.
 
     Prefers the backend's natural-language ``message``, falling back to the
     ``error`` slug. A 401 always gets the login hint appended so the actor
@@ -498,7 +521,12 @@ def backend_error_text(status: int, body: dict[str, Any]) -> dict[str, Any]:
     message = body.get("message") or body.get("error") or f"backend returned {status}"
     if status == 401:
         message = f"{message} {LOGIN_HINT}"
-    return tool_text(message, is_error=True)
+    return message
+
+
+def backend_error_text(status: int, body: dict[str, Any]) -> dict[str, Any]:
+    """Render a non-2xx backend response as an error tool result."""
+    return tool_text(backend_error_message(status, body), is_error=True)
 
 
 # ---------- tool: start_run ----------
@@ -516,6 +544,14 @@ def _render_run(body: dict[str, Any]) -> str:
     brief = body.get("brief")
     if brief:
         parts.append(brief)
+
+    pool = body.get("pool") or {}
+    pool_name = pool.get("name")
+    if pool_name:
+        parts.append(
+            f"Running as {persona.get('name') or 'a fresh tester'}, "
+            f"spun from pool {pool_name}."
+        )
 
     card = persona.get("personaCard")
     if card:
@@ -565,7 +601,7 @@ def handle_start_run(arguments: dict[str, Any]) -> dict[str, Any]:
         "goal": arguments.get("goal"),
         "featureId": arguments.get("feature_id"),
         "url": arguments.get("url"),
-        "personaId": arguments.get("persona_id"),
+        "poolId": arguments.get("pool_id"),
     }
     body = {k: v for k, v in body.items() if v is not None}
 
@@ -580,18 +616,18 @@ def handle_start_run(arguments: dict[str, Any]) -> dict[str, Any]:
     if not (200 <= status < 300):
         return backend_error_text(status, resp)
 
-    # Persona guard: if a persona was requested, the backend must have used
-    # it. An outdated backend silently ignores unknown fields — that must
-    # abort the run, never brief the actor as the wrong persona.
-    requested_persona = arguments.get("persona_id")
-    returned_persona = (resp.get("persona") or {}).get("personaId")
-    if requested_persona and returned_persona != requested_persona:
+    # Pool guard: if a pool was requested, the backend must have used it. An
+    # outdated backend silently ignores unknown fields — that must abort the
+    # run, never brief the actor as the wrong tester.
+    requested_pool = arguments.get("pool_id")
+    returned_pool = (resp.get("pool") or {}).get("poolId")
+    if requested_pool and returned_pool != requested_pool:
         return tool_text(
             f"Run aborted before starting: the backend did not honor the "
-            f"requested persona (asked for {requested_persona}, got "
-            f"{returned_persona or 'none'}). The backend deployment likely "
-            f"predates persona selection — deploy the current backend, or "
-            f"retry without persona= to run as the replay-derived persona. "
+            f"requested pool (asked for {requested_pool}, got "
+            f"{returned_pool or 'none'}). The backend deployment likely "
+            f"predates pool selection — deploy the current backend, or "
+            f"retry without pool= to run as the replay-derived persona. "
             f"Do NOT act on this run; a stray run doc "
             f"({resp.get('runId', '?')}) may exist server-side.",
             is_error=True,
@@ -804,16 +840,19 @@ def handle_create_feature(arguments: dict[str, Any]) -> dict[str, Any]:
     )
 
 
-# ---------- tools: list_personas / create_persona ----------
+# ---------- tools: list_pools / create_pool ----------
 
-# Persona generation runs the LLM server-side (one call per preview candidate);
-# give it the same generous headroom as run assembly.
+# Persona generation runs the LLM server-side (one call per preview candidate,
+# one for the pool's reference persona); same generous headroom as run assembly.
 PERSONA_TIMEOUT = 180
 
+# Pool descriptions are stored/rendered as a short line, not an essay.
+POOL_DESCRIPTION_LIMIT = 300
 
-def handle_list_personas(arguments: dict[str, Any]) -> dict[str, Any]:
+
+def handle_list_pools(arguments: dict[str, Any]) -> dict[str, Any]:
     result = authed_call(
-        lambda token: backend_get("/api/persona", auth_token=token)
+        lambda token: backend_get("/api/persona/pools", auth_token=token)
     )
     if result is None:
         return not_connected()
@@ -821,47 +860,48 @@ def handle_list_personas(arguments: dict[str, Any]) -> dict[str, Any]:
     if not (200 <= status < 300):
         return backend_error_text(status, resp)
 
-    personas = resp.get("personas") or []
-    if not personas:
+    pools = resp.get("personaPools") or []
+    if not pools:
         return tool_text(
-            "No personas yet. Create one with /archetype:persona — say 'new' "
-            "and I'll walk you through a short questionnaire."
+            "No persona pools yet. Create one with /archetype:persona — say "
+            "'new' and I'll walk you through a short questionnaire."
         )
 
-    lines = [f"{len(personas)} persona(s):", ""]
-    for p in personas:
-        demo = p.get("demographics") or {}
-        head = f"{p.get('name', '(unnamed)')}  [{p.get('source') or 'unknown'}]"
-        occupation = demo.get("occupation")
-        if occupation:
-            head += f"  · {occupation}"
+    lines = [f"{len(pools)} persona pool(s):", ""]
+    for p in pools:
+        head = f"{p.get('name') or '(unnamed)'}"
+        head += f"  · {p.get('personaCount') or 0} member(s)"
         created = p.get("createdAt")
         if created:
             head += f"  · created {created}"
         lines.append(head)
-        story = (p.get("story") or "").strip()
-        if story:
-            lines.append(f"    {story[:200]}")
-        lines.append(f"    id: {p.get('personaId', '?')}")
+        description = (p.get("description") or "").strip()
+        if description:
+            lines.append(f"    {description[:200]}")
+        metadata = p.get("metadata") or {}
+        archetype_name = metadata.get("primary_archetype_name")
+        if archetype_name and archetype_name != p.get("name"):
+            lines.append(f"    archetype: {archetype_name}")
+        lines.append(f"    id: {p.get('poolId', '?')}")
     lines.append(
-        "\nUse one in a run: /archetype:validation \"<goal>\" url=<...> persona=\"<name>\""
+        "\nUse one in a run: /archetype:validation \"<goal>\" url=<...> pool=\"<name>\""
         "\n(ids are for tool calls: when starting a run, resolve the name to its "
-        "id above and pass it as start_run's persona_id — don't show ids to the "
+        "id above and pass it as start_run's pool_id — don't show ids to the "
         "user unless asked)"
     )
     return tool_text("\n".join(lines))
 
 
-def handle_create_persona(arguments: dict[str, Any]) -> dict[str, Any]:
+def handle_create_pool(arguments: dict[str, Any]) -> dict[str, Any]:
     vibe_prompt = (arguments.get("vibe_prompt") or "").strip()
     if not vibe_prompt:
         return tool_text(
-            "vibe_prompt is required — describe the persona in a sentence or "
-            "two (who they are, how they behave, what they care about).",
+            "vibe_prompt is required — describe the pool's testers in a "
+            "sentence or two (who they are, how they behave, what they care "
+            "about).",
             is_error=True,
         )
 
-    body: dict[str, Any] = {"mode": "vibe", "vibePrompt": vibe_prompt}
     controls: dict[str, Any] = {}
     if arguments.get("age_range") is not None:
         controls["ageRange"] = arguments["age_range"]
@@ -871,13 +911,23 @@ def handle_create_persona(arguments: dict[str, Any]) -> dict[str, Any]:
         controls["occupation"] = arguments["occupation"]
     if arguments.get("education"):
         controls["education"] = arguments["education"]
+
+    if arguments.get("preview_only"):
+        return _preview_pool_candidates(arguments, vibe_prompt, controls)
+    return _save_pool(arguments, vibe_prompt, controls)
+
+
+def _preview_pool_candidates(
+    arguments: dict[str, Any], vibe_prompt: str, controls: dict[str, Any]
+) -> dict[str, Any]:
+    """Preview candidate directions for the pool — nothing is saved."""
+    body: dict[str, Any] = {"mode": "vibe", "vibePrompt": vibe_prompt}
     if controls:
         body["controls"] = controls
     if arguments.get("product_description"):
         body["productDescription"] = arguments["product_description"]
-    if arguments.get("preview_only"):
-        body["previewOnly"] = True
-        body["previewCount"] = int(arguments.get("preview_count") or 2)
+    body["previewOnly"] = True
+    body["previewCount"] = int(arguments.get("preview_count") or 2)
 
     result = authed_call(
         lambda token: backend_post(
@@ -890,38 +940,155 @@ def handle_create_persona(arguments: dict[str, Any]) -> dict[str, Any]:
     if not (200 <= status < 300):
         return backend_error_text(status, resp)
 
-    if body.get("previewOnly"):
-        examples = resp.get("examples") or []
-        lines = [
-            f"{len(examples)} persona preview(s) — directions, not saved yet. "
-            "The final persona is regenerated along the chosen direction."
-        ]
-        for i, ex in enumerate(examples, start=1):
-            lines.append("")
-            lines.append(f"{i}. {ex.get('name', '(unnamed)')}")
-            if ex.get("vibeSummary"):
-                lines.append(f"   vibe: {ex['vibeSummary']}")
-            if ex.get("story"):
-                lines.append(f"   {str(ex['story'])[:300]}")
-            if ex.get("personaNeed"):
-                lines.append(f"   need: {ex['personaNeed']}")
-        lines.append(
-            "\nTo save one, call create_persona again without preview_only, "
-            "folding the chosen candidate's summary into vibe_prompt."
-        )
-        return tool_text("\n".join(lines))
-
-    persona_id = resp.get("personaId", "")
-    name = resp.get("name", "(unnamed)")
-    lines = [f"Persona saved: {name}"]
-    if resp.get("story"):
-        lines.append(str(resp["story"])[:300])
-    if resp.get("personaNeed"):
-        lines.append(f"Need: {resp['personaNeed']}")
+    examples = resp.get("examples") or []
+    lines = [
+        f"{len(examples)} persona preview(s) — directions for the pool's "
+        "distribution, not saved yet. The pool spins off fresh testers along "
+        "the chosen direction at validation time."
+    ]
+    for i, ex in enumerate(examples, start=1):
+        lines.append("")
+        lines.append(f"{i}. {ex.get('name', '(unnamed)')}")
+        if ex.get("vibeSummary"):
+            lines.append(f"   vibe: {ex['vibeSummary']}")
+        if ex.get("story"):
+            lines.append(f"   {str(ex['story'])[:300]}")
+        if ex.get("personaNeed"):
+            lines.append(f"   need: {ex['personaNeed']}")
     lines.append(
-        f"\nUse it in a run: /archetype:validation \"<goal>\" url=<...> persona=\"{name}\""
-        f"\n(id for tool calls only, not for display: {persona_id})"
+        "\nTo save one as a pool, call create_pool again without "
+        "preview_only, folding the chosen candidate's summary into "
+        "vibe_prompt (and passing its name as name)."
     )
+    return tool_text("\n".join(lines))
+
+
+def _save_pool(
+    arguments: dict[str, Any], vibe_prompt: str, controls: dict[str, Any]
+) -> dict[str, Any]:
+    """Save a pool: spec preset -> empty pool -> display-name rename.
+
+    The sequence is non-atomic on purpose (no new backend endpoints): a
+    failure at step 2 leaves an orphaned preset (benign — its reference
+    persona is unattached and invisible to pool listings); a failure at
+    step 3 leaves a working pool under an auto-generated ``Pool_<hex>`` name.
+    """
+    explicit_name = (arguments.get("name") or "").strip()
+
+    # Step 1/3 — persist the distribution spec (a customized preset plus one
+    # reference persona; distributions are derived from the generated sample).
+    custom_body: dict[str, Any] = {"mode": "vibe", "vibePrompt": vibe_prompt}
+    if controls:
+        custom_body["controls"] = controls
+    if arguments.get("product_description"):
+        custom_body["productDescription"] = arguments["product_description"]
+    if explicit_name:
+        custom_body["archetypeName"] = explicit_name
+
+    result = authed_call(
+        lambda token: backend_post(
+            "/api/persona/custom",
+            custom_body,
+            auth_token=token,
+            timeout=PERSONA_TIMEOUT,
+        )
+    )
+    if result is None:
+        return not_connected()
+    status, resp = result
+    if not (200 <= status < 300):
+        return backend_error_text(status, resp)
+
+    reference = resp.get("persona") or {}
+    reference_id = reference.get("personaId")
+    if not reference_id:
+        return tool_text(
+            "Pool creation failed: the backend saved the spec but returned no "
+            "reference persona id. Retry create_pool.",
+            is_error=True,
+        )
+
+    # Pool display name: the explicit arg wins; otherwise the server-derived
+    # vibe summary; otherwise the reference persona's generated name.
+    vibe_summary = (reference.get("vibePromptSummary") or "").strip()
+    if explicit_name:
+        pool_name = explicit_name
+    elif vibe_summary:
+        pool_name = vibe_summary
+    else:
+        pool_name = reference.get("name") or "Custom Archetype"
+    description = vibe_prompt[:POOL_DESCRIPTION_LIMIT]
+
+    # Step 2/3 — create the EMPTY pool linked to the spec. The reference
+    # persona carries a custom_persona_id, so the backend stores it as
+    # metadata.selected_custom_persona_ids and attaches NO members; testers
+    # are spun off from the spec at validation time.
+    pool_body = {
+        "selectedPersonaIds": [reference_id],
+        "archetypeName": pool_name,
+        "description": description,
+    }
+    result = authed_call(
+        lambda token: backend_post(
+            "/api/persona/pool/create",
+            pool_body,
+            auth_token=token,
+            timeout=PERSONA_TIMEOUT,
+        )
+    )
+    if result is None:
+        return not_connected()
+    status, resp = result
+    if not (200 <= status < 300):
+        return tool_text(
+            f"Pool creation failed while creating the pool: "
+            f"{backend_error_message(status, resp)}\n"
+            "No pool exists yet; the saved spec's reference persona is "
+            "unattached and harmless. Retry create_pool.",
+            is_error=True,
+        )
+    pool_id = resp.get("personaPoolId", "")
+
+    # Step 3/3 — the create route hard-codes the pool's name to Pool_<hex>;
+    # PATCH the display name (the route only recognizes the body key "name").
+    rename_error = ""
+    result = authed_call(
+        lambda token: backend_patch(
+            f"/api/persona/pools/{pool_id}",
+            {"name": pool_name, "description": description},
+            auth_token=token,
+        )
+    )
+    if result is None:
+        rename_error = "not connected"
+    else:
+        status, resp = result
+        if not (200 <= status < 300):
+            rename_error = backend_error_message(status, resp)
+
+    if rename_error:
+        lines = [
+            f"Persona pool saved, but renaming it to \"{pool_name}\" failed "
+            f"({rename_error}). The pool is fully usable under its "
+            "auto-generated Pool_<hex> name — rename it in the portal, or "
+            "target it by its id in the meantime."
+        ]
+    else:
+        lines = [f"Persona pool saved: {pool_name}"]
+    if vibe_summary:
+        lines.append(f"Spec: {vibe_summary}")
+    lines.append(
+        "Members: 0 — fresh testers are spun off from this pool's "
+        "distribution at validation time; each run adds one."
+    )
+    if rename_error:
+        lines.append(f"\n(id for tool calls only, not for display: {pool_id})")
+    else:
+        lines.append(
+            f"\nUse it in a run: /archetype:validation \"<goal>\" url=<...> "
+            f"pool=\"{pool_name}\""
+            f"\n(id for tool calls only, not for display: {pool_id})"
+        )
     return tool_text("\n".join(lines))
 
 
@@ -1054,8 +1221,10 @@ TOOLS: dict[str, dict[str, Any]] = {
         "description": (
             "Start an Archetype validation run: assembles a persona-enriched "
             "instruction set (brief, persona card, scenarios, conduct rules, "
-            "reporting contract) for the product under test. Renders everything "
-            "as guidance the actor should follow verbatim."
+            "reporting contract) for the product under test. With pool_id, the "
+            "backend spins off one fresh tester from that persona pool and the "
+            "run executes as them. Renders everything as guidance the actor "
+            "should follow verbatim."
         ),
         "schema": {
             "type": "object",
@@ -1072,11 +1241,13 @@ TOOLS: dict[str, dict[str, Any]] = {
                     "type": "string",
                     "description": "The product URL under test.",
                 },
-                "persona_id": {
+                "pool_id": {
                     "type": "string",
                     "description": (
-                        "Optional personaId (from list_personas) to run AS that "
-                        "persona instead of the replay-derived one."
+                        "Optional poolId (from list_pools) to run AS a fresh "
+                        "member spun off from that pool's distribution, "
+                        "instead of the replay-derived persona. Spinning off "
+                        "adds up to ~a minute before the run starts."
                     ),
                 },
             },
@@ -1145,21 +1316,22 @@ TOOLS: dict[str, dict[str, Any]] = {
         "schema": {"type": "object", "properties": {}, "required": []},
         "handler": handle_status,
     },
-    "list_personas": {
+    "list_pools": {
         "description": (
-            "List the user's personas (replay-derived, vibe, custom) with "
-            "personaId, source, occupation, and story. A personaId can be "
-            "passed to start_run to run AS that persona."
+            "List the user's persona pools with name, description, member "
+            "count, and created date. A poolId can be passed to start_run to "
+            "run AS a fresh member spun off from that pool."
         ),
         "schema": {"type": "object", "properties": {}, "required": []},
-        "handler": handle_list_personas,
+        "handler": handle_list_pools,
     },
-    "create_persona": {
+    "create_pool": {
         "description": (
-            "Create a persona from a natural-language vibe prompt (plus "
+            "Create a persona pool from a natural-language vibe prompt (plus "
             "optional demographic controls). With preview_only=true, returns "
-            "unsaved candidate personas to choose a direction from; without "
-            "it, generates and SAVES the persona and returns its personaId."
+            "unsaved candidate directions to choose from; without it, SAVES "
+            "the distribution spec as an EMPTY pool (fresh testers are spun "
+            "off at validation time) and returns its poolId."
         ),
         "schema": {
             "type": "object",
@@ -1167,8 +1339,15 @@ TOOLS: dict[str, dict[str, Any]] = {
                 "vibe_prompt": {
                     "type": "string",
                     "description": (
-                        "Natural-language description of the persona: who they "
-                        "are, how they behave, what they care about."
+                        "Natural-language description of the pool's testers: "
+                        "who they are, how they behave, what they care about."
+                    ),
+                },
+                "name": {
+                    "type": "string",
+                    "description": (
+                        "Optional display name for the pool (the archetype "
+                        "name). Defaults to the server-derived vibe summary."
                     ),
                 },
                 "age_range": {
@@ -1189,7 +1368,7 @@ TOOLS: dict[str, dict[str, Any]] = {
                     "type": "string",
                     "description": (
                         "Optional one-line description of the product, used to "
-                        "derive the persona's need."
+                        "derive the testers' need."
                     ),
                 },
                 "preview_only": {
@@ -1203,7 +1382,7 @@ TOOLS: dict[str, dict[str, Any]] = {
             },
             "required": ["vibe_prompt"],
         },
-        "handler": handle_create_persona,
+        "handler": handle_create_pool,
     },
     "create_feature": {
         "description": (
