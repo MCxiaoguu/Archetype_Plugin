@@ -11,7 +11,7 @@
 #       this script only probes that they are up.
 
 BACKEND_DIR="/Users/hanyanggu/Personal_Files/Coding/Archetype_all/Archetype_Core/Archetype_Backend"
-DEMO_SERVE="/Users/hanyanggu/Personal_Files/Coding/Archetype_all/Archetype_Plugins/demo-app/serve.sh"
+DEMO_SERVE="/Users/hanyanggu/Personal_Files/Coding/Archetype_all/Archetype_Plugins/demo-apps/lumina-notes/serve.sh"
 
 fail=0
 pass() { echo "PASS  $1"; }

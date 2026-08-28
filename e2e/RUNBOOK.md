@@ -57,7 +57,7 @@ BE=/Users/hanyanggu/Personal_Files/Coding/Archetype_all/Archetype_Core/Archetype
 ```bash
 cd "$BE" && nohup uv run python app.py > /tmp/e2e_backend.log 2>&1 &
 echo $! > /tmp/e2e_backend.pid
-sh "$PL/demo-app/serve.sh" &
+sh "$PL/demo-apps/lumina-notes/serve.sh" &
 echo $! > /tmp/e2e_demo.pid
 # Wait ~10–12 s (Atlas index init), then confirm health:
 curl -s http://localhost:5001/health          # → {"status":"ok"}
