@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Create your account — Relay</title>
+  <meta name="description" content="Create your free Relay account and start monitoring your APIs in minutes." />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <!-- Top navigation -->
+  <nav class="nav">
+    <div class="nav-inner">
+      <a class="brand" href="index.html">
+        <svg class="brand-mark" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <rect width="28" height="28" rx="7" fill="url(#lg-nav)"/>
+          <path d="M5 15.5h4.2l2.3-6.5 3.6 10 2.4-6.5H23" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          <defs>
+            <linearGradient id="lg-nav" x1="0" y1="0" x2="28" y2="28" gradientUnits="userSpaceOnUse">
+              <stop stop-color="#8b6bff"/><stop offset="1" stop-color="#5b3fd6"/>
+            </linearGradient>
+          </defs>
+        </svg>
+        Relay
+      </a>
+      <ul class="nav-links">
+        <li><a class="nav-link" href="docs.html">Docs</a></li>
+        <li><a class="nav-link" href="pricing.html">Pricing</a></li>
+      </ul>
+    </div>
+  </nav>
+
+  <main class="form-page">
+    <div class="form-card">
+      <h1>Create your account</h1>
+      <p class="form-sub">Start on the Free plan — 10,000 events a month, one seat, upgrade whenever you're ready.</p>
+
+      <form id="signup-form" novalidate>
+        <div class="form-group">
+          <label class="form-label" for="su-name">Full name</label>
+          <input class="form-input" id="su-name" type="text" placeholder="Ada Lindqvist" autocomplete="name" />
+          <p class="field-error" id="su-name-error"></p>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="su-email">Work email</label>
+          <input class="form-input" id="su-email" type="email" placeholder="ada@company.com" autocomplete="email" />
+          <p class="field-error" id="su-email-error"></p>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="su-password">Password</label>
+          <input class="form-input" id="su-password" type="password" placeholder="At least 8 characters" autocomplete="new-password" />
+          <p class="field-error" id="su-password-error"></p>
+        </div>
+
+        <div class="form-divider">Payment details</div>
+
+        <div class="form-group">
+          <label class="form-label" for="su-card">Card number</label>
+          <input class="form-input mono" id="su-card" type="text" inputmode="numeric" placeholder="4242 4242 4242 4242" autocomplete="cc-number" />
+          <p class="field-error" id="su-card-error"></p>
+        </div>
+
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label" for="su-expiry">Expiry</label>
+            <input class="form-input mono" id="su-expiry" type="text" inputmode="numeric" placeholder="MM/YY" autocomplete="cc-exp" />
+            <p class="field-error" id="su-expiry-error"></p>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="su-cvc">CVC</label>
+            <input class="form-input mono" id="su-cvc" type="text" inputmode="numeric" placeholder="123" autocomplete="cc-csc" />
+            <p class="field-error" id="su-cvc-error"></p>
+          </div>
+        </div>
+
+        <label class="form-check">
+          <input type="checkbox" id="su-tos" />
+          <span>I agree to the <a href="security.html#terms">Terms of Service</a> and <a href="security.html#privacy">Privacy Policy</a>.</span>
+        </label>
+        <p class="field-error" id="su-tos-error">Please accept the terms to continue.</p>
+
+        <button class="btn btn-primary btn-lg btn-block" type="submit">Create account</button>
+      </form>
+
+      <p class="form-foot">Questions before you start? <a href="docs.html">Read the docs</a> or <a href="pricing.html">compare plans</a>.</p>
+    </div>
+  </main>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <div class="container">
+      <div class="footer-bottom" style="border-top:none;padding-top:0;">
+        <span>&copy; <span id="year">2026</span> Relay Systems, Inc.</span>
+        <span><a href="security.html" style="color:var(--text-faint);">Security</a> &nbsp;·&nbsp; <a href="security.html#terms" style="color:var(--text-faint);">Terms</a> &nbsp;·&nbsp; <a href="security.html#privacy" style="color:var(--text-faint);">Privacy</a></span>
+      </div>
+    </div>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>

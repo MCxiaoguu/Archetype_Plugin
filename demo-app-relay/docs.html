@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Quickstart — Relay Docs</title>
+  <meta name="description" content="Get your first Relay event flowing in under five minutes. Install the SDK, initialize it in your service, and send your first event." />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <!-- Top navigation -->
+  <nav class="nav">
+    <div class="nav-inner">
+      <a class="brand" href="index.html">
+        <svg class="brand-mark" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <rect width="28" height="28" rx="7" fill="url(#lg-nav)"/>
+          <path d="M5 15.5h4.2l2.3-6.5 3.6 10 2.4-6.5H23" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          <defs>
+            <linearGradient id="lg-nav" x1="0" y1="0" x2="28" y2="28" gradientUnits="userSpaceOnUse">
+              <stop stop-color="#8b6bff"/><stop offset="1" stop-color="#5b3fd6"/>
+            </linearGradient>
+          </defs>
+        </svg>
+        Relay
+      </a>
+      <ul class="nav-links">
+        <li><a class="nav-link active" href="docs.html">Docs</a></li>
+        <li><a class="nav-link" href="pricing.html">Pricing</a></li>
+        <li><a class="nav-link" id="nav-signin" href="signup.html">Sign in</a></li>
+        <li><a class="nav-cta" href="signup.html">Start monitoring — free</a></li>
+      </ul>
+    </div>
+  </nav>
+
+  <div class="docs-layout">
+    <!-- Sidebar -->
+    <aside class="docs-sidebar">
+      <div class="docs-search">
+        <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+        <input id="docs-search-input" type="search" placeholder="Search docs…" autocomplete="off" aria-label="Search documentation" />
+        <div id="docs-search-results" class="search-results hidden" role="status"></div>
+      </div>
+      <nav class="docs-nav">
+        <h4>Getting started</h4>
+        <a href="#install" class="active">1. Install the SDK</a>
+        <a href="#init">2. Initialize</a>
+        <a href="#first-event">3. Send your first event</a>
+        <a href="#invite">4. Invite your team</a>
+        <h4>Guides</h4>
+        <a href="#guide-alerting">Alerting basics</a>
+        <a href="#guide-timelines">Incident timelines</a>
+        <a href="#guide-uptime">Uptime checks</a>
+      </nav>
+    </aside>
+
+    <!-- Content -->
+    <main class="docs-content">
+      <h1>Quickstart</h1>
+      <p class="docs-lede">Get your first event flowing in under five minutes. This guide covers the Node.js SDK; Python and Go SDKs are in beta and follow the same shape.</p>
+
+      <h2 id="install"><span class="step-tag">Step 1</span>Install the SDK</h2>
+      <p>Relay ships as a single npm package with zero runtime dependencies. It supports Node.js 18 and later, in both CommonJS and ESM projects.</p>
+      <div class="code-block">
+        <div class="code-head"><span>terminal</span><button class="code-copy" type="button">Copy</button></div>
+        <pre><span class="tok-com"># npm</span>
+npm install @relay/sdk
+
+<span class="tok-com"># yarn</span>
+yarn add @relay/sdk</pre>
+      </div>
+      <p>The SDK adds under 40&nbsp;KB to your bundle and does all event buffering off the main event loop, so it will not add measurable latency to your request path.</p>
+
+      <h2 id="init"><span class="step-tag">Step 2</span>Initialize</h2>
+      <p>Call <code>Relay.init()</code> once, as early as possible in your service's startup — before your HTTP server starts accepting traffic.</p>
+      <div class="code-block">
+        <div class="code-head"><span>src/relay.js</span><button class="code-copy" type="button">Copy</button></div>
+        <pre><span class="tok-kw">const</span> Relay = <span class="tok-fn">require</span>(<span class="tok-str">'@relay/sdk'</span>);
+
+Relay.<span class="tok-fn">init</span>({ <span class="tok-prop">token</span>: process.env.RELAY_TOKEN });</pre>
+      </div>
+      <p>You can optionally pass a service name and environment. If you skip them, Relay infers the service name from your <code>package.json</code> and defaults the environment to <code>production</code>.</p>
+      <div class="code-block">
+        <div class="code-head"><span>src/relay.js — with options</span><button class="code-copy" type="button">Copy</button></div>
+        <pre>Relay.<span class="tok-fn">init</span>({
+  <span class="tok-prop">token</span>: process.env.RELAY_TOKEN,
+  <span class="tok-prop">service</span>: <span class="tok-str">'checkout-api'</span>,
+  <span class="tok-prop">environment</span>: <span class="tok-str">'production'</span>,
+});</pre>
+      </div>
+      <div class="callout">
+        <span>🔒</span>
+        <div><strong>Keep your token secret.</strong> Load it from an environment variable or your secrets manager — never commit it to source control.</div>
+      </div>
+
+      <h2 id="first-event"><span class="step-tag">Step 3</span>Send your first event</h2>
+      <p>The fastest way to verify your setup is to track a custom event. Events show up in your dashboard within a few seconds.</p>
+      <div class="code-block">
+        <div class="code-head"><span>src/index.js</span><button class="code-copy" type="button">Copy</button></div>
+        <pre>Relay.<span class="tok-fn">track</span>(<span class="tok-str">'deploy.finished'</span>, {
+  <span class="tok-prop">version</span>: <span class="tok-str">'2.14.0'</span>,
+  <span class="tok-prop">region</span>: <span class="tok-str">'us-east-1'</span>,
+});</pre>
+      </div>
+      <p>For Express apps, mount the middleware and Relay will automatically capture latency, status codes, and throughput for every route — no per-route instrumentation needed:</p>
+      <div class="code-block">
+        <div class="code-head"><span>src/index.js — Express</span><button class="code-copy" type="button">Copy</button></div>
+        <pre><span class="tok-kw">const</span> express = <span class="tok-fn">require</span>(<span class="tok-str">'express'</span>);
+<span class="tok-kw">const</span> app = <span class="tok-fn">express</span>();
+
+app.<span class="tok-fn">use</span>(Relay.<span class="tok-fn">middleware</span>());
+
+app.<span class="tok-fn">get</span>(<span class="tok-str">'/health'</span>, (req, res) =&gt; res.<span class="tok-fn">json</span>({ <span class="tok-prop">ok</span>: <span class="tok-kw">true</span> }));
+
+app.<span class="tok-fn">listen</span>(<span class="tok-num">3000</span>);</pre>
+      </div>
+      <p>Once the first event arrives, your service appears under <strong>Events</strong> in the dashboard and Relay begins building latency baselines for anomaly detection. Baselines stabilize after roughly 24 hours of traffic.</p>
+
+      <h2 id="invite"><span class="step-tag">Step 4</span>Invite your team</h2>
+      <p>Monitoring is a team sport — alerts are only useful if they reach whoever owns the failing service.</p>
+      <ol>
+        <li>Open <strong>Settings → Team</strong> in your dashboard.</li>
+        <li>Enter your teammates' email addresses (comma-separated works).</li>
+        <li>Assign each person a role: <strong>Admin</strong>, <strong>Member</strong>, or <strong>Viewer</strong>.</li>
+      </ol>
+      <p>Invited teammates get a magic-link email and land directly in your workspace. On the Free plan you get one seat; Pro workspaces can invite unlimited teammates.</p>
+
+      <h2 id="guide-alerting">Alerting basics</h2>
+      <p>Relay builds a per-endpoint baseline from your traffic and alerts on deviations — latency, error rate, or throughput. There is no single global threshold to tune. Alert rules live under <strong>Alerts</strong> in the dashboard and can route to Slack, PagerDuty, or any webhook URL.</p>
+      <p>Every alert carries a link to the exact chart window that triggered it, plus the three most recent deploys to the affected service. Alert dedup collapses repeated firings of the same rule into one incident.</p>
+
+      <h2 id="guide-timelines">Incident timelines</h2>
+      <p>When an alert opens an incident, Relay starts a timeline automatically: the triggering anomaly, related deploys, config changes, and every subsequent alert are appended in order. Teammates can pin notes to the timeline during the incident, and the whole thing exports to Markdown for your postmortem.</p>
+
+      <h2 id="guide-uptime">Uptime checks</h2>
+      <p>Synthetic checks probe your public endpoints from 12 regions at intervals from 30 seconds to 15 minutes. A check fails when the response status, latency budget, or body assertion you configured is violated from two or more regions simultaneously — single-region blips are recorded but do not page anyone.</p>
+    </main>
+  </div>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <div class="container">
+      <div class="footer-grid">
+        <div class="footer-brand">
+          <a class="brand" href="index.html">
+            <svg class="brand-mark" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+              <rect width="28" height="28" rx="7" fill="url(#lg-foot)"/>
+              <path d="M5 15.5h4.2l2.3-6.5 3.6 10 2.4-6.5H23" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+              <defs>
+                <linearGradient id="lg-foot" x1="0" y1="0" x2="28" y2="28" gradientUnits="userSpaceOnUse">
+                  <stop stop-color="#8b6bff"/><stop offset="1" stop-color="#5b3fd6"/>
+                </linearGradient>
+              </defs>
+            </svg>
+            Relay
+          </a>
+          <p>API monitoring with incident timelines built in. Made in Brooklyn &amp; Berlin.</p>
+        </div>
+        <div class="footer-col">
+          <h4>Product</h4>
+          <ul>
+            <li><a href="index.html#features">Features</a></li>
+            <li><a href="index.html#how">How it works</a></li>
+            <li><a href="pricing.html">Pricing</a></li>
+            <li><a href="docs.html">Docs</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <h4>Resources</h4>
+          <ul>
+            <li><a href="docs.html#install">Quickstart</a></li>
+            <li><a href="docs.html#guide-alerting">Alerting guide</a></li>
+            <li><a href="security.html">Security</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <h4>Legal</h4>
+          <ul>
+            <li><a href="security.html#terms">Terms of Service</a></li>
+            <li><a href="security.html#privacy">Privacy Policy</a></li>
+          </ul>
+        </div>
+      </div>
+      <div class="footer-bottom">
+        <span>&copy; <span id="year">2026</span> Relay Systems, Inc.</span>
+        <span class="footer-status">All systems operational</span>
+      </div>
+    </div>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>

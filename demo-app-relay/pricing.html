@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Pricing — Relay</title>
+  <meta name="description" content="Simple pricing that scales with your team. Start free, upgrade when you need more events, seats, and retention." />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <!-- Top navigation -->
+  <nav class="nav">
+    <div class="nav-inner">
+      <a class="brand" href="index.html">
+        <svg class="brand-mark" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <rect width="28" height="28" rx="7" fill="url(#lg-nav)"/>
+          <path d="M5 15.5h4.2l2.3-6.5 3.6 10 2.4-6.5H23" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          <defs>
+            <linearGradient id="lg-nav" x1="0" y1="0" x2="28" y2="28" gradientUnits="userSpaceOnUse">
+              <stop stop-color="#8b6bff"/><stop offset="1" stop-color="#5b3fd6"/>
+            </linearGradient>
+          </defs>
+        </svg>
+        Relay
+      </a>
+      <ul class="nav-links">
+        <li><a class="nav-link" href="docs.html">Docs</a></li>
+        <li><a class="nav-link active" href="pricing.html">Pricing</a></li>
+        <li><a class="nav-link" id="nav-signin" href="signup.html">Sign in</a></li>
+        <li><a class="nav-cta" href="signup.html">Start monitoring — free</a></li>
+      </ul>
+    </div>
+  </nav>
+
+  <main class="section">
+    <div class="container">
+      <div class="center">
+        <p class="section-kicker">Pricing</p>
+        <h1 class="section-title">Start free. Scale when your traffic does.</h1>
+        <p class="section-sub">Every plan includes uptime checks, incident timelines, and alerting. Pricing is per seat — events are pooled across your whole workspace.</p>
+      </div>
+
+      <div class="pricing-grid">
+        <!-- Free -->
+        <div class="plan">
+          <h3 class="plan-name">Free</h3>
+          <p class="plan-desc">For side projects and trying Relay out on one service.</p>
+          <div class="plan-price">$0<span class="per"> /mo</span></div>
+          <p class="plan-price-note">Free forever</p>
+          <ul class="plan-features">
+            <li>10,000 events / month</li>
+            <li>3 uptime monitors</li>
+            <li>1 seat</li>
+            <li>24-hour data retention</li>
+            <li>Email alerts</li>
+            <li>Community support</li>
+          </ul>
+          <a class="btn btn-ghost btn-block" href="signup.html">Start for free</a>
+        </div>
+
+        <!-- Pro -->
+        <div class="plan featured">
+          <span class="plan-badge">Most popular</span>
+          <h3 class="plan-name">Pro</h3>
+          <p class="plan-desc">For teams running production APIs that people depend on.</p>
+          <div class="plan-price">$29<span class="per"> /seat/mo</span></div>
+          <p class="plan-price-note">Billed monthly, per seat</p>
+          <ul class="plan-features">
+            <li>1M events / month, pooled</li>
+            <li>Unlimited uptime monitors</li>
+            <li>Unlimited seats</li>
+            <li>90-day data retention</li>
+            <li>Slack, PagerDuty &amp; webhook alerts</li>
+            <li>Incident timeline exports</li>
+            <li>Priority support</li>
+          </ul>
+          <a class="btn btn-primary btn-block" href="signup.html">Start with Pro</a>
+        </div>
+
+        <!-- Enterprise -->
+        <div class="plan">
+          <h3 class="plan-name">Enterprise</h3>
+          <p class="plan-desc">For organizations with compliance, scale, or procurement needs.</p>
+          <div class="plan-price">Contact us</div>
+          <p class="plan-price-note">Custom pricing</p>
+          <ul class="plan-features">
+            <li>Custom event volume</li>
+            <li>SAML SSO &amp; SCIM</li>
+            <li>Audit logs</li>
+            <li>Custom data retention</li>
+            <li>99.99% uptime SLA</li>
+            <li>Dedicated success engineer</li>
+          </ul>
+          <a class="btn btn-ghost btn-block" href="mailto:sales@relaymonitor.io?subject=Enterprise%20inquiry">Contact sales</a>
+        </div>
+      </div>
+
+      <!-- Annual -->
+      <div class="annual-row">
+        <div>
+          <h3>Paying annually?</h3>
+          <p>Talk to sales for annual discounts — we'll put together a quote for your team size.</p>
+        </div>
+        <button class="btn btn-primary" id="book-demo-btn" type="button">Book a demo</button>
+      </div>
+
+      <!-- FAQ -->
+      <div class="faq">
+        <h2 class="section-title center" style="margin-bottom:32px;">Frequently asked questions</h2>
+        <div class="faq-item">
+          <h3>What counts as an event?</h3>
+          <p>One tracked request, one custom <code style="font-family:var(--mono);font-size:.85em;">Relay.track()</code> call, or one synthetic check result. Alerts, timeline entries, and dashboard views are always free.</p>
+        </div>
+        <div class="faq-item">
+          <h3>What happens if I go over my event quota?</h3>
+          <p>We never drop data mid-month. On Free, ingestion pauses until the next cycle; on Pro, overage is billed at $1 per additional 10k events.</p>
+        </div>
+        <div class="faq-item">
+          <h3>Can I change plans at any time?</h3>
+          <p>Yes. Upgrades take effect immediately with prorated billing; downgrades take effect at the end of your current billing cycle.</p>
+        </div>
+        <div class="faq-item">
+          <h3>Do you offer discounts for startups or open source?</h3>
+          <p>Open-source projects get Pro free — email us a link to your repo. Early-stage startups (under $2M raised) get 50% off Pro for the first year.</p>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- Book a demo modal -->
+  <div class="modal-overlay hidden" id="demo-modal" role="dialog" aria-modal="true" aria-labelledby="demo-modal-title">
+    <div class="modal">
+      <button class="modal-close" type="button" aria-label="Close">&times;</button>
+      <form id="demo-form">
+        <h3 id="demo-modal-title">Book a demo</h3>
+        <p>Tell us where to reach you and our sales team will set up a call to walk through annual pricing.</p>
+        <div class="form-group">
+          <label class="form-label" for="demo-email">Work email</label>
+          <input class="form-input" id="demo-email" type="email" placeholder="you@company.com" required />
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="demo-size">Team size</label>
+          <input class="form-input" id="demo-size" type="text" placeholder="e.g. 12 engineers" />
+        </div>
+        <button class="btn btn-primary btn-block" type="submit">Request demo</button>
+      </form>
+      <div class="modal-success hidden" id="demo-success">
+        <div class="big-check">✓</div>
+        <h3>Thanks — we'll be in touch.</h3>
+        <p>Someone from our sales team will reach out within two business days.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <div class="container">
+      <div class="footer-grid">
+        <div class="footer-brand">
+          <a class="brand" href="index.html">
+            <svg class="brand-mark" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+              <rect width="28" height="28" rx="7" fill="url(#lg-foot)"/>
+              <path d="M5 15.5h4.2l2.3-6.5 3.6 10 2.4-6.5H23" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+              <defs>
+                <linearGradient id="lg-foot" x1="0" y1="0" x2="28" y2="28" gradientUnits="userSpaceOnUse">
+                  <stop stop-color="#8b6bff"/><stop offset="1" stop-color="#5b3fd6"/>
+                </linearGradient>
+              </defs>
+            </svg>
+            Relay
+          </a>
+          <p>API monitoring with incident timelines built in. Made in Brooklyn &amp; Berlin.</p>
+        </div>
+        <div class="footer-col">
+          <h4>Product</h4>
+          <ul>
+            <li><a href="index.html#features">Features</a></li>
+            <li><a href="index.html#how">How it works</a></li>
+            <li><a href="pricing.html">Pricing</a></li>
+            <li><a href="docs.html">Docs</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <h4>Resources</h4>
+          <ul>
+            <li><a href="docs.html#install">Quickstart</a></li>
+            <li><a href="docs.html#guide-alerting">Alerting guide</a></li>
+            <li><a href="security.html">Security</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <h4>Legal</h4>
+          <ul>
+            <li><a href="security.html#terms">Terms of Service</a></li>
+            <li><a href="security.html#privacy">Privacy Policy</a></li>
+          </ul>
+        </div>
+      </div>
+      <div class="footer-bottom">
+        <span>&copy; <span id="year">2026</span> Relay Systems, Inc.</span>
+        <span class="footer-status">All systems operational</span>
+      </div>
+    </div>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>

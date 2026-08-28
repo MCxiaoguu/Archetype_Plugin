@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Get set up — Relay</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <!-- Slim top bar -->
+  <nav class="nav">
+    <div class="nav-inner">
+      <a class="brand" href="index.html">
+        <svg class="brand-mark" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <rect width="28" height="28" rx="7" fill="url(#lg-nav)"/>
+          <path d="M5 15.5h4.2l2.3-6.5 3.6 10 2.4-6.5H23" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          <defs>
+            <linearGradient id="lg-nav" x1="0" y1="0" x2="28" y2="28" gradientUnits="userSpaceOnUse">
+              <stop stop-color="#8b6bff"/><stop offset="1" stop-color="#5b3fd6"/>
+            </linearGradient>
+          </defs>
+        </svg>
+        Relay
+      </a>
+      <ul class="nav-links">
+        <li><a class="nav-link" href="docs.html">Docs</a></li>
+        <li><a class="nav-link" href="dashboard.html">Dashboard</a></li>
+      </ul>
+    </div>
+  </nav>
+
+  <main class="onboard-wrap">
+    <div class="onboard-steps">
+      <span class="dot done">✓</span><span>Account</span>
+      <span class="dash"></span>
+      <span class="dot done">2</span><span>First event</span>
+      <span class="dash"></span>
+      <span class="dot">3</span><span>Dashboard</span>
+    </div>
+
+    <h1>Welcome, <span id="onboard-name">there</span> — let's get your first event flowing</h1>
+    <p class="lede">Your workspace is live. Run these two snippets in your service and Relay will pick the rest up automatically.</p>
+
+    <!-- Upgrade banner -->
+    <div class="upgrade-banner">
+      <span>Need more than 10k events and one seat? <strong>Upgrade to Pro — $39/seat/mo.</strong></span>
+      <a class="btn btn-ghost" href="pricing.html">See plans</a>
+    </div>
+
+    <h3 style="font-size:1.05rem;font-weight:700;margin-bottom:8px;">1&nbsp;&nbsp;Install the SDK</h3>
+    <div class="code-block">
+      <div class="code-head"><span>terminal</span><button class="code-copy" type="button">Copy</button></div>
+      <pre>npm install relay-sdk</pre>
+    </div>
+
+    <h3 style="font-size:1.05rem;font-weight:700;margin:26px 0 8px;">2&nbsp;&nbsp;Initialize in your service</h3>
+    <div class="code-block">
+      <div class="code-head"><span>src/relay.js</span><button class="code-copy" type="button">Copy</button></div>
+      <pre><span class="tok-kw">const</span> Relay = <span class="tok-fn">require</span>(<span class="tok-str">'@relay/sdk'</span>);
+
+Relay.<span class="tok-fn">init</span>({ <span class="tok-prop">token</span>: process.env.RELAY_TOKEN });</pre>
+    </div>
+
+    <div class="waiting-box" aria-live="polite">
+      <span class="spinner" aria-hidden="true"></span>
+      <span>Waiting for your first event… This page updates automatically once your service sends data.</span>
+    </div>
+
+    <a class="skip-link" href="dashboard.html">Skip for now &rarr;</a>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
