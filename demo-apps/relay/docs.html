@@ -102,6 +102,14 @@ Relay.<span class="tok-fn">init</span>({ <span class="tok-prop">token</span>: pr
   <span class="tok-prop">region</span>: <span class="tok-str">'us-east-1'</span>,
 });</pre>
       </div>
+      <p>You can also send an event straight from your terminal with <code>curl</code>:</p>
+      <div class="code-block">
+        <div class="code-head"><span>terminal</span><button class="code-copy" type="button">Copy</button></div>
+        <pre>curl -X POST http://localhost:8322/api/events \
+  -H <span class="tok-str">"Authorization: Bearer $RELAY_TOKEN"</span> \
+  -H <span class="tok-str">"Content-Type: application/json"</span> \
+  -d <span class="tok-str">'{"name": "deploy.finished", "service": "checkout-api", "status": 200}'</span></pre>
+      </div>
       <p>For Express apps, mount the middleware and Relay will automatically capture latency, status codes, and throughput for every route — no per-route instrumentation needed:</p>
       <div class="code-block">
         <div class="code-head"><span>src/index.js — Express</span><button class="code-copy" type="button">Copy</button></div>

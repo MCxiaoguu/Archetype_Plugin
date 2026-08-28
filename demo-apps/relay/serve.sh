@@ -1,2 +1,2 @@
 #!/bin/sh
-cd "$(dirname "$0")" && exec python3 -m http.server 8322
+cd "$(dirname "$0")" && exec python3 server.py
