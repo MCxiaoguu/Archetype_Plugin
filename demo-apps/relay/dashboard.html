@@ -49,6 +49,7 @@
           <div class="side-user-meta">
             <div class="n" id="dash-user-name">User</div>
             <div class="e" id="dash-user-email">user@example.com</div>
+            <div class="p hidden" id="dash-user-plan"></div>
           </div>
         </div>
         <button class="signout-btn" id="signout-btn" type="button">Sign out</button>
@@ -59,6 +60,7 @@
     <main class="app-main">
       <div class="app-header">
         <h1 id="app-title">Events</h1>
+        <span class="plan-tag hidden" id="dash-plan-tag"></span>
         <span class="env-tag">production</span>
       </div>
 
@@ -100,6 +102,14 @@
             </tr>
           </tbody>
         </table>
+
+        <div class="incident-detail hidden" id="incident-detail">
+          <div class="incident-detail-head">
+            <h3 id="incident-detail-title">—</h3>
+            <span class="status-pill down">Open</span>
+          </div>
+          <ol class="incident-timeline" id="incident-timeline"></ol>
+        </div>
       </section>
 
       <!-- Alerts -->
@@ -119,6 +129,26 @@
             </tr>
           </tbody>
         </table>
+
+        <div class="rules-panel hidden" id="alert-rules-panel">
+          <h3>Alert Rules</h3>
+          <p class="rules-sub">Create a rule to get notified when an endpoint misbehaves.</p>
+          <div class="form-group">
+            <label class="form-label" for="rule-endpoint">Endpoint</label>
+            <select class="form-input" id="rule-endpoint"></select>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="rule-threshold">Threshold</label>
+            <input class="form-input mono" id="rule-threshold" type="text" />
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="rule-channel">Notification channel</label>
+            <select class="form-input" id="rule-channel">
+              <option value="Email">Email</option>
+            </select>
+          </div>
+          <button class="btn btn-primary" id="rule-save-btn" type="button">Save rule</button>
+        </div>
       </section>
 
       <!-- Settings -->

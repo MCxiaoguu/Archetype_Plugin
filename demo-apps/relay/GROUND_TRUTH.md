@@ -41,3 +41,36 @@ Serve locally: `sh serve.sh` → http://localhost:8322
 4. **D5** — search fails on terms visibly present in the docs; users assume the docs are empty.
 5. **D6** — a $10/seat discrepancy between onboarding and pricing erodes pricing trust.
 6. **D7** — annual buyers are forced into a sales funnel that visibly goes nowhere.
+
+## Debug mode (founder-style authenticated testing)
+
+A sign-in path for exercising the authenticated surfaces with realistic data. **D1–D7 and all
+cold-funnel behavior are unchanged** — a cold signup still lands on the exact D4 empty
+dashboard, and no page copy, pricing, docs, or signup behavior was touched.
+
+- **Sign-in page**: `signin.html`. The top-nav "Sign in" link on `index.html`, `docs.html`,
+  `pricing.html`, and `security.html` now points here (it previously pointed at
+  `signup.html`). Any credential other than the debug one shows an inline
+  "Invalid email or password." — that is standard behavior, **not** a planted defect.
+- **Debug credential**: `founder@relay.dev` / `relay-debug-2026`. Successful sign-in seeds
+  localStorage (`relay:user`, `relay:events`, `relay:incidents`, `relay:alert-rules`) with:
+  - Account **Dana Founder**, plan **"Pro trial — 14 days left"** — shown in the dashboard
+    header tag, the sidebar user meta, and Settings → Plan.
+  - **12 events** across 3 endpoints (`checkout-api`, `auth-api`, `webhooks`) with
+    timestamps, latencies, and status codes — rendered in the Events table.
+  - **One open incident** — "Elevated 5xx on checkout-api" — with a 4-entry timeline,
+    rendered under Incidents (table row + timeline card).
+  - **One alert rule** — `checkout-api  >1% 5xx / 10m  → Email` — listed under Alerts.
+- **Alert Rules surface** (debug account only): the Alerts tab gains the rule list plus a
+  "New alert rule" form — endpoint selector (populated from the seeded endpoints), threshold
+  input, notification-channel dropdown, and a Save button. Saved rules append to the list
+  and persist. Sign out clears the seeded data along with the session.
+- For **non-debug accounts** (i.e. anyone from the cold signup funnel) none of this renders:
+  the Events/Incidents/Alerts tabs stay exactly as bare as D4 describes.
+
+### Additional planted defects (debug mode only)
+
+| ID | Defect | Where |
+|----|--------|-------|
+| D8 | The alert-rule **threshold input only accepts the cryptic format `>N/Nm`** (e.g. `>500/5m`). There is no placeholder, no hint, and no error message — with any other format the Save button clicks and silently does nothing. | `dashboard.html` — `#rule-threshold` inside `#alert-rules-panel` (Alerts tab, debug account). Silent validation in `app.js` ("Alert rules" block: `/^>\d+\/\d+m$/` guard returns without feedback). |
+| D9 | The **notification-channel dropdown offers ONLY "Email"**, while the landing page promises "Alerts route to Slack, PagerDuty, or plain webhooks" (How-it-works step 03) and pricing lists "Slack, PagerDuty & webhook alerts". | `dashboard.html` — `#rule-channel` inside `#alert-rules-panel` (single `<option>Email</option>`). Contradicts `index.html` step 03 and `pricing.html` Pro features. |

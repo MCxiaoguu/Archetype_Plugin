@@ -6,22 +6,80 @@
   "use strict";
 
   var STORE_USER = "relay:user";
+  var STORE_EVENTS = "relay:events";
+  var STORE_INCIDENTS = "relay:incidents";
+  var STORE_RULES = "relay:alert-rules";
 
-  function getUser() {
+  function getJSON(key) {
     try {
-      var raw = localStorage.getItem(STORE_USER);
+      var raw = localStorage.getItem(key);
       return raw ? JSON.parse(raw) : null;
     } catch (e) {
       return null;
     }
   }
 
+  function setJSON(key, value) {
+    localStorage.setItem(key, JSON.stringify(value));
+  }
+
+  function getUser() {
+    return getJSON(STORE_USER);
+  }
+
   function setUser(user) {
-    localStorage.setItem(STORE_USER, JSON.stringify(user));
+    setJSON(STORE_USER, user);
   }
 
   function clearUser() {
     localStorage.removeItem(STORE_USER);
+    localStorage.removeItem(STORE_EVENTS);
+    localStorage.removeItem(STORE_INCIDENTS);
+    localStorage.removeItem(STORE_RULES);
+  }
+
+  /* ---------- Debug workspace seed (founder sign-in) ---------- */
+  function minutesAgo(n) {
+    return new Date(Date.now() - n * 60000).toISOString();
+  }
+
+  function seedDebugWorkspace() {
+    setUser({
+      name: "Dana Founder",
+      email: "founder@relay.dev",
+      plan: "Pro trial — 14 days left",
+      debug: true,
+      createdAt: new Date().toISOString()
+    });
+    setJSON(STORE_EVENTS, [
+      { at: minutesAgo(2),  name: "POST /v2/charge",    service: "checkout-api", region: "us-east-1", latencyMs: 1840, status: 503 },
+      { at: minutesAgo(4),  name: "POST /v2/charge",    service: "checkout-api", region: "us-east-1", latencyMs: 1512, status: 502 },
+      { at: minutesAgo(5),  name: "GET /v2/orders",     service: "checkout-api", region: "eu-west-1", latencyMs: 212,  status: 200 },
+      { at: minutesAgo(7),  name: "POST /v2/charge",    service: "checkout-api", region: "us-east-1", latencyMs: 1930, status: 502 },
+      { at: minutesAgo(9),  name: "POST /v2/token",     service: "auth-api",     region: "us-east-1", latencyMs: 86,   status: 200 },
+      { at: minutesAgo(12), name: "GET /v2/session",    service: "auth-api",     region: "eu-west-1", latencyMs: 64,   status: 200 },
+      { at: minutesAgo(15), name: "POST /hooks/stripe", service: "webhooks",     region: "us-east-1", latencyMs: 145,  status: 201 },
+      { at: minutesAgo(18), name: "GET /v2/orders",     service: "checkout-api", region: "us-east-1", latencyMs: 189,  status: 200 },
+      { at: minutesAgo(22), name: "POST /v2/token",     service: "auth-api",     region: "us-east-1", latencyMs: 91,   status: 401 },
+      { at: minutesAgo(26), name: "POST /hooks/github", service: "webhooks",     region: "eu-west-1", latencyMs: 132,  status: 200 },
+      { at: minutesAgo(31), name: "POST /hooks/stripe", service: "webhooks",     region: "us-east-1", latencyMs: 158,  status: 200 },
+      { at: minutesAgo(38), name: "GET /v2/session",    service: "auth-api",     region: "us-east-1", latencyMs: 58,   status: 200 }
+    ]);
+    setJSON(STORE_INCIDENTS, [{
+      title: "Elevated 5xx on checkout-api",
+      service: "checkout-api",
+      openedAt: minutesAgo(41),
+      state: "open",
+      timeline: [
+        { at: minutesAgo(41), text: "5xx rate on POST /v2/charge crossed 4.2% (baseline 0.3%)." },
+        { at: minutesAgo(40), text: "Alert fired → email to founder@relay.dev." },
+        { at: minutesAgo(33), text: "Deploy marker: checkout-api v2.14.1 shipped 6 minutes before the spike." },
+        { at: minutesAgo(11), text: "Rollback to v2.14.0 started; error rate trending down." }
+      ]
+    }]);
+    setJSON(STORE_RULES, [
+      { endpoint: "checkout-api", condition: ">1% 5xx / 10m", channel: "Email", lastFired: "40m ago" }
+    ]);
   }
 
   /* ---------- Footer year ---------- */
@@ -237,6 +295,41 @@
     });
   }
 
+  /* ---------- Sign-in form ---------- */
+  var signinForm = document.getElementById("signin-form");
+  if (signinForm) {
+    var DEBUG_EMAIL = "founder@relay.dev";
+    var DEBUG_PASSWORD = "relay-debug-2026";
+    signinForm.addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var emailInput = document.getElementById("si-email");
+      var passwordInput = document.getElementById("si-password");
+      var formErr = document.getElementById("si-form-error");
+      var email = emailInput ? emailInput.value.trim() : "";
+      var password = passwordInput ? passwordInput.value : "";
+
+      if (email !== DEBUG_EMAIL || password !== DEBUG_PASSWORD) {
+        if (formErr) {
+          formErr.textContent = "Invalid email or password.";
+          formErr.classList.add("visible");
+        }
+        return;
+      }
+
+      if (formErr) formErr.classList.remove("visible");
+      seedDebugWorkspace();
+
+      var signinBtn = signinForm.querySelector("button[type='submit']");
+      if (signinBtn) {
+        signinBtn.disabled = true;
+        signinBtn.textContent = "Signing you in…";
+      }
+      setTimeout(function () {
+        window.location.href = "dashboard.html";
+      }, 500);
+    });
+  }
+
   /* ---------- Onboarding ---------- */
   var onboardName = document.getElementById("onboard-name");
   if (onboardName) {
@@ -301,6 +394,124 @@
         clearUser();
         window.location.href = "index.html";
       });
+    }
+
+    /* ---------- Debug (founder) account: seeded data ---------- */
+    if (user.debug) {
+      var planTag = document.getElementById("dash-plan-tag");
+      if (planTag) {
+        planTag.textContent = user.plan;
+        planTag.classList.remove("hidden");
+      }
+      var planSide = document.getElementById("dash-user-plan");
+      if (planSide) {
+        planSide.textContent = user.plan;
+        planSide.classList.remove("hidden");
+      }
+      if (settingPlan) settingPlan.textContent = user.plan;
+
+      var pad2 = function (n) { return (n < 10 ? "0" : "") + n; };
+      var fmtTime = function (iso) {
+        var d = new Date(iso);
+        return pad2(d.getHours()) + ":" + pad2(d.getMinutes()) + ":" + pad2(d.getSeconds());
+      };
+      var statusPill = function (code) {
+        var cls = code >= 500 ? "down" : code >= 400 ? "warn" : "ok";
+        return '<span class="status-pill ' + cls + '">' + code + "</span>";
+      };
+
+      // Events table
+      var events = getJSON(STORE_EVENTS) || [];
+      var eventsBody = document.querySelector("#section-events tbody");
+      if (eventsBody && events.length) {
+        eventsBody.innerHTML = events.map(function (e) {
+          return "<tr>" +
+            '<td class="mono-cell">' + fmtTime(e.at) + "</td>" +
+            "<td>" + e.name + ' <span class="cell-dim">· ' + e.latencyMs + "&nbsp;ms</span></td>" +
+            "<td>" + e.service + "</td>" +
+            '<td class="mono-cell">' + e.region + "</td>" +
+            "<td>" + statusPill(e.status) + "</td>" +
+            "</tr>";
+        }).join("");
+      }
+
+      // Incidents table + timeline
+      var incidents = getJSON(STORE_INCIDENTS) || [];
+      var incidentsBody = document.querySelector("#section-incidents tbody");
+      if (incidentsBody && incidents.length) {
+        incidentsBody.innerHTML = incidents.map(function (inc) {
+          var mins = Math.max(1, Math.round((Date.now() - new Date(inc.openedAt).getTime()) / 60000));
+          return "<tr>" +
+            '<td class="mono-cell">' + fmtTime(inc.openedAt) + "</td>" +
+            "<td>" + inc.title + "</td>" +
+            "<td>" + inc.service + "</td>" +
+            '<td class="mono-cell">' + mins + "m</td>" +
+            '<td><span class="status-pill down">Open</span></td>' +
+            "</tr>";
+        }).join("");
+        var detail = document.getElementById("incident-detail");
+        var detailTitle = document.getElementById("incident-detail-title");
+        var detailTimeline = document.getElementById("incident-timeline");
+        if (detail && detailTitle && detailTimeline) {
+          detailTitle.textContent = incidents[0].title;
+          detailTimeline.innerHTML = incidents[0].timeline.map(function (t) {
+            return '<li><span class="tl-time">' + fmtTime(t.at) + "</span>" + t.text + "</li>";
+          }).join("");
+          detail.classList.remove("hidden");
+        }
+      }
+
+      // Alert rules: list + creation form
+      var rulesBody = document.querySelector("#section-alerts tbody");
+      var renderRules = function () {
+        var rules = getJSON(STORE_RULES) || [];
+        if (!rulesBody || !rules.length) return;
+        rulesBody.innerHTML = rules.map(function (r) {
+          return "<tr>" +
+            "<td>" + r.endpoint + "</td>" +
+            '<td class="mono-cell">' + r.condition + "</td>" +
+            "<td>" + r.channel + "</td>" +
+            "<td>" + r.lastFired + "</td>" +
+            "</tr>";
+        }).join("");
+      };
+      renderRules();
+
+      var rulesPanel = document.getElementById("alert-rules-panel");
+      if (rulesPanel) {
+        rulesPanel.classList.remove("hidden");
+        var endpointSel = document.getElementById("rule-endpoint");
+        if (endpointSel) {
+          var seen = {};
+          events.forEach(function (e) {
+            if (seen[e.service]) return;
+            seen[e.service] = true;
+            var opt = document.createElement("option");
+            opt.value = e.service;
+            opt.textContent = e.service;
+            endpointSel.appendChild(opt);
+          });
+        }
+        var saveBtn = document.getElementById("rule-save-btn");
+        if (saveBtn) {
+          saveBtn.addEventListener("click", function () {
+            var thresholdInput = document.getElementById("rule-threshold");
+            var channelSel = document.getElementById("rule-channel");
+            var threshold = thresholdInput ? thresholdInput.value.trim() : "";
+            if (!/^>\d+\/\d+m$/.test(threshold)) return;
+            var rules = getJSON(STORE_RULES) || [];
+            rules.push({
+              endpoint: endpointSel ? endpointSel.value : "",
+              condition: threshold,
+              channel: channelSel ? channelSel.value : "Email",
+              lastFired: "—"
+            });
+            setJSON(STORE_RULES, rules);
+            renderRules();
+            if (thresholdInput) thresholdInput.value = "";
+          });
+        }
+      }
     }
   }
 })();
