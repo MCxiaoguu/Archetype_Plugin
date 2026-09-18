@@ -2,8 +2,9 @@
 """archetype-core MCP server (registered as `core`) — the data plane between Claude (the actor LLM
 inside Claude Code) and the Archetype backend.
 
-Claude never handles tokens or raw HTTP: it calls these five MCP tools and
-reads their natural-language renderings.
+Claude never handles tokens or raw HTTP: it calls these MCP tools and reads
+their natural-language renderings. The run-path tools are described below;
+the TOOLS registry at the bottom of this file is the full list (ten tools).
 
 Tools:
 
@@ -25,6 +26,11 @@ Tools:
 All tools other than ``login`` require a Bearer token; any 401 tells the user
 to run ``/archetype:setup`` to log in.
 
+Concurrency: stdin is read by the main loop only. Each tools/call runs on its
+own thread, so one slow backend call never blocks another tool, and every
+backend call carries a wall-clock deadline (see _send). Server-initiated
+requests (the login elicitation) are answered through route_response().
+
 Stdlib-only. Backend base URL is configurable via the
 ``ARCHETYPE_BACKEND_URL`` environment variable
 (default: ``https://api.syntheticarchetype.com``).
@@ -35,7 +41,9 @@ from __future__ import annotations
 import base64
 import json
 import os
+import queue
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -47,14 +55,33 @@ PROTOCOL_VERSION = "2025-06-18"
 SERVER_NAME = "archetype-core"
 SERVER_VERSION = "0.4.0"
 
+
+
+def _env_seconds(name: str, default: float) -> float:
+    """Read a positive number of seconds from the environment, else the default."""
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+# Every timeout below is a WALL-CLOCK deadline for the whole HTTP exchange,
+# not urllib's per-socket-operation timeout. urlopen(timeout=N) restarts its
+# clock on every recv, so a backend (or a proxy in front of it) that trickles
+# a byte every few seconds keeps a call alive forever. See _send().
+
 # The synchronous run-assembly endpoint runs the persona/scenario LLM chain,
 # which the MCP server tolerates for up to ~90 s; give it generous headroom.
-RUN_TIMEOUT = 180
+RUN_TIMEOUT = _env_seconds("ARCHETYPE_RUN_TIMEOUT", 180)
 
 # Result ingestion can carry multi-MB screenshot payloads; the default 15 s
 # risks a client-side timeout after the server already stored the results,
 # which would surface as a confusing 409 on retry.
-RESULT_TIMEOUT = 60
+RESULT_TIMEOUT = _env_seconds("ARCHETYPE_RESULT_TIMEOUT", 60)
 
 # Standard hint appended to any auth-related failure so the actor knows the fix.
 LOGIN_HINT = "Run /archetype:setup to log in."
@@ -65,7 +92,14 @@ BACKEND_BASE = os.environ.get(
 PORTAL_URL = os.environ.get(
     "ARCHETYPE_PORTAL_URL", "https://www.syntheticarchetype.com"
 ).rstrip("/")
-HTTP_TIMEOUT = 15
+HTTP_TIMEOUT = _env_seconds("ARCHETYPE_HTTP_TIMEOUT", 15)
+
+# How often a long-running tool call tells the client it is still alive
+# (only when the client asked for progress by sending a progressToken).
+PROGRESS_INTERVAL = _env_seconds("ARCHETYPE_PROGRESS_INTERVAL", 5)
+
+# Slack on top of a deadline before the waiting thread gives up on the worker.
+_DEADLINE_GRACE = 0.25
 
 # The status dashboard keeps a small per-machine log of recent runs
 # (${CLAUDE_PLUGIN_DATA}/runs.json); cross-device history lives in the portal.
@@ -89,9 +123,16 @@ def log(msg: str) -> None:
     sys.stderr.flush()
 
 
+_send_lock = threading.Lock()
+
+
 def send(msg: dict[str, Any]) -> None:
-    sys.stdout.write(json.dumps(msg) + "\n")
-    sys.stdout.flush()
+    """Write one JSON-RPC message. Tool calls run on worker threads, so the
+    line write is serialized to keep messages from interleaving."""
+    line = json.dumps(msg) + "\n"
+    with _send_lock:
+        sys.stdout.write(line)
+        sys.stdout.flush()
 
 
 def recv() -> dict[str, Any] | None:
@@ -102,21 +143,59 @@ def recv() -> dict[str, Any] | None:
 
 
 _next_id = 1000
+_pending: dict[int, "queue.Queue[dict[str, Any]]"] = {}
+_pending_lock = threading.Lock()
 
 
-def server_request(method: str, params: dict[str, Any]) -> dict[str, Any]:
-    """Send a server-initiated JSON-RPC request and block until its response arrives."""
+def server_request(
+    method: str, params: dict[str, Any], timeout: float | None = None
+) -> dict[str, Any]:
+    """Send a server-initiated JSON-RPC request and wait for its response.
+
+    Only the main loop reads stdin; it hands the matching response over via
+    route_response(). Waiting here therefore never swallows other traffic, so
+    the client can keep calling tools while (say) a login modal is open.
+    Raises TimeoutError when ``timeout`` seconds pass without an answer.
+    """
     global _next_id
-    req_id = _next_id
-    _next_id += 1
-    send({"jsonrpc": "2.0", "id": req_id, "method": method, "params": params})
-    while True:
-        msg = recv()
-        if msg is None:
-            raise RuntimeError("client disconnected while awaiting response")
-        if msg.get("id") == req_id and ("result" in msg or "error" in msg):
-            return msg
-        log(f"ignoring interleaved message while awaiting response: method={msg.get('method')}")
+    box: "queue.Queue[dict[str, Any]]" = queue.Queue(maxsize=1)
+    with _pending_lock:
+        req_id = _next_id
+        _next_id += 1
+        _pending[req_id] = box
+    try:
+        send({"jsonrpc": "2.0", "id": req_id, "method": method, "params": params})
+        try:
+            return box.get(timeout=timeout)
+        except queue.Empty:
+            raise TimeoutError(f"no response to {method} within {timeout} s") from None
+    finally:
+        with _pending_lock:
+            _pending.pop(req_id, None)
+
+
+def route_response(msg: dict[str, Any]) -> bool:
+    """Deliver a client response to the server_request() waiting on it."""
+    if "method" in msg or not ("result" in msg or "error" in msg):
+        return False
+    with _pending_lock:
+        box = _pending.get(msg.get("id"))
+    if box is None:
+        log(f"dropping response to unknown request id={msg.get('id')}")
+        return True
+    box.put(msg)
+    return True
+
+
+def fail_pending(reason: str) -> None:
+    """Wake every server_request() waiter with an error (client went away)."""
+    with _pending_lock:
+        boxes = list(_pending.values())
+    for box in boxes:
+        try:
+            box.put_nowait({"error": {"code": -32000, "message": reason}})
+        except queue.Full:
+            pass
 
 
 # ---------- backend HTTP ----------
@@ -126,29 +205,98 @@ def _parse_body(raw: str) -> dict[str, Any]:
     if not raw:
         return {}
     try:
-        return json.loads(raw)
+        parsed = json.loads(raw)
     except json.JSONDecodeError:
         return {"error": "invalid_response_body", "message": raw[:200]}
+    # Every caller reads the body with .get(); a proxy error page that is
+    # valid JSON but not an object must not crash the tool call.
+    if not isinstance(parsed, dict):
+        return {"error": "invalid_response_body", "message": raw[:200]}
+    return parsed
 
 
-def _send(req: urllib.request.Request, timeout: int) -> tuple[int, dict[str, Any]]:
-    """Execute a prepared request, mapping every outcome to (status, body)."""
+class _DeadlineExceeded(Exception):
+    pass
+
+
+def _read_until(resp: Any, deadline: float) -> bytes:
+    """Read a response body, checking the wall clock between socket reads.
+
+    read1() returns after a single underlying recv, so a trickling sender is
+    noticed on its next byte instead of being allowed to fill a buffer.
+    """
+    chunks: list[bytes] = []
+    while True:
+        if time.monotonic() >= deadline:
+            raise _DeadlineExceeded()
+        chunk = resp.read1(65536)
+        if not chunk:
+            return b"".join(chunks)
+        chunks.append(chunk)
+
+
+def _deadline_body(req: urllib.request.Request, timeout: float) -> dict[str, Any]:
+    path = req.full_url[len(BACKEND_BASE):] or "/"
+    return {
+        "error": "deadline_exceeded",
+        "message": (
+            f"The Archetype backend did not finish answering {req.get_method()} "
+            f"{path} within {timeout:g} s, so the call was abandoned. "
+            f"Backend: {BACKEND_BASE}."
+        ),
+    }
+
+
+def _exchange(
+    req: urllib.request.Request, timeout: float, deadline: float
+) -> tuple[int, dict[str, Any]]:
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return resp.status, _parse_body(resp.read().decode())
+            return resp.status, _parse_body(_read_until(resp, deadline).decode())
+    except _DeadlineExceeded:
+        return 0, _deadline_body(req, timeout)
     except urllib.error.HTTPError as exc:
         return exc.code, _parse_body(exc.read().decode())
     except urllib.error.URLError as exc:
+        if isinstance(exc.reason, TimeoutError):
+            return 0, _deadline_body(req, timeout)
         return 0, {"error": "network_error", "message": str(exc.reason)}
-    except Exception as exc:  # pragma: no cover — defensive
+    except TimeoutError:
+        return 0, _deadline_body(req, timeout)
+    except Exception as exc:  # pragma: no cover (defensive)
         return 0, {"error": "unexpected_error", "message": repr(exc)}
+
+
+def _send(req: urllib.request.Request, timeout: float) -> tuple[int, dict[str, Any]]:
+    """Execute a prepared request, mapping every outcome to (status, body).
+
+    ``timeout`` bounds the WHOLE exchange. The request runs on a daemon
+    thread that this call waits on for at most ``timeout`` seconds: whatever
+    the socket layer is doing at that point (slow connect, TLS handshake, a
+    body arriving one byte at a time), the caller gets a deadline_exceeded
+    answer and moves on. The abandoned thread unwinds by itself on its next
+    socket operation, which carries the same per-operation timeout.
+    """
+    deadline = time.monotonic() + timeout
+    outcome: list[tuple[int, dict[str, Any]]] = []
+    worker = threading.Thread(
+        target=lambda: outcome.append(_exchange(req, timeout, deadline)),
+        name="archetype-http",
+        daemon=True,
+    )
+    worker.start()
+    worker.join(timeout + _DEADLINE_GRACE)
+    if not outcome:
+        log(f"deadline exceeded after {timeout:g} s: {req.get_method()} {req.full_url}")
+        return 0, _deadline_body(req, timeout)
+    return outcome[0]
 
 
 def backend_post(
     path: str,
     body: dict[str, Any],
     auth_token: str | None = None,
-    timeout: int = HTTP_TIMEOUT,
+    timeout: float = HTTP_TIMEOUT,
 ) -> tuple[int, dict[str, Any]]:
     """POST JSON to the Archetype backend. Returns (status, parsed-body)."""
     req = urllib.request.Request(
@@ -170,7 +318,7 @@ def backend_patch(
     path: str,
     body: dict[str, Any],
     auth_token: str | None = None,
-    timeout: int = HTTP_TIMEOUT,
+    timeout: float = HTTP_TIMEOUT,
 ) -> tuple[int, dict[str, Any]]:
     """PATCH JSON to the Archetype backend. Returns (status, parsed-body)."""
     req = urllib.request.Request(
@@ -191,7 +339,7 @@ def backend_patch(
 def backend_get(
     path: str,
     auth_token: str | None = None,
-    timeout: int = HTTP_TIMEOUT,
+    timeout: float = HTTP_TIMEOUT,
 ) -> tuple[int, dict[str, Any]]:
     """GET JSON from the Archetype backend. Returns (status, parsed-body)."""
     req = urllib.request.Request(
@@ -613,6 +761,19 @@ def handle_start_run(arguments: dict[str, Any]) -> dict[str, Any]:
     if result is None:
         return not_connected()
     status, resp = result
+    if resp.get("error") == "deadline_exceeded":
+        advice = (
+            "No run was handed to this session, so there is nothing to act on "
+            "or report. Retry once."
+        )
+        if body.get("poolId"):
+            advice += (
+                " Spinning a fresh tester off a pool is the slow step: if it "
+                "times out again, retry without pool= to run as the "
+                "replay-derived persona. A tester may already have been added "
+                "to the pool by the abandoned attempt."
+            )
+        return tool_text(f"{resp['message']}\n\n{advice}", is_error=True)
     if not (200 <= status < 300):
         return backend_error_text(status, resp)
 
@@ -680,6 +841,13 @@ def handle_report_result(arguments: dict[str, Any]) -> dict[str, Any]:
     if result is None:
         return not_connected()
     status, resp = result
+    if resp.get("error") == "deadline_exceeded":
+        return tool_text(
+            f"{resp['message']}\n\nThe backend may still have stored these "
+            f"results. Call get_run for {run_id} first: if it shows the run as "
+            "finished, do NOT re-send; otherwise retry with the same payload.",
+            is_error=True,
+        )
     if not (200 <= status < 300):
         return backend_error_text(status, resp)
 
@@ -844,7 +1012,7 @@ def handle_create_feature(arguments: dict[str, Any]) -> dict[str, Any]:
 
 # Persona generation runs the LLM server-side (one call per preview candidate,
 # one for the pool's reference persona); same generous headroom as run assembly.
-PERSONA_TIMEOUT = 180
+PERSONA_TIMEOUT = _env_seconds("ARCHETYPE_PERSONA_TIMEOUT", 180)
 
 # Pool descriptions are stored/rendered as a short line, not an essay.
 POOL_DESCRIPTION_LIMIT = 300
@@ -1426,11 +1594,75 @@ TOOLS: dict[str, dict[str, Any]] = {
 # ---------- protocol ----------
 
 
+_cancelled: set[Any] = set()
+_cancelled_lock = threading.Lock()
+
+
+def _progress_ticker(token: Any, name: str, done: threading.Event) -> None:
+    """Tell the client a long call is alive, so 'slow' and 'hung' look different."""
+    started = time.monotonic()
+    while not done.wait(PROGRESS_INTERVAL):
+        elapsed = int(time.monotonic() - started)
+        send(
+            {
+                "jsonrpc": "2.0",
+                "method": "notifications/progress",
+                "params": {
+                    "progressToken": token,
+                    "progress": elapsed,
+                    "message": f"{name}: waiting on the Archetype backend ({elapsed} s)",
+                },
+            }
+        )
+
+
+def run_tool_call(
+    msg_id: Any, name: str, spec: dict[str, Any], params: dict[str, Any]
+) -> None:
+    """Run one tools/call on its own thread and send its single reply."""
+    done = threading.Event()
+    token = (params.get("_meta") or {}).get("progressToken")
+    if token is not None:
+        threading.Thread(
+            target=_progress_ticker, args=(token, name, done), daemon=True
+        ).start()
+    try:
+        reply: dict[str, Any] = {
+            "jsonrpc": "2.0",
+            "id": msg_id,
+            "result": spec["handler"](params.get("arguments") or {}),
+        }
+    except Exception as exc:
+        log(f"tool {name} raised: {exc!r}")
+        reply = {
+            "jsonrpc": "2.0",
+            "id": msg_id,
+            "error": {"code": -32603, "message": str(exc)},
+        }
+    finally:
+        done.set()
+    with _cancelled_lock:
+        was_cancelled = msg_id in _cancelled
+        _cancelled.discard(msg_id)
+    if was_cancelled:
+        # Per MCP, a cancelled request gets no response.
+        log(f"tool {name} (id={msg_id}) finished after cancellation; reply dropped")
+        return
+    send(reply)
+
+
 def handle(msg: dict[str, Any]) -> None:
     method = msg.get("method")
     msg_id = msg.get("id")
 
-    if method in ("notifications/initialized", "notifications/cancelled"):
+    if method == "notifications/cancelled":
+        request_id = (msg.get("params") or {}).get("requestId")
+        if request_id is not None:
+            with _cancelled_lock:
+                _cancelled.add(request_id)
+        return
+
+    if method == "notifications/initialized":
         return
 
     if method == "initialize":
@@ -1466,6 +1698,10 @@ def handle(msg: dict[str, Any]) -> None:
         )
         return
 
+    if method == "ping":
+        send({"jsonrpc": "2.0", "id": msg_id, "result": {}})
+        return
+
     if method == "tools/call":
         params = msg.get("params") or {}
         name = params.get("name")
@@ -1479,8 +1715,14 @@ def handle(msg: dict[str, Any]) -> None:
                 }
             )
             return
-        result = spec["handler"](params.get("arguments") or {})
-        send({"jsonrpc": "2.0", "id": msg_id, "result": result})
+        # One thread per call: a slow start_run must never make status,
+        # get_run or report_result wait behind it.
+        threading.Thread(
+            target=run_tool_call,
+            args=(msg_id, name, spec, params),
+            name=f"archetype-tool-{name}",
+            daemon=True,
+        ).start()
         return
 
     if msg_id is not None:
@@ -1503,7 +1745,13 @@ def main() -> int:
             continue
         if msg is None:
             log("stdin closed; exiting")
+            fail_pending("client disconnected")
             return 0
+        if not isinstance(msg, dict):
+            log(f"ignoring non-object message: {msg!r}")
+            continue
+        if route_response(msg):
+            continue
         try:
             handle(msg)
         except Exception as exc:
