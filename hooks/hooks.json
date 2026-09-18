@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "test -f \"$CLAUDE_PLUGIN_DATA/auth.json\" || echo 'archetype: not connected. Run /archetype:setup to get started.'"
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/session-hook.py\""
           }
         ]
       }
