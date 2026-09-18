@@ -1777,7 +1777,11 @@ def _progress_ticker(token: Any, name: str, done: threading.Event) -> None:
                 "params": {
                     "progressToken": token,
                     "progress": elapsed,
-                    "message": f"{name}: waiting on the Archetype backend ({elapsed} s)",
+                    "message": (
+                        f"login: waiting for your approval in the browser ({elapsed} s)"
+                        if name == "login"
+                        else f"{name}: waiting on the Archetype backend ({elapsed} s)"
+                    ),
                 },
             }
         )

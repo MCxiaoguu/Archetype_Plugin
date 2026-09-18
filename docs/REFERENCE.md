@@ -522,6 +522,10 @@ The device flow never depends on the modal being readable:
 - **The device code is kept** in `${CLAUDE_PLUGIN_DATA}/pending_login.json` (mode `0600`) until it
   is used, declined, or expires. The next `login` (or self-heal) polls it once first: an approval
   given in the browser is honored with no new modal and no new code. `logout` deletes it.
+- **One browser per code.** Auth0 binds a user code to the first browser session that opens it; a
+  second browser then sees "Invalid or expired user code". The plugin auto-opens the default
+  browser, so finish there. Opening the URL by hand is for when nothing opened (set `BROWSER=true`
+  to suppress the auto-open, as the test harness does).
 - **Every wait is bounded.** The modal waits `ARCHETYPE_ELICIT_TIMEOUT` (600 s) at most; after
   Accept, token polling runs for `ARCHETYPE_APPROVAL_POLL_WINDOW` (120 s) at most.
 
