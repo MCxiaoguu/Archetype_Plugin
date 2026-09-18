@@ -230,6 +230,32 @@ handling for whole-run browser failure) and ends with a scenario verdict table, 
 severity, persona quote, and run id, noting status can be re-checked via `get_run` /
 `/archetype:check-run-status <run_id>`.
 
+**Browser first, run second.** Step 2 of the procedure proves the browser works (`tabs_context_mcp`)
+before `start_run` is called, because `start_run` creates a run and spins a tester into the pool.
+With no browser the agent stops without creating anything.
+
+**Do it once.** A purchase, booking or submission that went through is never repeated to double
+check it; the agent verifies from the confirmation page, the account area or the inbox. It is
+repeated only when a scenario explicitly asks for a second pass.
+
+### `feature-validator-headless`
+
+Source: `agents/feature-validator-headless.md`. The same actor loop on a headless Playwright
+browser, for when Claude in Chrome is not available: locked screen, SSH, CI, no extension. Its
+browser tools are `mcp__playwright__browser_*` (navigate, snapshot, click, type, fill_form,
+select_option, press_key, hover, wait_for, take_screenshot, tabs, handle_dialog,
+console_messages), so the Playwright MCP server must be registered under the name `playwright`:
+
+```
+claude mcp add playwright -- npx -y @playwright/mcp@latest --headless --isolated
+```
+
+The plugin does not bundle that server: it needs Node and downloads a browser, which should be the
+user's choice. The validation skill picks the actor during its browser preflight (Chrome when
+connected, else Playwright when registered, else it stops and explains both). The two agent files
+may differ only in the browser preflight and in how the site is opened;
+`python3 scripts/test_agents_in_sync.py` (in CI) fails on any other drift.
+
 ### SessionStart hook
 
 Source: `hooks/hooks.json`. A single `SessionStart` hook with matcher `startup`, type `command`:

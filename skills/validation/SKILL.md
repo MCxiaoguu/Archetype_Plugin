@@ -152,7 +152,20 @@ For the confirmed run list (one run or many):
      disconnects, and computer use cannot stand in for it: it can watch a
      browser but not drive one.
    Then offer to retry. One check covers the whole run list.
-3. Dispatch the `feature-validator` agent once per run object. The dispatch
+
+   **Headless fallback.** Chrome is the default because the user can watch
+   it. When it is not available, or the user asked for a headless or
+   unattended run, check for the Playwright MCP server instead: ToolSearch
+   `select:mcp__playwright__browser_navigate`. If it is there, use the
+   `feature-validator-headless` agent for every run in the list and say so
+   in one line ("Chrome is not connected, running headless on Playwright").
+   If neither browser is available, stop as above and also offer the
+   one-time headless setup:
+   `claude mcp add playwright -- npx -y @playwright/mcp@latest --headless --isolated`
+   (needs Node 18 or newer, then a session restart). Never install it
+   yourself and never switch browsers mid-list.
+3. Dispatch the chosen actor agent (`feature-validator`, or
+   `feature-validator-headless` per the preflight) once per run object. The dispatch
    prompt carries ONLY the run's resolved fields — goal, url, `feature_id`,
    `pool_id` plus the pool's display name (for the agent's sanity check
    against the brief). Deliberately include nothing else: no product
@@ -168,9 +181,11 @@ For the confirmed run list (one run or many):
    a pool run that times out twice, offer to run without the pool instead of
    retrying again.
 
-The full actor loop (become the persona, drive Chrome, keep the step log,
-`report_result` exactly once) is defined in the `feature-validator` agent —
-that file is the single source of truth for run execution.
+The full actor loop (become the persona, drive the browser, keep the step
+log, `report_result` exactly once) is defined in the `feature-validator`
+agent: that file is the single source of truth for run execution.
+`feature-validator-headless` is the same procedure on a different browser,
+and `scripts/test_agents_in_sync.py` keeps the two from drifting.
 
 **Watch-live exception**: only if the user explicitly asks to watch the
 persona act live, run the loop inline in the main session by following the
