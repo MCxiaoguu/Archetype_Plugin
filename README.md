@@ -15,18 +15,20 @@ customer-like feedback on your work without leaving your editor or terminal.
 | Skill | `skills/list-features/` | Browse the saved features available for validation |
 | Skill | `skills/check-run-status/` | Look up the status / results of a run |
 | Agent | `agents/feature-validator.md` | Headless orchestration of the same actor loop in one invocation |
-| MCP   | `core` (stdio) — `scripts/core-server.py` | The data plane: 5 tools between Claude and the backend, declared inline in `plugin.json` |
+| MCP   | `core` (stdio): `scripts/core-server.py` | The data plane: 10 tools between Claude and the backend, declared inline in `plugin.json` |
 | Hook  | `hooks/hooks.json` | Session-start sanity check for the auth state |
 
 ### MCP tools (`core`)
 
-The plugin never handles tokens or raw HTTP. Claude calls these five tools and
-reads their natural-language results.
+The plugin never handles tokens or raw HTTP. Claude calls these tools and
+reads their natural-language results. The run path is below; the full list of
+ten (adding `status`, `logout`, `list_pools`, `create_pool`, `create_feature`)
+is in [docs/REFERENCE.md](docs/REFERENCE.md#mcp-tools-server-core).
 
 | Tool | Input | Backend | Purpose |
 | :--- | :--- | :--- | :--- |
 | `login` | `{}` | `/api/oauth/device/*` | Auth0 device-flow login (elicitation modal); caches the token |
-| `start_run` | `{goal?, feature_id?, url}` | `POST /api/plugin/runs` | Assemble a run; renders brief, persona card, scenarios, conduct rules, reporting contract |
+| `start_run` | `{goal?, feature_id?, url, pool_id?}` | `POST /api/plugin/runs` | Assemble a run; renders brief, persona card, scenarios, conduct rules, reporting contract |
 | `report_result` | `{run_id, session_id, status, duration_seconds?, steps, feedback}` | `POST /api/plugin/runs/<id>/results` | Ingest the actor's structured results; returns a confirmation summary |
 | `get_run` | `{run_id}` | `GET /api/plugin/runs/<id>` | Status / progress / feedback readback |
 | `list_features` | `{query?}` | `GET /api/features` | List the user's saved features (`_id` → `feature_id`) |
@@ -123,11 +125,12 @@ The token lives at `~/.claude/plugins/data/archetype-<scope>/auth.json`
 | Force the wizard to re-run from scratch | `rm ~/.claude/plugins/data/archetype-*/auth.json`, then `/archetype:validation` |
 | Watch MCP server logs | Already on stderr if you launched with `--debug` — lines prefixed `[archetype-core]` |
 | Point at a local backend | `export ARCHETYPE_BACKEND_URL=http://localhost:5001` before launching (the MCP server inherits the CLI's environment) |
+| Tune backend deadlines | `ARCHETYPE_HTTP_TIMEOUT`, `ARCHETYPE_RUN_TIMEOUT`, `ARCHETYPE_RESULT_TIMEOUT`, `ARCHETYPE_PERSONA_TIMEOUT` (seconds; defaults 15 / 180 / 60 / 180) |
 | Override the HTTP User-Agent | `export ARCHETYPE_PLUGIN_USER_AGENT="custom/1.0"` (default: `archetype-claude-plugin/<version>`) |
 
 ## Configuration
 
-All five MCP tools speak to the Archetype backend at
+All MCP tools speak to the Archetype backend at
 `https://api.syntheticarchetype.com` (override with the
 `ARCHETYPE_BACKEND_URL` env var — set it to `http://localhost:5001` for local
 backend development). Auth is the single device-flow Bearer scheme: the `login`
@@ -161,9 +164,10 @@ backend endpoint (`/api/plugin/runs`, `/api/features`, etc.).
 
 The `core` stdio MCP server (Python 3, stdlib only,
 `scripts/core-server.py`) is the data plane between Claude and the backend,
-declared inline in `plugin.json` under `mcpServers`. It exposes five tools
-(`login`, `start_run`, `report_result`, `get_run`, `list_features`; see the
-table above). The `login` tool sequences the cached-token check, the
+declared inline in `plugin.json` under `mcpServers`. It exposes ten tools
+(the run path is in the table above). Each tool call runs on its own thread
+and every backend call has a wall-clock deadline, so a stalled backend
+surfaces as a clear tool error instead of a frozen session. The `login` tool sequences the cached-token check, the
 device-code request, the browser launch, the elicitation, the polling, and the
 on-disk save — all in one tool call. The four run tools carry the Bearer token,
 POST/GET the `/api/plugin` endpoints, and render each response's
@@ -246,7 +250,8 @@ Archetype_Plugins/
 ├── hooks/
 │   └── hooks.json
 ├── scripts/
-│   └── setup-server.py        # stdio MCP server for the elicitation wizard
+│   ├── core-server.py         # stdio MCP server (login, runs, pools, features)
+│   └── test_core_server.py    # stdio + stub-backend test harness
 ├── skills/
 │   ├── validation/SKILL.md
 │   ├── validate-feature/SKILL.md
