@@ -98,6 +98,15 @@ HTTP_TIMEOUT = _env_seconds("ARCHETYPE_HTTP_TIMEOUT", 15)
 # (only when the client asked for progress by sending a progressToken).
 PROGRESS_INTERVAL = _env_seconds("ARCHETYPE_PROGRESS_INTERVAL", 5)
 
+# The login modal is answered by a human, so it gets minutes, not seconds, but
+# never forever: a modal that cannot render (subagent, headless client) must
+# not strand the tool call.
+ELICIT_TIMEOUT = _env_seconds("ARCHETYPE_ELICIT_TIMEOUT", 600)
+
+# After the user says "I approved", the token is normally ready on the first
+# poll. Keep polling this long before handing back a resumable message.
+APPROVAL_POLL_WINDOW = _env_seconds("ARCHETYPE_APPROVAL_POLL_WINDOW", 120)
+
 # Slack on top of a deadline before the waiting thread gives up on the worker.
 _DEADLINE_GRACE = 0.25
 
@@ -389,12 +398,25 @@ def existing_token_is_valid(
     return False, token, body
 
 
-def request_user_approval(verify_url: str, user_code: str) -> bool:
-    """Render the elicitation modal with the verification URL; return True iff accepted.
+def _login_prompt(verify_url: str, user_code: str) -> str:
+    """The modal text. Clients truncate long messages to their first lines,
+    so the two things the user cannot do without (URL, code) come first and
+    each stays on a line of its own."""
+    return (
+        f"Archetype login code: {user_code}\n"
+        f"{verify_url}\n"
+        "Your browser should already be on that page. Confirm the code matches, "
+        "approve, then tick the box and Accept."
+    )
+
+
+def request_user_approval(verify_url: str, user_code: str, timeout: float) -> str:
+    """Render the elicitation modal; return "accepted", "declined" or "unavailable".
 
     Best-effort opens the URL in the user's default browser before the modal
-    renders. If the browser can't be launched (headless box, no $DISPLAY,
-    etc.), we silently fall back to relying on the user to click the URL.
+    renders. "unavailable" means the modal could not be shown or was never
+    answered (headless client, subagent, timeout), which is different from the
+    user saying no: the login can still be finished in a browser and resumed.
     """
     try:
         opened = webbrowser.open(verify_url, new=2, autoraise=True)
@@ -402,113 +424,125 @@ def request_user_approval(verify_url: str, user_code: str) -> bool:
     except Exception as exc:
         log(f"webbrowser.open failed: {exc!r}")
 
-    resp = server_request(
-        "elicitation/create",
-        {
-            "message": (
-                "Connect to Archetype\n\n"
-                f"1) Your browser should open to this URL automatically. If it didn't, open it manually:\n   {verify_url}\n\n"
-                f"2) Verification code (shown for cross-check): {user_code}\n\n"
-                "3) Once you've approved in the browser, tick the box below and click Accept. "
-                "The plugin will then exchange the code for an access token."
-            ),
-            "requestedSchema": {
-                "type": "object",
-                "properties": {
-                    "approved": {
-                        "type": "boolean",
-                        "title": "I've approved the request in my browser",
-                        "description": (
-                            "Tick this once you've completed the Auth0 approval flow in your browser, "
-                            "then click Accept."
-                        ),
-                    }
+    try:
+        resp = server_request(
+            "elicitation/create",
+            {
+                "message": _login_prompt(verify_url, user_code),
+                "requestedSchema": {
+                    "type": "object",
+                    "properties": {
+                        "approved": {
+                            "type": "boolean",
+                            "title": "I've approved the request in my browser",
+                            "description": (
+                                "Tick this once you've completed the Auth0 approval "
+                                "flow in your browser, then click Accept."
+                            ),
+                        }
+                    },
+                    "required": ["approved"],
                 },
-                "required": ["approved"],
             },
-        },
-    )
+            timeout=timeout,
+        )
+    except TimeoutError:
+        log(f"login modal unanswered after {timeout:g} s")
+        return "unavailable"
     if "error" in resp:
         log(f"elicitation error: {resp['error']}")
-        return False
+        return "unavailable"
     result = resp.get("result") or {}
     if result.get("action") != "accept":
-        return False
+        return "declined"
     content = result.get("content") or {}
-    return content.get("approved") is True
+    return "accepted" if content.get("approved") is True else "declined"
+
+
+def poll_once(device_code: str) -> tuple[str, dict[str, Any]]:
+    """One token poll. Returns ("token" | "pending" | "failed", body)."""
+    status, body = backend_post("/api/oauth/device/token", {"device_code": device_code})
+    if status == 200 and body.get("access_token"):
+        return "token", body
+    if body.get("error") in ("authorization_pending", "slow_down"):
+        return "pending", body
+    if status == 0:
+        return "pending", body  # a network blip is not a rejected login
+    return "failed", body
 
 
 def poll_for_token(
-    device_code: str, interval: int, expires_in: int
-) -> tuple[bool, dict[str, Any]]:
-    """Poll /api/oauth/device/token until success, terminal error, or timeout."""
-    deadline = time.monotonic() + expires_in
-    poll = max(int(interval), 3)
-    while time.monotonic() < deadline:
+    device_code: str, interval: int, window: float
+) -> tuple[str, dict[str, Any]]:
+    """Poll /api/oauth/device/token until a token, a terminal error, or
+    ``window`` seconds. Returns the last poll_once() outcome."""
+    deadline = time.monotonic() + window
+    poll = max(int(interval), 1)
+    outcome, body = poll_once(device_code)
+    while outcome == "pending" and time.monotonic() + poll < deadline:
         time.sleep(poll)
-        status, body = backend_post(
-            "/api/oauth/device/token", {"device_code": device_code}
-        )
-        if status == 200 and body.get("access_token"):
-            return True, body
-        err = body.get("error", "")
-        if err == "authorization_pending":
-            continue
-        if err == "slow_down":
+        if body.get("error") == "slow_down":
             poll += 2
-            continue
-        return False, body
-    return False, {
-        "error": "expired_token",
-        "error_description": "Device flow timed out before approval.",
-    }
+        outcome, body = poll_once(device_code)
+    return outcome, body
 
 
-def perform_device_login() -> tuple[str | None, str]:
-    """Run the Auth0 device flow end to end, saving the token on success.
+# ---------- resumable login ----------
 
-    Returns (access_token, message); access_token is None on any failure and
-    the message explains why in user-facing language. Shared by the explicit
-    `login` tool and the self-healing path of every authed tool.
-    """
+
+def _pending_path() -> Path | None:
     plugin_data = os.environ.get("CLAUDE_PLUGIN_DATA")
-    if not plugin_data:
-        return None, (
-            "CLAUDE_PLUGIN_DATA is not set; cannot determine where to store credentials."
-        )
-    auth_path = Path(plugin_data) / "auth.json"
+    return Path(plugin_data) / "pending_login.json" if plugin_data else None
 
-    status, code_body = backend_post("/api/oauth/device/code", {})
-    if status != 200 or "device_code" not in code_body:
-        err = code_body.get("error_description") or code_body.get("error") or code_body
-        return None, (
-            f"Could not start Archetype login (backend={BACKEND_BASE}, status={status}): {err}"
-        )
 
-    device_code = code_body["device_code"]
-    user_code = code_body.get("user_code", "")
-    verify_url = code_body.get("verification_uri_complete") or code_body.get(
-        "verification_uri", ""
-    )
-    interval = int(code_body.get("interval", 5))
-    expires_in = int(code_body.get("expires_in", 900))
+def load_pending_login() -> dict[str, Any] | None:
+    """The device code of a login that was started but not finished, if it is
+    still within its lifetime."""
+    path = _pending_path()
+    if path is None or not path.exists():
+        return None
+    try:
+        pending = json.loads(path.read_text())
+    except Exception as exc:
+        log(f"pending login unreadable, discarding: {exc}")
+        clear_pending_login()
+        return None
+    if (
+        not isinstance(pending, dict)
+        or not pending.get("device_code")
+        or not pending.get("verify_url")
+        or pending.get("backend") != BACKEND_BASE
+        or float(pending.get("expires_at") or 0) <= time.time() + 5
+    ):
+        clear_pending_login()
+        return None
+    return pending
 
-    if not verify_url:
-        return None, "Backend did not return a verification URL."
 
-    log(f"prompting user with verification URL: {verify_url}")
-    if not request_user_approval(verify_url, user_code):
-        return None, "Login cancelled. Re-run /archetype:setup to try again."
+def save_pending_login(pending: dict[str, Any]) -> None:
+    path = _pending_path()
+    if path is None:
+        return
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(pending, indent=2) + "\n")
+        os.chmod(path, 0o600)
+    except Exception as exc:  # resumability is a convenience, never fatal
+        log(f"could not save pending login: {exc}")
 
-    ok, token_body = poll_for_token(device_code, interval, expires_in)
-    if not ok:
-        err = (
-            token_body.get("error_description")
-            or token_body.get("error")
-            or "unknown error"
-        )
-        return None, f"Could not complete login: {err}"
 
+def clear_pending_login() -> None:
+    path = _pending_path()
+    if path is not None:
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+        except Exception as exc:
+            log(f"could not remove pending login: {exc}")
+
+
+def _save_token(auth_path: Path, token_body: dict[str, Any]) -> None:
     auth_path.parent.mkdir(parents=True, exist_ok=True)
     payload: dict[str, Any] = {
         "access_token": token_body["access_token"],
@@ -522,12 +556,135 @@ def perform_device_login() -> tuple[str | None, str]:
     payload = {k: v for k, v in payload.items() if v is not None}
     auth_path.write_text(json.dumps(payload, indent=2) + "\n")
     os.chmod(auth_path, 0o600)
+    clear_pending_login()
     log(f"saved token to {auth_path}")
 
-    return token_body["access_token"], (
+
+def _finish_in_browser_text(pending: dict[str, Any], lead: str) -> str:
+    minutes = max(int((float(pending["expires_at"]) - time.time()) // 60), 1)
+    return (
+        f"{lead}\n\n"
+        "To finish logging in without the modal:\n"
+        f"  1. Open {pending['verify_url']}\n"
+        f"  2. Confirm the code {pending.get('user_code') or '(shown on the page)'} and approve\n"
+        "  3. Re-run /archetype:setup\n"
+        f"This code stays valid for about {minutes} more minute(s)."
+    )
+
+
+_login_lock = threading.Lock()
+
+
+def perform_device_login(stale_token: str | None = None) -> tuple[str | None, str]:
+    """Run the Auth0 device flow end to end, saving the token on success.
+
+    Returns (access_token, message); access_token is None on any failure and
+    the message explains why in user-facing language. Shared by the explicit
+    `login` tool and the self-healing path of every authed tool.
+
+    The flow is resumable: the device code is kept on disk until it is used
+    or expires, so an approval given in the browser is honored even when the
+    modal was truncated, dismissed, or could not render at all.
+
+    ``stale_token`` is the token the caller already knows to be rejected.
+    Tool calls run concurrently, so two of them can need a login at once:
+    whoever waits on the lock reuses the token the first one obtained instead
+    of opening a second modal.
+    """
+    with _login_lock:
+        current = load_token()
+        if current and stale_token and current != stale_token:
+            return current, "Connected to Archetype."
+        return _device_login_locked()
+
+
+def _device_login_locked() -> tuple[str | None, str]:
+    plugin_data = os.environ.get("CLAUDE_PLUGIN_DATA")
+    if not plugin_data:
+        return None, (
+            "CLAUDE_PLUGIN_DATA is not set; cannot determine where to store credentials."
+        )
+    auth_path = Path(plugin_data) / "auth.json"
+    connected = (
         f"Connected to Archetype. Access token saved to {auth_path} (mode 0600).\n"
         "Next: /archetype:persona to meet your persona pools, or "
         "`/archetype:validation <goal> url=<...>` to start a validation run."
+    )
+
+    pending = load_pending_login()
+    if pending:
+        outcome, token_body = poll_once(pending["device_code"])
+        if outcome == "token":
+            log("resumed a login that was approved in the browser earlier")
+            _save_token(auth_path, token_body)
+            return token_body["access_token"], connected
+        if outcome == "failed":
+            clear_pending_login()
+            pending = None
+
+    if not pending:
+        status, code_body = backend_post("/api/oauth/device/code", {})
+        if status != 200 or "device_code" not in code_body:
+            err = code_body.get("error_description") or code_body.get("message") or code_body.get("error") or code_body
+            return None, (
+                f"Could not start Archetype login (backend={BACKEND_BASE}, status={status}): {err}"
+            )
+        verify_url = code_body.get("verification_uri_complete") or code_body.get(
+            "verification_uri", ""
+        )
+        if not verify_url:
+            return None, "Backend did not return a verification URL."
+        pending = {
+            "device_code": code_body["device_code"],
+            "user_code": code_body.get("user_code", ""),
+            "verify_url": verify_url,
+            "interval": int(code_body.get("interval", 5)),
+            "expires_at": time.time() + int(code_body.get("expires_in", 900)),
+            "backend": BACKEND_BASE,
+        }
+        save_pending_login(pending)
+
+    # stderr lands in the Claude Code debug log: the last resort for reading
+    # the URL and code when no modal can be shown.
+    log(f"login: open {pending['verify_url']} and confirm code {pending['user_code']}")
+
+    remaining = float(pending["expires_at"]) - time.time()
+    answer = request_user_approval(
+        pending["verify_url"], pending["user_code"], min(ELICIT_TIMEOUT, remaining)
+    )
+
+    if answer == "declined":
+        clear_pending_login()
+        return None, "Login cancelled. Re-run /archetype:setup to try again."
+
+    # A modal that never rendered says nothing about the browser: someone who
+    # approved there is logged in, so ask the backend once before giving up.
+    window = APPROVAL_POLL_WINDOW if answer == "accepted" else 0
+    remaining = max(float(pending["expires_at"]) - time.time(), 0)
+    outcome, token_body = poll_for_token(
+        pending["device_code"], pending["interval"], min(window, remaining)
+    )
+    if outcome == "token":
+        _save_token(auth_path, token_body)
+        return token_body["access_token"], connected
+
+    if outcome == "failed":
+        clear_pending_login()
+        err = (
+            token_body.get("error_description")
+            or token_body.get("error")
+            or "unknown error"
+        )
+        return None, f"Could not complete login: {err}. Re-run /archetype:setup to try again."
+
+    if answer == "accepted":
+        return None, _finish_in_browser_text(
+            pending, "The browser approval has not come through yet."
+        )
+    return None, _finish_in_browser_text(
+        pending,
+        "The login prompt could not be shown here (or was not answered). "
+        "Subagents and headless clients cannot render it.",
     )
 
 
@@ -570,35 +727,42 @@ def load_token() -> str | None:
         return None
 
 
-def not_connected() -> dict[str, Any]:
-    return tool_text(
-        "Not connected. Run /archetype:setup to log in.", is_error=True
-    )
+def not_connected(detail: str | None = None) -> dict[str, Any]:
+    text = "Not connected. Run /archetype:setup to log in."
+    if detail:
+        text += f"\n\n{detail}"
+    return tool_text(text, is_error=True)
 
 
 def authed_call(
     do_call: Callable[[str], tuple[int, dict[str, Any]]],
-) -> tuple[int, dict[str, Any]] | None:
+) -> tuple[int, dict[str, Any]] | str:
     """Run a backend call with a token, self-healing missing/expired auth.
 
     Missing token → run the device-flow login inline (elicitation modal) and
     proceed. A 401 answer → re-login once and retry once. Returns the final
-    (status, body), or None when no token could be obtained (user declined or
-    the flow failed) — callers render not_connected() for that.
+    (status, body), or the login failure message (a str) when no token could
+    be obtained: callers render not_connected(message) for that, so the way
+    to finish the login reaches the user even from inside a subagent.
     """
     token = load_token()
     if not token:
         token, message = perform_device_login()
         if not token:
             log(f"inline login failed: {message}")
-            return None
+            return message
     status, body = do_call(token)
     if status == 401:
-        token, message = perform_device_login()
-        if token:
-            status, body = do_call(token)
+        fresh, message = perform_device_login(stale_token=token)
+        if fresh:
+            status, body = do_call(fresh)
         else:
             log(f"inline re-login after 401 failed: {message}")
+            body = dict(body)
+            body["message"] = (
+                f"{body.get('message') or body.get('error') or 'Token rejected.'}"
+                f"\n\n{message}"
+            )
     return status, body
 
 
@@ -758,8 +922,8 @@ def handle_start_run(arguments: dict[str, Any]) -> dict[str, Any]:
             "/api/plugin/runs", body, auth_token=token, timeout=RUN_TIMEOUT
         )
     )
-    if result is None:
-        return not_connected()
+    if isinstance(result, str):
+        return not_connected(result)
     status, resp = result
     if resp.get("error") == "deadline_exceeded":
         advice = (
@@ -838,8 +1002,8 @@ def handle_report_result(arguments: dict[str, Any]) -> dict[str, Any]:
             timeout=RESULT_TIMEOUT,
         )
     )
-    if result is None:
-        return not_connected()
+    if isinstance(result, str):
+        return not_connected(result)
     status, resp = result
     if resp.get("error") == "deadline_exceeded":
         return tool_text(
@@ -874,8 +1038,8 @@ def handle_get_run(arguments: dict[str, Any]) -> dict[str, Any]:
     result = authed_call(
         lambda token: backend_get(f"/api/plugin/runs/{run_id}", auth_token=token)
     )
-    if result is None:
-        return not_connected()
+    if isinstance(result, str):
+        return not_connected(result)
     status, resp = result
     if not (200 <= status < 300):
         return backend_error_text(status, resp)
@@ -902,8 +1066,8 @@ def handle_list_features(arguments: dict[str, Any]) -> dict[str, Any]:
     result = authed_call(
         lambda token: backend_get("/api/features", auth_token=token)
     )
-    if result is None:
-        return not_connected()
+    if isinstance(result, str):
+        return not_connected(result)
     status, resp = result
     if not (200 <= status < 300):
         return backend_error_text(status, resp)
@@ -942,6 +1106,9 @@ def handle_logout(_arguments: dict[str, Any]) -> dict[str, Any]:
             is_error=True,
         )
     auth_path = Path(plugin_data) / "auth.json"
+    # A half-finished login is a credential too: a device code that someone
+    # could still approve must not outlive an explicit logout.
+    clear_pending_login()
     if not auth_path.exists():
         return tool_text(
             "Not connected — no local credentials to remove. "
@@ -993,8 +1160,8 @@ def handle_create_feature(arguments: dict[str, Any]) -> dict[str, Any]:
     result = authed_call(
         lambda token: backend_post("/api/features", body, auth_token=token)
     )
-    if result is None:
-        return not_connected()
+    if isinstance(result, str):
+        return not_connected(result)
     status, resp = result
     if not (200 <= status < 300):
         return backend_error_text(status, resp)
@@ -1022,8 +1189,8 @@ def handle_list_pools(arguments: dict[str, Any]) -> dict[str, Any]:
     result = authed_call(
         lambda token: backend_get("/api/persona/pools", auth_token=token)
     )
-    if result is None:
-        return not_connected()
+    if isinstance(result, str):
+        return not_connected(result)
     status, resp = result
     if not (200 <= status < 300):
         return backend_error_text(status, resp)
@@ -1102,8 +1269,8 @@ def _preview_pool_candidates(
             "/api/persona/vibe", body, auth_token=token, timeout=PERSONA_TIMEOUT
         )
     )
-    if result is None:
-        return not_connected()
+    if isinstance(result, str):
+        return not_connected(result)
     status, resp = result
     if not (200 <= status < 300):
         return backend_error_text(status, resp)
@@ -1161,8 +1328,8 @@ def _save_pool(
             timeout=PERSONA_TIMEOUT,
         )
     )
-    if result is None:
-        return not_connected()
+    if isinstance(result, str):
+        return not_connected(result)
     status, resp = result
     if not (200 <= status < 300):
         return backend_error_text(status, resp)
@@ -1204,8 +1371,8 @@ def _save_pool(
             timeout=PERSONA_TIMEOUT,
         )
     )
-    if result is None:
-        return not_connected()
+    if isinstance(result, str):
+        return not_connected(result)
     status, resp = result
     if not (200 <= status < 300):
         return tool_text(
@@ -1227,7 +1394,7 @@ def _save_pool(
             auth_token=token,
         )
     )
-    if result is None:
+    if isinstance(result, str):
         rename_error = "not connected"
     else:
         status, resp = result
