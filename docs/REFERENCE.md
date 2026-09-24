@@ -253,7 +253,14 @@ v`0.4.0` (protocol `2025-06-18`) and is the data plane between the actor LLM and
 backend — Claude never touches tokens or raw HTTP. Configuration comes from environment variables
 (see [Environment variables](#environment-variables)).
 
-**Timeouts:** default `HTTP_TIMEOUT = 15` s; `RUN_TIMEOUT = 180` s (run assembly runs a server-side
+**Deadlines:** every value here bounds the WHOLE HTTP exchange on the wall clock, not a single
+socket operation. `urllib`'s own `timeout` restarts on every `recv`, so a backend or proxy that
+trickles bytes could otherwise hold a call open forever; `_send` runs the exchange on a daemon
+thread and abandons it at the deadline. An expired deadline maps to status `0` with body
+`{"error": "deadline_exceeded", "message": ...}`. `start_run` adds "no run was handed to this
+session" plus a retry-without-`pool=` hint for pool runs; `report_result` tells the actor to check
+`get_run` before re-sending, because the backend may already have stored the results.
+Default `HTTP_TIMEOUT = 15` s; `RUN_TIMEOUT = 180` s (run assembly runs a server-side
 LLM chain, ~90 s tolerated, plus up to ~a minute of pool spin-off); `RESULT_TIMEOUT = 60` s
 (multi-MB screenshot payloads; a client timeout after server-side storage would surface as a
 confusing 409 on retry); `PERSONA_TIMEOUT = 180` s (one server-side LLM call per preview candidate,
@@ -266,6 +273,13 @@ and one for the pool's reference persona on save).
 `{"error": "network_error", "message": ...}` and render through the same path. When `authed_call`
 cannot obtain a token at all, the tool returns `Not connected. Run /archetype:setup to log in.`
 (`isError`).
+
+**Concurrency:** only the main loop reads stdin. Each `tools/call` runs on its own daemon thread, so
+a slow `start_run` never delays `status`, `get_run` or `report_result`. Responses to
+server-initiated requests (the login elicitation) are routed to their waiter by `route_response`.
+`notifications/cancelled` suppresses the reply of the named request, per MCP. `ping` answers `{}`.
+When the client sends `_meta.progressToken`, the server emits `notifications/progress` every
+`ARCHETYPE_PROGRESS_INTERVAL` seconds while the call is in flight.
 
 ### The ten tools
 
@@ -678,6 +692,11 @@ inherits the environment of the Claude Code CLI, so export these **before** laun
 | `ARCHETYPE_BACKEND_URL` | `https://api.syntheticarchetype.com` | Base URL for every backend call (device-flow OAuth, `/api/plugin/*`, `/api/features`, `/api/persona/*`). Trailing slashes are stripped. Set to `http://localhost:5001` for local backend development. |
 | `ARCHETYPE_PORTAL_URL` | `https://www.syntheticarchetype.com` | Portal link rendered in the `/archetype:status` dashboard. Trailing slashes are stripped. |
 | `ARCHETYPE_PLUGIN_USER_AGENT` | `archetype-claude-plugin/<server version>` (currently `archetype-claude-plugin/0.4.0`, from the `SERVER_VERSION` constant in `core-server.py`) | HTTP `User-Agent` sent on every backend request. The Cloudflare WAF in front of `api.syntheticarchetype.com` returns HTTP 403 (error 1010) for the default Python-urllib UA; any real, identifiable UA passes. If you override this and hit a 1010, switch back to the default. |
+| `ARCHETYPE_HTTP_TIMEOUT` | `15` | Wall-clock deadline in seconds for ordinary backend calls. |
+| `ARCHETYPE_RUN_TIMEOUT` | `180` | Deadline for `POST /api/plugin/runs` (run assembly plus pool spin-off). |
+| `ARCHETYPE_RESULT_TIMEOUT` | `60` | Deadline for results ingestion. |
+| `ARCHETYPE_PERSONA_TIMEOUT` | `180` | Deadline for the persona preview/custom/pool-create calls. |
+| `ARCHETYPE_PROGRESS_INTERVAL` | `5` | Seconds between `notifications/progress` ticks while a tool call is in flight (sent only when the client supplied a `progressToken`). |
 | `CLAUDE_PLUGIN_DATA` | *(set by Claude Code)* | Directory holding `auth.json` (credentials) and `runs.json` (run log); see below. |
 
 ### Plugin data files (`${CLAUDE_PLUGIN_DATA}`)

@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  core-server:
+    name: core server (python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.12", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          allow-prereleases: true
+      - name: Byte-compile
+        run: python -m py_compile scripts/core-server.py scripts/test_core_server.py
+      - name: Stdio harness against the stub backend
+        run: python scripts/test_core_server.py
+
+  manifest:
+    name: plugin manifest
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: plugin.json and hooks.json are valid JSON
+        run: |
+          python3 -m json.tool .claude-plugin/plugin.json > /dev/null
+          python3 -m json.tool hooks/hooks.json > /dev/null
+      - name: Every skill and agent has frontmatter with a name
+        run: |
+          status=0
+          for f in skills/*/SKILL.md agents/*.md; do
+            head -1 "$f" | grep -qx -- '---' || { echo "missing frontmatter: $f"; status=1; }
+            grep -qm1 '^name: ' "$f" || { echo "missing name: $f"; status=1; }
+          done
+          exit $status

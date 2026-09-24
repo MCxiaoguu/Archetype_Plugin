@@ -242,6 +242,14 @@ class StubState:
         self.error_overrides: dict[str, tuple[int, dict]] = {}
         # like error_overrides, but consumed on first match (for retry paths)
         self.once_overrides: dict[str, tuple[int, dict]] = {}
+        # path-substring -> seconds to sleep before answering (slow backend)
+        self.delays: dict[str, float] = {}
+        # path-substrings answered with headers and then one byte every
+        # `trickle_every` seconds, forever (the urllib-timeout killer)
+        self.trickle: set[str] = set()
+        self.trickle_every = 0.2
+        # path-substrings that are accepted and then never answered
+        self.silent: set[str] = set()
         self.lock = threading.Lock()
 
     def record(self, entry: dict) -> None:
@@ -253,6 +261,9 @@ class StubState:
             self.requests.clear()
             self.error_overrides.clear()
             self.once_overrides.clear()
+            self.delays.clear()
+            self.trickle.clear()
+            self.silent.clear()
 
     def last_for(self, needle: str) -> dict | None:
         with self.lock:
@@ -289,6 +300,21 @@ class Handler(BaseHTTPRequestHandler):
                 "body": body,
             }
         )
+
+        with STATE.lock:
+            silent = any(n in self.path for n in STATE.silent)
+            trickle = any(n in self.path for n in STATE.trickle)
+            delay = max(
+                [d for n, d in STATE.delays.items() if n in self.path], default=0
+            )
+        if silent:
+            time.sleep(30)  # far beyond any deadline a case configures
+            return
+        if trickle:
+            self._trickle()
+            return
+        if delay:
+            time.sleep(delay)
 
         # One-shot overrides fire first and are consumed on match.
         with STATE.lock:
@@ -350,6 +376,22 @@ class Handler(BaseHTTPRequestHandler):
             return 200, FEATURES_RESPONSE
         return 404, {"error": "not_found", "message": f"no stub for {method} {path}"}
 
+    def _trickle(self) -> None:
+        """Valid headers, then a chunked body that never ends: each byte
+        resets urllib's per-operation timeout, so only a wall-clock deadline
+        can end the call."""
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Transfer-Encoding", "chunked")
+        self.end_headers()
+        try:
+            for _ in range(150):
+                self.wfile.write(b"1\r\n \r\n")
+                self.wfile.flush()
+                time.sleep(STATE.trickle_every)
+        except OSError:
+            pass  # the client hung up, which is the point
+
     def _reply(self, status: int, payload: dict) -> None:
         raw = json.dumps(payload).encode("utf-8")
         self.send_response(status)
@@ -374,8 +416,11 @@ class Handler(BaseHTTPRequestHandler):
 
 
 class ServerProc:
-    def __init__(self, port: int, data_dir: Path) -> None:
+    def __init__(
+        self, port: int, data_dir: Path, extra_env: dict[str, str] | None = None
+    ) -> None:
         env = dict(os.environ)
+        env.update(extra_env or {})
         env["CLAUDE_PLUGIN_DATA"] = str(data_dir)
         env["ARCHETYPE_BACKEND_URL"] = f"http://127.0.0.1:{port}"
         # Neuter webbrowser.open in the login flow: `true` is a no-op command.
@@ -383,6 +428,7 @@ class ServerProc:
         # How this harness answers elicitation/create: "accept" or "decline".
         self.elicit_action = "decline"
         self.elicitations: list[dict] = []
+        self.notifications: list[dict] = []
         self.proc = subprocess.Popen(
             [sys.executable, str(SERVER)],
             stdin=subprocess.PIPE,
@@ -418,7 +464,27 @@ class ServerProc:
                     payload = {"action": "decline"}
                 self._write({"jsonrpc": "2.0", "id": resp["id"], "result": payload})
                 continue
+            if "method" in resp and resp.get("id") is None:
+                self.notifications.append(resp)
             # ignore other server-initiated requests / mismatched ids
+
+    def send_request(self, method: str, params: dict | None = None) -> int:
+        """Fire a request without waiting, for cases that overlap calls."""
+        req_id = self._next_id()
+        msg = {"jsonrpc": "2.0", "id": req_id, "method": method}
+        if params is not None:
+            msg["params"] = params
+        self._write(msg)
+        return req_id
+
+    def read_reply(self) -> dict:
+        """Next message that answers one of our requests, in arrival order."""
+        while True:
+            resp = self._read()
+            if "result" in resp or "error" in resp:
+                return resp
+            if "method" in resp and resp.get("id") is None:
+                self.notifications.append(resp)
 
     def notify(self, method: str, params: dict | None = None) -> None:
         msg = {"jsonrpc": "2.0", "method": method}
@@ -1212,6 +1278,136 @@ def case_25_logout_not_connected(srv: ServerProc, data_dir: Path) -> None:
     expect("not connected" in text.lower(), f"no-op logout says so, got {text!r}")
 
 
+FAST = {
+    "ARCHETYPE_HTTP_TIMEOUT": "1",
+    "ARCHETYPE_RUN_TIMEOUT": "1.5",
+    "ARCHETYPE_RESULT_TIMEOUT": "1",
+    "ARCHETYPE_PROGRESS_INTERVAL": "0.3",
+}
+
+
+def timed_tool(srv: ServerProc, name: str, arguments: dict) -> tuple[dict, float]:
+    started = time.monotonic()
+    result = call_tool(srv, name, arguments)
+    return result, time.monotonic() - started
+
+
+def case_26_deadline_beats_trickling_backend(srv: ServerProc, data_dir: Path) -> None:
+    """A body that drips one byte at a time defeats urllib's timeout; the
+    wall-clock deadline must still end the call on schedule."""
+    write_auth(data_dir)
+    STATE.trickle.add("/api/features")
+    result, elapsed = timed_tool(srv, "list_features", {})
+    expect(result.get("isError") is True, "a trickling backend must surface as an error")
+    expect(elapsed < 2.5, f"1 s deadline must hold against a trickle, took {elapsed:.1f} s")
+    text = result_text(result)
+    contains(text, "did not finish answering GET /api/features", "deadline text names the call")
+    contains(text, "within 1 s", "deadline text states the budget")
+
+
+def case_27_deadline_beats_silent_backend(srv: ServerProc, data_dir: Path) -> None:
+    write_auth(data_dir)
+    STATE.silent.add("/api/features")
+    result, elapsed = timed_tool(srv, "list_features", {})
+    expect(result.get("isError") is True, "a silent backend must surface as an error")
+    expect(elapsed < 2.5, f"1 s deadline must hold against silence, took {elapsed:.1f} s")
+    contains(result_text(result), "did not finish answering", "deadline text")
+
+
+def case_28_start_run_deadline_guidance(srv: ServerProc, data_dir: Path) -> None:
+    write_auth(data_dir)
+    STATE.trickle.add("/api/plugin/runs")
+    result, elapsed = timed_tool(
+        srv, "start_run", {"goal": "g", "url": "http://x", "pool_id": "pool-fiona-001"}
+    )
+    expect(result.get("isError") is True, "start_run past its deadline is an error")
+    expect(elapsed < 3.5, f"start_run deadline (1.5 s) must hold, took {elapsed:.1f} s")
+    text = result_text(result)
+    contains(text, "No run was handed to this session", "actor is told not to act")
+    contains(text, "retry without pool=", "pool runs get the no-pool fallback")
+    expect(not (data_dir / "runs.json").exists(), "an abandoned run must not enter the run log")
+    expect(len(srv.elicitations) == 0, "a deadline is not an auth failure: no login modal")
+
+
+def case_29_report_result_deadline_guidance(srv: ServerProc, data_dir: Path) -> None:
+    write_auth(data_dir)
+    STATE.silent.add("/results")
+    result, _elapsed = timed_tool(
+        srv,
+        "report_result",
+        {"run_id": "r9", "session_id": "s", "status": "completed", "steps": [], "feedback": {}},
+    )
+    expect(result.get("isError") is True, "report_result past its deadline is an error")
+    text = result_text(result)
+    contains(text, "Call get_run for r9 first", "guards against a duplicate ingest")
+
+
+def case_30_slow_call_does_not_block_others(srv: ServerProc, data_dir: Path) -> None:
+    """While start_run waits on a slow backend, status must answer at once."""
+    write_auth(data_dir)
+    STATE.delays["/api/plugin/runs"] = 1.2
+    slow_id = srv.send_request(
+        "tools/call", {"name": "start_run", "arguments": {"goal": "g", "url": "http://x"}}
+    )
+    started = time.monotonic()
+    fast_id = srv.send_request("tools/call", {"name": "status", "arguments": {}})
+    first = srv.read_reply()
+    fast_elapsed = time.monotonic() - started
+    expect(first.get("id") == fast_id, "status must answer before the slow start_run")
+    expect(fast_elapsed < 1.0, f"status queued behind start_run ({fast_elapsed:.1f} s)")
+    second = srv.read_reply()
+    expect(second.get("id") == slow_id, "start_run still answers")
+    contains(result_text(second["result"]), "YOUR SCENARIOS", "slow start_run completes normally")
+
+
+def case_31_progress_notifications(srv: ServerProc, data_dir: Path) -> None:
+    write_auth(data_dir)
+    STATE.delays["/api/plugin/runs"] = 1.0
+    resp = srv.rpc(
+        "tools/call",
+        {
+            "name": "start_run",
+            "arguments": {"goal": "g", "url": "http://x"},
+            "_meta": {"progressToken": "tok-1"},
+        },
+    )
+    expect("result" in resp, "call with a progress token still succeeds")
+    ticks = [
+        n for n in srv.notifications
+        if n.get("method") == "notifications/progress"
+        and (n.get("params") or {}).get("progressToken") == "tok-1"
+    ]
+    expect(len(ticks) >= 2, f"expected progress ticks during a 1 s call, got {len(ticks)}")
+    values = [t["params"]["progress"] for t in ticks]
+    expect(values == sorted(values), "progress must never decrease")
+
+    srv.notifications.clear()
+    srv.rpc("tools/call", {"name": "start_run", "arguments": {"goal": "g", "url": "http://x"}})
+    expect(
+        not [n for n in srv.notifications if n.get("method") == "notifications/progress"],
+        "no progress token means no progress notifications",
+    )
+
+
+def case_32_cancelled_call_gets_no_reply(srv: ServerProc, data_dir: Path) -> None:
+    write_auth(data_dir)
+    STATE.delays["/api/features"] = 0.6
+    cancelled_id = srv.send_request("tools/call", {"name": "list_features", "arguments": {}})
+    srv.notify("notifications/cancelled", {"requestId": cancelled_id, "reason": "test"})
+    time.sleep(1.0)
+    ping_id = srv.send_request("ping")
+    reply = srv.read_reply()
+    expect(reply.get("id") == ping_id, "the cancelled call must not reply; ping must")
+    expect(reply.get("result") == {}, f"ping answers with an empty result, got {reply}")
+
+
+def case_33_non_object_json_body(srv: ServerProc, data_dir: Path) -> None:
+    write_auth(data_dir)
+    STATE.error_overrides["/api/features"] = (502, ["bad", "gateway"])  # type: ignore[assignment]
+    result = call_tool(srv, "list_features", {})
+    expect(result.get("isError") is True, "a JSON array body is an error, not a crash")
+
+
 CASES = [
     ("initialize + tools/list shows 10 tools", case_1_tools_list),
     ("start_run happy path (camelCase body, rich tool text)", case_2_start_run_happy),
@@ -1242,6 +1438,14 @@ CASES = [
     ("create_feature POSTs title+fields, returns id", case_23_create_feature),
     ("logout deletes auth.json, keeps run history", case_24_logout_connected),
     ("logout when not connected is a friendly no-op", case_25_logout_not_connected),
+    ("deadline holds against a trickling backend", case_26_deadline_beats_trickling_backend, FAST),
+    ("deadline holds against a silent backend", case_27_deadline_beats_silent_backend, FAST),
+    ("start_run past deadline: no run, pool fallback advice", case_28_start_run_deadline_guidance, FAST),
+    ("report_result past deadline: check get_run before retrying", case_29_report_result_deadline_guidance, FAST),
+    ("a slow start_run does not block status", case_30_slow_call_does_not_block_others),
+    ("progress notifications only when asked, monotonic", case_31_progress_notifications, FAST),
+    ("cancelled call sends no reply; ping works", case_32_cancelled_call_gets_no_reply),
+    ("non-object JSON body is an error, not a crash", case_33_non_object_json_body),
 ]
 
 
@@ -1259,10 +1463,12 @@ def main() -> int:
     failures = 0
     with tempfile.TemporaryDirectory() as tmp:
         data_dir = Path(tmp)
-        for label, fn in CASES:
+        for label, fn, *rest in CASES:
             STATE.reset()
             clear_auth(data_dir)
-            srv = ServerProc(port, data_dir)
+            for stale in ("runs.json",):
+                (data_dir / stale).unlink(missing_ok=True)
+            srv = ServerProc(port, data_dir, rest[0] if rest else None)
             try:
                 srv.initialize()
                 fn(srv, data_dir)
