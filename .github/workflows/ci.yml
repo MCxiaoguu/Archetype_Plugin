@@ -28,9 +28,13 @@ jobs:
           python-version: ${{ matrix.python }}
           allow-prereleases: true
       - name: Byte-compile
-        run: python -m py_compile scripts/core-server.py scripts/test_core_server.py
+        run: python -m py_compile scripts/*.py
       - name: Stdio harness against the stub backend
         run: python scripts/test_core_server.py
+      - name: Session hook
+        run: python scripts/test_session_hook.py
+      - name: Actor agents in sync
+        run: python scripts/test_agents_in_sync.py
 
   manifest:
     name: plugin manifest

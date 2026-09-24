@@ -455,18 +455,7 @@ class ServerProc:
             resp = self._read()
             if resp.get("id") == req_id and ("result" in resp or "error" in resp):
                 return resp
-            # Server-initiated elicitation: record it and answer per elicit_action.
-            if resp.get("method") == "elicitation/create" and resp.get("id") is not None:
-                self.elicitations.append(resp.get("params") or {})
-                if self.elicit_action == "accept":
-                    payload = {"action": "accept", "content": {"approved": True}}
-                else:
-                    payload = {"action": "decline"}
-                self._write({"jsonrpc": "2.0", "id": resp["id"], "result": payload})
-                continue
-            if "method" in resp and resp.get("id") is None:
-                self.notifications.append(resp)
-            # ignore other server-initiated requests / mismatched ids
+            self._absorb(resp)
 
     def send_request(self, method: str, params: dict | None = None) -> int:
         """Fire a request without waiting, for cases that overlap calls."""
@@ -481,10 +470,36 @@ class ServerProc:
         """Next message that answers one of our requests, in arrival order."""
         while True:
             resp = self._read()
-            if "result" in resp or "error" in resp:
+            if "method" not in resp and ("result" in resp or "error" in resp):
                 return resp
-            if "method" in resp and resp.get("id") is None:
-                self.notifications.append(resp)
+            self._absorb(resp)
+
+    def _absorb(self, resp: dict) -> None:
+        """Handle a message that is not the reply being waited for."""
+        # Server-initiated elicitation: record it and answer per elicit_action
+        # ("accept", "decline", "error" = client cannot render it, "ignore" =
+        # never answered, as inside a subagent).
+        if resp.get("method") == "elicitation/create" and resp.get("id") is not None:
+            self.elicitations.append(resp.get("params") or {})
+            if self.elicit_action == "ignore":
+                return
+            if self.elicit_action == "error":
+                self._write(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": resp["id"],
+                        "error": {"code": -32601, "message": "elicitation not supported"},
+                    }
+                )
+                return
+            if self.elicit_action == "accept":
+                payload = {"action": "accept", "content": {"approved": True}}
+            else:
+                payload = {"action": "decline"}
+            self._write({"jsonrpc": "2.0", "id": resp["id"], "result": payload})
+            return
+        if "method" in resp and resp.get("id") is None:
+            self.notifications.append(resp)
 
     def notify(self, method: str, params: dict | None = None) -> None:
         msg = {"jsonrpc": "2.0", "method": method}
@@ -1270,6 +1285,13 @@ def case_24_logout_connected(srv: ServerProc, data_dir: Path) -> None:
     expect(len(srv.elicitations) == 0, "logout must never trigger the login modal")
 
 
+def case_24b_logout_discards_pending_login(srv: ServerProc, data_dir: Path) -> None:
+    write_auth(data_dir)
+    (data_dir / "pending_login.json").write_text(json.dumps({"device_code": "x"}))
+    call_tool(srv, "logout", {})
+    expect(not (data_dir / "pending_login.json").exists(), "logout removes a half-finished login")
+
+
 def case_25_logout_not_connected(srv: ServerProc, data_dir: Path) -> None:
     clear_auth(data_dir)
     result = call_tool(srv, "logout", {})
@@ -1408,6 +1430,138 @@ def case_33_non_object_json_body(srv: ServerProc, data_dir: Path) -> None:
     expect(result.get("isError") is True, "a JSON array body is an error, not a crash")
 
 
+PENDING = (400, {"error": "authorization_pending", "error_description": "not yet"})
+LOGIN_FAST = {"ARCHETYPE_ELICIT_TIMEOUT": "1", "ARCHETYPE_APPROVAL_POLL_WINDOW": "1"}
+
+
+def count_requests(needle: str) -> int:
+    with STATE.lock:
+        return sum(1 for r in STATE.requests if needle in r["path"])
+
+
+def case_34_login_modal_leads_with_code_and_url(srv: ServerProc, data_dir: Path) -> None:
+    """Clients show only the first lines of a long modal message: the code and
+    the URL have to be those lines."""
+    srv.elicit_action = "accept"
+    result = call_tool(srv, "login", {})
+    expect(not result.get("isError"), f"login should succeed, got {result_text(result)!r}")
+    lines = srv.elicitations[0]["message"].splitlines()
+    contains(lines[0], "ABCD-EFGH", "first modal line carries the code")
+    expect(
+        lines[1] == DEVICE_CODE_RESPONSE["verification_uri_complete"],
+        f"second modal line is the bare URL, got {lines[1]!r}",
+    )
+    expect(not (data_dir / "pending_login.json").exists(), "pending login cleared on success")
+
+
+def case_35_login_resumes_when_modal_unavailable(srv: ServerProc, data_dir: Path) -> None:
+    """No modal (headless client): the tool hands back URL + code, and the
+    next login call picks up the browser approval with no new modal."""
+    srv.elicit_action = "error"
+    STATE.error_overrides["/api/oauth/device/token"] = PENDING
+    result = call_tool(srv, "login", {})
+    expect(result.get("isError") is True, "login is not complete yet")
+    text = result_text(result)
+    contains(text, DEVICE_CODE_RESPONSE["verification_uri_complete"], "URL in tool text")
+    contains(text, "ABCD-EFGH", "code in tool text")
+    contains(text, "Re-run /archetype:setup", "tells the user how to resume")
+    pending_path = data_dir / "pending_login.json"
+    expect(pending_path.exists(), "device code kept for resumption")
+    expect(oct(pending_path.stat().st_mode & 0o777) == "0o600", "pending login is mode 0600")
+
+    # The user approves in the browser; the backend now has a token waiting.
+    STATE.error_overrides.clear()
+    srv.elicit_action = "decline"  # would fail the case if a modal were shown
+    result = call_tool(srv, "login", {})
+    expect(not result.get("isError"), f"resumed login must succeed, got {result_text(result)!r}")
+    expect(len(srv.elicitations) == 1, "resuming must not open a second modal")
+    expect(count_requests("/api/oauth/device/code") == 1, "resuming must not request a new code")
+    expect(not pending_path.exists(), "pending login cleared after resuming")
+    auth = json.loads((data_dir / "auth.json").read_text())
+    expect(auth.get("access_token") == "new-token-456", "token saved by the resumed login")
+
+
+def case_36_login_modal_never_answered(srv: ServerProc, data_dir: Path) -> None:
+    srv.elicit_action = "ignore"
+    STATE.error_overrides["/api/oauth/device/token"] = PENDING
+    result, elapsed = timed_tool(srv, "login", {})
+    expect(result.get("isError") is True, "an unanswered modal is not a login")
+    expect(elapsed < 4, f"an unanswered modal must not hang the call, took {elapsed:.1f} s")
+    contains(result_text(result), "could not be shown here", "explains the missing modal")
+    contains(result_text(result), "ABCD-EFGH", "still hands over the code")
+
+
+def case_37_login_accepted_before_approving(srv: ServerProc, data_dir: Path) -> None:
+    srv.elicit_action = "accept"
+    STATE.error_overrides["/api/oauth/device/token"] = PENDING
+    result, elapsed = timed_tool(srv, "login", {})
+    expect(result.get("isError") is True, "no approval yet means not connected")
+    expect(elapsed < 5, f"approval polling must be bounded, took {elapsed:.1f} s")
+    contains(result_text(result), "has not come through yet", "says what is missing")
+    expect((data_dir / "pending_login.json").exists(), "still resumable")
+
+
+def case_38_login_decline_is_final(srv: ServerProc, data_dir: Path) -> None:
+    srv.elicit_action = "decline"
+    result = call_tool(srv, "login", {})
+    expect(result.get("isError") is True, "declined login is an error result")
+    contains(result_text(result), "Login cancelled", "decline text")
+    expect(count_requests("/api/oauth/device/token") == 0, "a decline must not fetch a token")
+    expect(not (data_dir / "pending_login.json").exists(), "a decline discards the device code")
+
+
+def case_39_stale_pending_login_is_discarded(srv: ServerProc, data_dir: Path) -> None:
+    (data_dir / "pending_login.json").write_text(
+        json.dumps(
+            {
+                "device_code": "old",
+                "user_code": "OLD-CODE",
+                "verify_url": "https://auth0.test/old",
+                "interval": 1,
+                "expires_at": time.time() - 60,
+                "backend": "ignored",
+            }
+        )
+    )
+    srv.elicit_action = "accept"
+    result = call_tool(srv, "login", {})
+    expect(not result.get("isError"), "expired pending login falls back to a fresh flow")
+    contains(srv.elicitations[0]["message"], "ABCD-EFGH", "fresh code, not the expired one")
+    token_req = STATE.last_for("/api/oauth/device/token")
+    expect(token_req["body"] == {"device_code": "dev-code-123"}, "polls with the fresh device code")
+
+
+def case_40_authed_tool_surfaces_login_instructions(srv: ServerProc, data_dir: Path) -> None:
+    """From a subagent the modal cannot render: the actor still has to be able
+    to tell the user exactly how to finish logging in."""
+    clear_auth(data_dir)
+    srv.elicit_action = "error"
+    STATE.error_overrides["/api/oauth/device/token"] = PENDING
+    result = call_tool(srv, "list_features", {})
+    expect(result.get("isError") is True, "no token means an error")
+    text = result_text(result)
+    contains(text, "Run /archetype:setup to log in", "keeps the standard hint")
+    contains(text, DEVICE_CODE_RESPONSE["verification_uri_complete"], "adds the URL")
+
+
+def case_41_concurrent_401s_share_one_login(srv: ServerProc, data_dir: Path) -> None:
+    write_auth(data_dir)
+    srv.elicit_action = "accept"
+    stale = {"error": "invalid_token", "message": "Token expired or invalid."}
+    STATE.once_overrides["/api/features"] = (401, stale)
+    STATE.once_overrides["/api/persona/pools"] = (401, stale)
+    ids = {
+        srv.send_request("tools/call", {"name": "list_features", "arguments": {}}),
+        srv.send_request("tools/call", {"name": "list_pools", "arguments": {}}),
+    }
+    replies = [srv.read_reply(), srv.read_reply()]
+    expect({r.get("id") for r in replies} == ids, "both calls answer")
+    for reply in replies:
+        expect(not reply["result"].get("isError"), f"both heal, got {result_text(reply['result'])!r}")
+    expect(len(srv.elicitations) == 1, f"one modal for two 401s, got {len(srv.elicitations)}")
+    expect(count_requests("/api/oauth/device/code") == 1, "one device code for two 401s")
+
+
 CASES = [
     ("initialize + tools/list shows 10 tools", case_1_tools_list),
     ("start_run happy path (camelCase body, rich tool text)", case_2_start_run_happy),
@@ -1437,6 +1591,7 @@ CASES = [
     ("status tolerates legacy persona_id run-log entries", case_22b_status_tolerates_legacy_run_log),
     ("create_feature POSTs title+fields, returns id", case_23_create_feature),
     ("logout deletes auth.json, keeps run history", case_24_logout_connected),
+    ("logout discards a half-finished login", case_24b_logout_discards_pending_login),
     ("logout when not connected is a friendly no-op", case_25_logout_not_connected),
     ("deadline holds against a trickling backend", case_26_deadline_beats_trickling_backend, FAST),
     ("deadline holds against a silent backend", case_27_deadline_beats_silent_backend, FAST),
@@ -1446,6 +1601,14 @@ CASES = [
     ("progress notifications only when asked, monotonic", case_31_progress_notifications, FAST),
     ("cancelled call sends no reply; ping works", case_32_cancelled_call_gets_no_reply),
     ("non-object JSON body is an error, not a crash", case_33_non_object_json_body),
+    ("login modal leads with the code and the URL", case_34_login_modal_leads_with_code_and_url),
+    ("login resumes after a modal that could not render", case_35_login_resumes_when_modal_unavailable, LOGIN_FAST),
+    ("login modal never answered: bounded, resumable", case_36_login_modal_never_answered, LOGIN_FAST),
+    ("login accepted before approving: bounded, resumable", case_37_login_accepted_before_approving, LOGIN_FAST),
+    ("login decline is final", case_38_login_decline_is_final),
+    ("expired pending login is discarded", case_39_stale_pending_login_is_discarded),
+    ("authed tool without a modal surfaces login instructions", case_40_authed_tool_surfaces_login_instructions, LOGIN_FAST),
+    ("concurrent 401s share one login", case_41_concurrent_401s_share_one_login),
 ]
 
 
@@ -1466,7 +1629,7 @@ def main() -> int:
         for label, fn, *rest in CASES:
             STATE.reset()
             clear_auth(data_dir)
-            for stale in ("runs.json",):
+            for stale in ("runs.json", "pending_login.json"):
                 (data_dir / stale).unlink(missing_ok=True)
             srv = ServerProc(port, data_dir, rest[0] if rest else None)
             try:

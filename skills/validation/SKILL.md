@@ -137,21 +137,55 @@ For the confirmed run list (one run or many):
    auth in the main session; if intake made NO authed call (e.g. a plain
    goal+url run), call `status` now, and if it reports a missing or expired
    token, run the `login` tool here in the main session before dispatching.
-2. Dispatch the `feature-validator` agent once per run object. The dispatch
+2. **Browser preflight, before any run exists.** `start_run` creates a run
+   server-side and, for a pool run, spins a new tester into the pool. Doing
+   that for a session that cannot open a page wastes both, so prove the
+   browser works first: load the Claude-in-Chrome tools (ToolSearch, query
+   `claude-in-chrome`) and call `tabs_context_mcp` once. If the tools are
+   missing or the call reports no connected browser, STOP: dispatch nothing,
+   call `start_run` for nothing, and tell the user what to fix, in this order:
+   - Chrome is running with the Claude extension installed and signed in to
+     the same account as this session.
+   - Claude Code was started with `claude --chrome`, or `/chrome` shows the
+     browser as connected.
+   - The computer is unlocked. With the screen locked the extension
+     disconnects, and computer use cannot stand in for it: it can watch a
+     browser but not drive one.
+   Then offer to retry. One check covers the whole run list.
+
+   **Headless fallback.** Chrome is the default because the user can watch
+   it. When it is not available, or the user asked for a headless or
+   unattended run, check for the Playwright MCP server instead: ToolSearch
+   `select:mcp__playwright__browser_navigate`. If it is there, use the
+   `feature-validator-headless` agent for every run in the list and say so
+   in one line ("Chrome is not connected, running headless on Playwright").
+   If neither browser is available, stop as above and also offer the
+   one-time headless setup:
+   `claude mcp add playwright -- npx -y @playwright/mcp@latest --headless --isolated`
+   (needs Node 18 or newer, then a session restart). Never install it
+   yourself and never switch browsers mid-list.
+3. Dispatch the chosen actor agent (`feature-validator`, or
+   `feature-validator-headless` per the preflight) once per run object. The dispatch
    prompt carries ONLY the run's resolved fields — goal, url, `feature_id`,
    `pool_id` plus the pool's display name (for the agent's sanity check
    against the brief). Deliberately include nothing else: no product
    background, no known issues, no prior run results — a clean actor is the
    point.
-3. Multiple runs execute **sequentially** — the agents share one Chrome;
+4. Multiple runs execute **sequentially**: the agents share one Chrome;
    parallel dispatch makes them fight over the browser.
-4. If a run comes back with the "backend did not honor the pool" error,
+5. If a run comes back with the "backend did not honor the pool" error,
    stop the remaining pool-selected runs (they will fail the same way)
    and surface it once.
+6. If a run comes back with "did not finish answering" (the backend missed
+   its deadline), no run was created for this session. Offer one retry; for
+   a pool run that times out twice, offer to run without the pool instead of
+   retrying again.
 
-The full actor loop (become the persona, drive Chrome, keep the step log,
-`report_result` exactly once) is defined in the `feature-validator` agent —
-that file is the single source of truth for run execution.
+The full actor loop (become the persona, drive the browser, keep the step
+log, `report_result` exactly once) is defined in the `feature-validator`
+agent: that file is the single source of truth for run execution.
+`feature-validator-headless` is the same procedure on a different browser,
+and `scripts/test_agents_in_sync.py` keeps the two from drifting.
 
 **Watch-live exception**: only if the user explicitly asks to watch the
 persona act live, run the loop inline in the main session by following the
