@@ -235,12 +235,23 @@ severity, persona quote, and run id, noting status can be re-checked via `get_ru
 Source: `hooks/hooks.json`. A single `SessionStart` hook with matcher `startup`, type `command`:
 
 ```
-test -f "$CLAUDE_PLUGIN_DATA/auth.json" || echo 'archetype: not connected. Run /archetype:setup to get started.'
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/session-hook.py"
 ```
 
-At session startup it checks for the saved token file at `${CLAUDE_PLUGIN_DATA}/auth.json`; if
-absent, it injects the one-line nudge pointing the user at `/archetype:setup`. When the token file
-exists, it prints nothing.
+At session startup it reads `${CLAUDE_PLUGIN_DATA}/auth.json` locally (no network) and prints one
+line only when the session cannot run Archetype commands as it stands:
+
+| state | line |
+| :--- | :--- |
+| no `auth.json`, or no `access_token` in it | `archetype: not connected. Run /archetype:setup to get started.` |
+| unparseable `auth.json` | `archetype: saved login is unreadable. ...` |
+| `saved_at + expires_in` is in the past | `archetype: your login has expired. ...` |
+| less than an hour of lifetime left | `archetype: your login expires in about N minute(s). ...` |
+| valid | *(nothing)* |
+
+The expiry lines matter because the login modal cannot render inside the `feature-validator`
+subagent: a token that lapses mid-run would otherwise surface only when `report_result` fails.
+The hook always exits `0`. Tests: `python3 scripts/test_session_hook.py`.
 
 ---
 
@@ -489,11 +500,41 @@ Every backend-touching tool except `login` and `status` wraps its HTTP call in `
 1. **Load token** — `load_token()` reads `access_token` from `${CLAUDE_PLUGIN_DATA}/auth.json`
    (returns `None` on missing env var, missing file, or unparseable JSON).
 2. **Missing token** → run `perform_device_login()` inline (the same elicitation-modal device flow
-   as `login`). If that fails or the user declines, `authed_call` returns `None` and the caller
-   renders `Not connected. Run /archetype:setup to log in.` (`isError`).
+   as `login`). If that fails or the user declines, `authed_call` returns the failure message (a
+   `str`) and the caller renders `Not connected. Run /archetype:setup to log in.` followed by that
+   message (`isError`), so the URL and code reach the user even from a subagent.
 3. **Call once.** If the backend answers **401** → re-login once via the same inline flow, and if a
    new token is obtained, **retry the call exactly once**. If re-login fails, the original 401 is
-   returned and rendered by `backend_error_text` with the login hint appended.
+   returned and rendered by `backend_error_text` with the login hint and the failure message.
+
+Tool calls run concurrently, so `perform_device_login` holds a lock: a second call that needs a
+login while one is in progress waits, then reuses the token the first obtained (one modal, one
+device code).
+
+### Resumable, bounded login
+
+The device flow never depends on the modal being readable:
+
+- **The modal leads with what matters.** Line 1 is `Archetype login code: <code>`, line 2 is the
+  bare verification URL. Clients truncate long elicitation messages to their first lines.
+- **stderr carries the same two values** (`login: open <url> and confirm code <code>`), which land
+  in the Claude Code debug log.
+- **The device code is kept** in `${CLAUDE_PLUGIN_DATA}/pending_login.json` (mode `0600`) until it
+  is used, declined, or expires. The next `login` (or self-heal) polls it once first: an approval
+  given in the browser is honored with no new modal and no new code. `logout` deletes it.
+- **One browser per code.** Auth0 binds a user code to the first browser session that opens it; a
+  second browser then sees "Invalid or expired user code". The plugin auto-opens the default
+  browser, so finish there. Opening the URL by hand is for when nothing opened (set `BROWSER=true`
+  to suppress the auto-open, as the test harness does).
+- **Every wait is bounded.** The modal waits `ARCHETYPE_ELICIT_TIMEOUT` (600 s) at most; after
+  Accept, token polling runs for `ARCHETYPE_APPROVAL_POLL_WINDOW` (120 s) at most.
+
+| modal outcome | then |
+| :--- | :--- |
+| accepted, token ready | token saved, `Connected to Archetype...` |
+| accepted, approval not through within the window | `isError`, "has not come through yet", how to finish in the browser; still resumable |
+| declined or cancelled | `Login cancelled.`; no token poll; device code discarded |
+| error or never answered (headless client, subagent) | one poll (the browser may already be approved), else `isError` with URL, code and "Re-run /archetype:setup"; still resumable |
 
 Opt-outs: **`login`** is the flow itself (it validates the cached token via
 `existing_token_is_valid`, then runs the device flow), and **`status`** is deliberately read-only —
@@ -696,6 +737,8 @@ inherits the environment of the Claude Code CLI, so export these **before** laun
 | `ARCHETYPE_RUN_TIMEOUT` | `180` | Deadline for `POST /api/plugin/runs` (run assembly plus pool spin-off). |
 | `ARCHETYPE_RESULT_TIMEOUT` | `60` | Deadline for results ingestion. |
 | `ARCHETYPE_PERSONA_TIMEOUT` | `180` | Deadline for the persona preview/custom/pool-create calls. |
+| `ARCHETYPE_ELICIT_TIMEOUT` | `600` | Longest the login modal is waited on, in seconds. |
+| `ARCHETYPE_APPROVAL_POLL_WINDOW` | `120` | Longest token polling continues after the user accepts the modal. |
 | `ARCHETYPE_PROGRESS_INTERVAL` | `5` | Seconds between `notifications/progress` ticks while a tool call is in flight (sent only when the client supplied a `progressToken`). |
 | `CLAUDE_PLUGIN_DATA` | *(set by Claude Code)* | Directory holding `auth.json` (credentials) and `runs.json` (run log); see below. |
 

@@ -33,7 +33,15 @@ your only window onto the product.
    no URL is given, ask for it — never guess a URL. If the dispatch prompt
    supplies a `pool_id` (already resolved by the caller), carry it as-is —
    never invent or substitute one.
-2. **Start the run.** Call `start_run` with `url` (required) plus `goal`
+2. **Prove the browser works, before the run exists.** Load the
+   Claude-in-Chrome tools via ToolSearch and call `tabs_context_mcp`. If the
+   tools will not load or no browser is connected, STOP here: do not call
+   `start_run` (it would create a run and spin off a tester that can never
+   be used), and tell the user that Chrome needs to be running with the
+   Claude extension signed in, connected to this session (`claude --chrome`
+   or `/chrome`), on an unlocked computer. There is no run yet, so there is
+   nothing to report.
+3. **Start the run.** Call `start_run` with `url` (required) plus `goal`
    and/or `feature_id`, and `pool_id` when given (the backend spins off one
    fresh tester from that pool, which can add up to ~a minute). Its result
    text is authoritative: it carries the mission brief, a first-person
@@ -43,24 +51,25 @@ your only window onto the product.
    connected" error, tell the user to run `/archetype:setup` in the main
    session and stop — do not fabricate a run. If the tool reports the
    backend did not honor the requested pool, surface that error verbatim and
-   stop — never run as a tester the caller didn't pick.
-3. **Become the persona.** Adopt the persona card and conduct rules. Act at
+   stop: never run as a tester the caller didn't pick. If it reports that
+   the backend "did not finish answering", no run was created: say so and
+   stop, do not retry in a loop.
+4. **Become the persona.** Adopt the persona card and conduct rules. Act at
    that persona's patience/skill/reading level; narrate each step in their
    first-person voice.
-4. **Open the browser.** Load Claude-in-Chrome tools via ToolSearch, call
-   `tabs_context_mcp` first, create a NEW tab, and navigate it to the target
-   URL. Stay on the target site. If the site never loads, Chrome isn't
-   connected, or the browser tools are unusable, do NOT abandon silently: mark
+5. **Open the site.** Create a NEW tab and navigate it to the target URL.
+   Stay on the target site. If the site never loads, or the browser stops
+   responding after the run was created, do NOT abandon silently: mark
    all scenarios `blocked`, call `report_result` with status `"failed"` and a
    finding describing what you observed, then tell the user.
-5. **Execute the scenarios in order.** Time-box each to ~3 minutes; if a
+6. **Execute the scenarios in order.** Time-box each to ~3 minutes; if a
    scenario is blocked, mark it `blocked` and continue. Keep a snake_case step
    log as you go — for every meaningful action: `seq` (1-based, strictly
    increasing), `scenario_id`, `action_text`, `narration` (persona voice),
    `url`, `observation_page_type` (one or two words), `success`, optional
    `error`. Attach `screenshot_b64` for at most a few key moments only if
    readily available (≤6 total, ≤1 MB each) — otherwise omit.
-6. **Report — exactly one successful call.** Call `report_result` with
+7. **Report: exactly one successful call.** Call `report_result` with
    `run_id`, `session_id`, `status` (`completed`|`failed`|`aborted`),
    `duration_seconds`, `steps`, and `feedback`. If the call itself errors,
    retry with the same payload; once you receive a success confirmation, never
@@ -71,7 +80,7 @@ your only window onto the product.
    description, evidenceStepSeq}]`, `personaReaction`. This mirrors the
    contract rendered by `start_run`; if they ever differ, the `start_run` text
    wins.
-7. **Report to the user.** Produce a scenario verdict table (id · title ·
+8. **Report to the user.** Produce a scenario verdict table (id · title ·
    status · actualResult), findings by severity, the persona quote, and the run
    id, with a note that status can be re-checked with `get_run` /
    `/archetype:check-run-status <run_id>`.
