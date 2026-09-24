@@ -14,7 +14,8 @@ customer-like feedback on your work without leaving your editor or terminal.
 | Skill | `skills/validate-feature/` | Feature-first entry: resolve a saved feature, then run the actor loop |
 | Skill | `skills/list-features/` | Browse the saved features available for validation |
 | Skill | `skills/check-run-status/` | Look up the status / results of a run |
-| Agent | `agents/feature-validator.md` | Headless orchestration of the same actor loop in one invocation |
+| Agent | `agents/feature-validator.md` | The actor: one full validation cycle on Claude in Chrome, in a fresh context |
+| Agent | `agents/feature-validator-headless.md` | The same actor on a headless Playwright browser, for locked screens, SSH and CI |
 | MCP   | `core` (stdio): `scripts/core-server.py` | The data plane: 10 tools between Claude and the backend, declared inline in `plugin.json` |
 | Hook  | `hooks/hooks.json` | Session-start sanity check for the auth state |
 
@@ -56,6 +57,20 @@ persona, drives Chrome through each scenario, and reports results back.
 
 Free text is the **goal**; a `url=<...>` token sets the target URL (required —
 you'll be asked for it if omitted).
+
+### Running without Chrome (headless)
+
+Claude in Chrome needs a signed-in extension and an unlocked computer. For
+unattended runs, register the Playwright MCP server once:
+
+```
+claude mcp add playwright -- npx -y @playwright/mcp@latest --headless --isolated
+```
+
+`/archetype:validation` checks the browser before it creates a run. With
+Chrome connected it uses Chrome; otherwise, if `playwright` is registered, it
+runs the same persona loop headless and tells you so; with neither, it stops
+and explains what to fix instead of creating a run nobody can execute.
 
 ## Dev quickstart — for handoff
 
@@ -246,7 +261,8 @@ Archetype_Plugins/
 ├── .claude-plugin/
 │   └── plugin.json            # manifest (declares the MCP server inline)
 ├── agents/
-│   └── feature-validator.md
+│   ├── feature-validator.md
+│   └── feature-validator-headless.md
 ├── hooks/
 │   └── hooks.json
 ├── scripts/
