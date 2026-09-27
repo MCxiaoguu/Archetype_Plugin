@@ -216,6 +216,10 @@ ambiguous → ask once, never guess an id), and optionally a **pre-resolved** `p
 pool's display name — the agent carries it as-is and never invents or substitutes one (the backend
 spins off one fresh tester from the pool, which can add up to ~a minute). If `start_run` reports
 the backend did not honor the requested pool, the agent surfaces the error verbatim and stops.
+The URL is used exactly as given, query string included, and the agent treats its parameters as
+opaque routing data. The actor can still read them, so run labels in the URL must not describe the
+test (use `?twin_label=r7f3`, not `?twin_label=chaos-trickle-start`); the validation skill flags
+descriptive values when it confirms the run list.
 
 **Why login can't happen inside it.** The `login` tool is deliberately absent from its tool list:
 the login elicitation modal cannot render inside a subagent, so authentication must happen in the

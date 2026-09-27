@@ -171,6 +171,20 @@ For the confirmed run list (one run or many):
    against the brief). Deliberately include nothing else: no product
    background, no known issues, no prior run results — a clean actor is the
    point.
+
+   **Labels in the URL must be opaque.** Pass the url exactly as the user
+   gave it: query parameters can carry attribution the site under test or
+   a harness needs (for example `?twin_label=...`), so never strip or
+   rewrite them. But the actor reads that URL, so a parameter value that
+   describes the test gives the test away: in a 2026-09-24 stress run the
+   actor saw `twin_label=chaos-trickle-start` and concluded a stalled
+   backend was deliberate. When a query value reads like a description of
+   the test, its expected outcome or an injected fault (`chaos-...`,
+   `slow-backend`, `expect-fail`, `bug-...`), say so once when you confirm
+   the run list and suggest an opaque value such as a short random id; use
+   whatever the user decides. In an unattended session, run it as given.
+   Never explain, paraphrase or comment on query parameters in the dispatch
+   prompt.
 4. Multiple runs execute **sequentially**: the agents share one Chrome;
    parallel dispatch makes them fight over the browser.
 5. If a run comes back with the "backend did not honor the pool" error,

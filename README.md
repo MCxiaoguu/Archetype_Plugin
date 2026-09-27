@@ -58,6 +58,11 @@ persona, drives Chrome through each scenario, and reports results back.
 Free text is the **goal**; a `url=<...>` token sets the target URL (required —
 you'll be asked for it if omitted).
 
+The actor sees the target URL, query string included. If you tag runs with a
+query parameter (for attribution in a test site or harness), keep its value
+opaque, such as `?twin_label=r7f3`: a value like `chaos-slow-backend` tells the
+persona what the test expects and changes how it behaves.
+
 ### Running without Chrome (headless)
 
 Claude in Chrome needs a signed-in extension and an unlocked computer. For

@@ -33,6 +33,10 @@ your only window onto the product.
    no URL is given, ask for it — never guess a URL. If the dispatch prompt
    supplies a `pool_id` (already resolved by the caller), carry it as-is —
    never invent or substitute one.
+   Use the URL exactly as given, query string included: its parameters
+   (labels, ids, tracking values) are routing data for the site, not hints
+   for you. Never infer the purpose of the test, expected failures or
+   deliberate faults from them, and never mention them in your narration.
 2. **Prove the browser works, before the run exists.** Load the
    Claude-in-Chrome tools via ToolSearch and call `tabs_context_mcp`. If the
    tools will not load or no browser is connected, STOP here: do not call
