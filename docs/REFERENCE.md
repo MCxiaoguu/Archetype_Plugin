@@ -390,6 +390,7 @@ summary counts.
     `screenshot_b64→screenshotB64`; all other keys pass through unchanged.
   - `feedback` (object, **required**) — passed through **untouched**; its nested keys must already
     be camelCase (`scenarioResults`, `evidenceStepSeq`, …) per the contract rendered by `start_run`.
+    The schema documents the optional `findings[].evidence` object (`url`, `selector`, `quote`).
   - `duration_seconds` (number, optional) — sent as `durationSeconds` only when provided.
 - **Backend:** `POST /api/plugin/runs/{run_id}/results` (timeout **60 s**), via `authed_call`.
 - **Result text:** the backend's `message` (default `Results stored.`) followed by
@@ -715,7 +716,13 @@ As rendered to the actor at the end of every `start_run` briefing:
   - `verdict`: `pass | fail | mixed`
   - `summary`: string
   - `scenarioResults[]`: `{scenarioId, status: pass | fail | blocked, actualResult}`
-  - `findings[]`: `{scenarioId, category: bug | ux | content | performance | other, severity: critical | high | medium | low, description, evidenceStepSeq}`
+  - `findings[]`: `{scenarioId, category: bug | ux | content | performance | other, severity: critical | high | medium | low, description, evidenceStepSeq, evidence?}`
+  - `findings[].evidence` (optional object, every field optional): `url` (the page, up to 2048
+    characters), `selector` (CSS selector or role plus accessible name, up to 512) and `quote` (the
+    exact on-screen text, up to 1000). The backend trims over-long strings and drops unusable
+    evidence instead of rejecting the results, stores it with the finding and returns it in
+    `GET /api/plugin/runs/<run_id>` under `feedback.findings[]`. It lets a grader check a finding
+    mechanically instead of re-running the persona.
   - `personaReaction`: string
 
 Wire body sent to `POST /api/plugin/runs/<run_id>/results`:
@@ -731,7 +738,8 @@ Wire body sent to `POST /api/plugin/runs/<run_id>/results`:
   "feedback": {"verdict": "pass", "summary": "...",
                "scenarioResults": [{"scenarioId": "...", "status": "pass", "actualResult": "..."}],
                "findings": [{"scenarioId": "...", "category": "bug", "severity": "high",
-                             "description": "...", "evidenceStepSeq": 3}],
+                             "description": "...", "evidenceStepSeq": 3,
+                             "evidence": {"url": "...", "selector": "...", "quote": "..."}}],
                "personaReaction": "..."}
 }
 ```

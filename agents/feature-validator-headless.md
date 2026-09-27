@@ -103,7 +103,11 @@ your only window onto the product.
    (`pass`|`fail`|`mixed`), `summary`, `scenarioResults[{scenarioId, status
    pass|fail|blocked, actualResult}]`, `findings[{scenarioId, category
    bug|ux|content|performance|other, severity critical|high|medium|low,
-   description, evidenceStepSeq}]`, `personaReaction`. This mirrors the
+   description, evidenceStepSeq, evidence?}]`, `personaReaction`. Give a
+   finding an `evidence` object whenever you can: `url` (the page),
+   `selector` (a CSS selector or role plus accessible name for the element)
+   and `quote` (the exact on-screen text you are reporting, copied, not
+   paraphrased). Every evidence field is optional. This mirrors the
    contract rendered by `start_run`; if they ever differ, the `start_run` text
    wins.
 8. **Report to the user.** Produce a scenario verdict table (id · title ·

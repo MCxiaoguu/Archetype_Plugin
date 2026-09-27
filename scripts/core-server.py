@@ -902,7 +902,10 @@ def _render_run(body: dict[str, Any]) -> str:
         "{verdict pass|fail|mixed, summary, scenarioResults[{scenarioId,status "
         "pass|fail|blocked,actualResult}], findings[{scenarioId,category "
         "bug|ux|content|performance|other,severity critical|high|medium|low,"
-        "description,evidenceStepSeq}], personaReaction}"
+        "description,evidenceStepSeq,evidence?{url?,selector?,quote?}}], "
+        "personaReaction}. evidence is optional per finding: the page url, a "
+        "selector or role plus name for the element, and the exact on-screen "
+        "text you are reporting (quote up to 1000 characters)."
     )
 
     return "\n\n".join(parts)
@@ -968,6 +971,25 @@ def handle_start_run(arguments: dict[str, Any]) -> dict[str, Any]:
 
 
 # ---------- tool: report_result ----------
+
+# Optional per-finding evidence, so a grader can check a finding without
+# re-running the persona. The limits are stated, not enforced here: the
+# backend trims over-long strings rather than rejecting them, so a long quote
+# never costs the actor its results.
+_EVIDENCE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "description": (
+        "Optional. Where the finding can be checked: the page url (up to 2048 "
+        "characters), a selector or role plus accessible name for the element "
+        "(up to 512) and the exact on-screen text (up to 1000). Every field "
+        "is optional."
+    ),
+    "properties": {
+        "url": {"type": "string"},
+        "selector": {"type": "string"},
+        "quote": {"type": "string"},
+    },
+}
 
 # snake_case (actor-facing) -> camelCase (backend) for per-step keys.
 _STEP_KEY_MAP = {
@@ -1611,7 +1633,25 @@ TOOLS: dict[str, dict[str, Any]] = {
                 },
                 "duration_seconds": {"type": "number"},
                 "steps": {"type": "array"},
-                "feedback": {"type": "object"},
+                "feedback": {
+                    "type": "object",
+                    "description": (
+                        "camelCase inside: verdict, summary, scenarioResults, "
+                        "findings, personaReaction. Passed to the backend "
+                        "untouched."
+                    ),
+                    "properties": {
+                        "findings": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "evidence": _EVIDENCE_SCHEMA,
+                                },
+                            },
+                        },
+                    },
+                },
             },
             "required": ["run_id", "session_id", "status", "steps", "feedback"],
         },
