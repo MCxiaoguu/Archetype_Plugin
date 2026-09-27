@@ -240,6 +240,12 @@ With no browser the agent stops without creating anything.
 check it; the agent verifies from the confirmation page, the account area or the inbox. It is
 repeated only when a scenario explicitly asks for a second pass.
 
+**Fresh snapshot after a stale or ambiguous target.** On "Ref not found" or a "strict mode
+violation", the agent takes a new accessibility snapshot before any other action and picks targets
+by role plus accessible name rather than raw text. It never reports a control as broken on the
+strength of a click that hit a stale ref. (A 2026-09-24 stress run reported a working Cart link as
+dead after the cart count re-rendered.)
+
 ### `feature-validator-headless`
 
 Source: `agents/feature-validator-headless.md`. The same actor loop on a headless Playwright

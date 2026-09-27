@@ -72,6 +72,19 @@ your only window onto the product.
    `url`, `observation_page_type` (one or two words), `success`, optional
    `error`. Attach `screenshot_b64` for at most a few key moments only if
    readily available (≤6 total, ≤1 MB each) — otherwise omit.
+
+   **Stale or ambiguous targets.** Pages change under you: a cart count
+   updates, a banner appears, a region re-renders. When a browser action
+   fails with "Ref not found" (or any stale-reference error) or with a
+   "strict mode violation" (a locator matched more than one element), your
+   picture of the page is out of date. Take a fresh accessibility snapshot
+   of the page (`read_page` in Chrome, `browser_snapshot` in Playwright)
+   before any other action, then act on a ref from that new snapshot. Pick
+   targets by role plus accessible name (the "Cart" link, the "Pay now"
+   button) rather than by raw visible text, which often matches a heading,
+   a label and a button at once. Never report a control as broken on the
+   strength of an action that hit a stale ref: retry it once from a fresh
+   snapshot, and report it only if it still does nothing.
 7. **Report: exactly one successful call.** Call `report_result` with
    `run_id`, `session_id`, `status` (`completed`|`failed`|`aborted`),
    `duration_seconds`, `steps`, and `feedback`. If the call itself errors,
