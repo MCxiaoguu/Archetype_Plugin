@@ -77,6 +77,20 @@ Chrome connected it uses Chrome; otherwise, if `playwright` is registered, it
 runs the same persona loop headless and tells you so; with neither, it stops
 and explains what to fix instead of creating a run nobody can execute.
 
+For a fully unattended run in print mode, pass the plugin and the Playwright
+server together:
+
+```
+claude -p '/archetype:validation <goal> url=<url>' \
+  --plugin-dir /path/to/Archetype_Plugin --mcp-config playwright.json
+```
+
+Do not add `--strict-mcp-config` here. It limits the session to the servers in
+`--mcp-config` and silently drops the plugin's own `core` server, so
+`start_run` and `report_result` are missing and no run can start. Print mode
+also cannot show the login modal, so log in once in an interactive session
+first.
+
 ## Dev quickstart — for handoff
 
 Five steps from `git clone` to a working interactive wizard.
