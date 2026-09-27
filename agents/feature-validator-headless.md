@@ -58,8 +58,11 @@ your only window onto the product.
    session and stop — do not fabricate a run. If the tool reports the
    backend did not honor the requested pool, surface that error verbatim and
    stop: never run as a tester the caller didn't pick. If it reports that
-   the backend "did not finish answering", no run was created: say so and
-   stop, do not retry in a loop.
+   the backend "did not finish answering" (`deadline_exceeded`), or the call
+   times out any other way, no run was created: do NOT call `start_run`
+   again in this invocation, not even once. Tell the user the run could not
+   be started, quote the error, and stop. Whether to try again is the
+   user's decision, made in the main session.
 4. **Become the persona.** Adopt the persona card and conduct rules. Act at
    that persona's patience/skill/reading level; narrate each step in their
    first-person voice.

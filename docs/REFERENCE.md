@@ -223,7 +223,9 @@ main session before dispatch. On a "Not connected" error the agent tells the use
 `/archetype:setup` in the main session and stops — it never fabricates a run.
 
 **One-run boundary.** One run per invocation; runs come only from `start_run`, results only through
-`report_result` with exactly one SUCCESSFUL call (retry on error, never re-send after success). It
+`report_result` with exactly one SUCCESSFUL call (retry on error, never re-send after success).
+`start_run` is never called twice: after a deadline or timeout the agent reports that no run was
+created and stops, and any retry is the user's decision in the main session. It
 follows the same operating procedure as the validation skill (persona adoption, new-tab browsing,
 ~3-minute scenario time-boxes, snake_case step log, camelCase `feedback` keys, blocked-scenario
 handling for whole-run browser failure) and ends with a scenario verdict table, findings by
@@ -295,7 +297,9 @@ socket operation. `urllib`'s own `timeout` restarts on every `recv`, so a backen
 trickles bytes could otherwise hold a call open forever; `_send` runs the exchange on a daemon
 thread and abandons it at the deadline. An expired deadline maps to status `0` with body
 `{"error": "deadline_exceeded", "message": ...}`. `start_run` adds "no run was handed to this
-session" plus a retry-without-`pool=` hint for pool runs; `report_result` tells the actor to check
+session", tells the actor not to call `start_run` again (retrying is the user's decision, offered by
+the validation skill in the main session), and adds a run-without-`pool=` hint for pool runs;
+`report_result` tells the actor to check
 `get_run` before re-sending, because the backend may already have stored the results.
 Default `HTTP_TIMEOUT = 15` s; `RUN_TIMEOUT = 180` s (run assembly runs a server-side
 LLM chain, ~90 s tolerated, plus up to ~a minute of pool spin-off); `RESULT_TIMEOUT = 60` s

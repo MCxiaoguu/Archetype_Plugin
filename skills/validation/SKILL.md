@@ -177,9 +177,13 @@ For the confirmed run list (one run or many):
    stop the remaining pool-selected runs (they will fail the same way)
    and surface it once.
 6. If a run comes back with "did not finish answering" (the backend missed
-   its deadline), no run was created for this session. Offer one retry; for
-   a pool run that times out twice, offer to run without the pool instead of
-   retrying again.
+   its deadline), no run was created for this session. Tell the user and
+   offer one retry, but dispatch it only if the user says yes: never retry
+   on your own, and never ask the actor to retry `start_run` itself (the
+   actor stops after one deadline by design). For a pool run that times out
+   twice, offer to run without the pool instead of retrying again. In an
+   unattended session with nobody to answer, do not retry: report the
+   failure and stop.
 
 The full actor loop (become the persona, drive the browser, keep the step
 log, `report_result` exactly once) is defined in the `feature-validator`

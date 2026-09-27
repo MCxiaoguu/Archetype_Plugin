@@ -1346,7 +1346,9 @@ def case_28_start_run_deadline_guidance(srv: ServerProc, data_dir: Path) -> None
     expect(elapsed < 3.5, f"start_run deadline (1.5 s) must hold, took {elapsed:.1f} s")
     text = result_text(result)
     contains(text, "No run was handed to this session", "actor is told not to act")
-    contains(text, "retry without pool=", "pool runs get the no-pool fallback")
+    contains(text, "Do not call start_run again", "actor is told not to retry by itself")
+    expect("Retry once" not in text, "the actor must never be told to retry start_run")
+    contains(text, "without pool=", "pool runs get the no-pool fallback")
     expect(not (data_dir / "runs.json").exists(), "an abandoned run must not enter the run log")
     expect(len(srv.elicitations) == 0, "a deadline is not an auth failure: no login modal")
 

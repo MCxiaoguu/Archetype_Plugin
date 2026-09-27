@@ -926,16 +926,21 @@ def handle_start_run(arguments: dict[str, Any]) -> dict[str, Any]:
         return not_connected(result)
     status, resp = result
     if resp.get("error") == "deadline_exceeded":
+        # The actor reads this text. Stress runs on 2026-09-24 showed an
+        # actor told to "retry once" calling start_run again on its own, so a
+        # dead backend cost three full deadlines. Retrying is the user's
+        # call, made in the main session, never the actor's.
         advice = (
             "No run was handed to this session, so there is nothing to act on "
-            "or report. Retry once."
+            "or report. Do not call start_run again: tell the user the run "
+            "could not be started and stop. The user decides whether to retry."
         )
         if body.get("poolId"):
             advice += (
-                " Spinning a fresh tester off a pool is the slow step: if it "
-                "times out again, retry without pool= to run as the "
-                "replay-derived persona. A tester may already have been added "
-                "to the pool by the abandoned attempt."
+                " Spinning a fresh tester off a pool is the slow step: if the "
+                "user retries and it times out again, suggest running without "
+                "pool= as the replay-derived persona. A tester may already "
+                "have been added to the pool by the abandoned attempt."
             )
         return tool_text(f"{resp['message']}\n\n{advice}", is_error=True)
     if not (200 <= status < 300):
