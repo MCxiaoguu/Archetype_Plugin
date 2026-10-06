@@ -892,6 +892,18 @@ def _render_run(body: dict[str, Any]) -> str:
     if card:
         parts.append("— YOUR PERSONA —\n" + card)
 
+    # The need is why this person is on the site at all. Named on its own so
+    # the actor plays a person with a reason, not a tester with a checklist.
+    need = persona.get("personaNeed")
+    if need:
+        parts.append(
+            "WHY YOU ARE HERE\n"
+            f"{need}\n"
+            "This is your reason for visiting. Let it decide what you look at "
+            "first, what matters to you, and when you would give up. Work "
+            "through the scenarios in that frame of mind."
+        )
+
     goal = instructions.get("goal")
     target = instructions.get("targetUrl")
     header = "— YOUR SCENARIOS —"

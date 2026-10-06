@@ -743,6 +743,22 @@ def case_2_start_run_happy(srv: ServerProc, data_dir: Path) -> None:
     contains(text, "evidence?{url?,selector?,quote?}", "start_run text (optional evidence)")
 
 
+def case_2c_start_run_names_the_need(srv: ServerProc, data_dir: Path) -> None:
+    write_auth(data_dir)
+    text = result_text(call_tool(srv, "start_run", {"goal": "test signup", "url": "http://localhost:8321"}))
+    contains(text, "WHY YOU ARE HERE\n" + RUN_RESPONSE["persona"]["personaNeed"], "need section")
+    contains(text, "Work through the scenarios in that frame of mind", "how to use it")
+    expect(text.index("WHY YOU ARE HERE") < text.index("YOUR SCENARIOS"), "need comes before scenarios")
+
+
+def case_2d_start_run_without_a_need(srv: ServerProc, data_dir: Path) -> None:
+    write_auth(data_dir)
+    persona = dict(RUN_RESPONSE["persona"], personaNeed=None)
+    STATE.error_overrides["/api/plugin/runs"] = (201, dict(RUN_RESPONSE, persona=persona))
+    text = result_text(call_tool(srv, "start_run", {"goal": "test signup", "url": "http://localhost:8321"}))
+    expect("WHY YOU ARE HERE" not in text, "no empty need section")
+
+
 def case_2b_start_run_feature_id(srv: ServerProc, data_dir: Path) -> None:
     write_auth(data_dir)
     call_tool(srv, "start_run",
@@ -1859,6 +1875,8 @@ CASES = [
     ("initialize + tools/list shows 10 tools", case_1_tools_list),
     ("start_run happy path (camelCase body, rich tool text)", case_2_start_run_happy),
     ("start_run maps feature_id -> featureId", case_2b_start_run_feature_id),
+    ("start_run names the persona's need", case_2c_start_run_names_the_need),
+    ("start_run without a need has no empty section", case_2d_start_run_without_a_need),
     ("start_run no auth + declined login -> login hint error", case_3_start_run_no_auth_declined),
     ("report_result happy path (snake->camel, message surfaced)", case_4_report_result_happy),
     ("report_result attaches screenshot files, images only", case_4b_report_result_reads_screenshot_files),
