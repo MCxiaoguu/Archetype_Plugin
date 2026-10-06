@@ -21,9 +21,13 @@ so they can pick one to validate.
    surface it and stop.
 3. Render the returned features as a concise table:
 
-   | id | title | updated |
-   | :-- | :-- | :-- |
-   | `<_id>` | `<title>` | `<updatedAt>` |
+   | id | title | test target | updated |
+   | :-- | :-- | :-- | :-- |
+   | `<_id>` | `<title>` | `<url + start page, done when>` | `<updatedAt>` |
+
+   The test target is the indented line the tool prints under a feature
+   (`url:`, `goal:`, `done when:`); leave the cell empty when there is none.
+   A feature with a saved url can be validated without asking for a URL.
 
    If the tool reports no features (or none matching the query), relay that
    plainly — and offer to create one on the spot (`create_feature`, one

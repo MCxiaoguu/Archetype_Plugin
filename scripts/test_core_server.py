@@ -1070,6 +1070,41 @@ def case_8_list_features(srv: ServerProc, data_dir: Path) -> None:
     contains(text, "665f0a1b2c3d4e5f60718293", "list_features text (_id)")
 
 
+
+def case_8b_list_features_shows_targets(srv: ServerProc, data_dir: Path) -> None:
+    write_auth(data_dir)
+    STATE.error_overrides["/api/features"] = (200, {"ok": True, "features": [
+        {"_id": "f-twin-3", "title": "Twin F3: Complete the onboarding questionnaire",
+         "updatedAt": "2026-10-06", "url": "http://localhost:4173",
+         "startPath": "/pages/thank-you", "goal": "Submit the questionnaire.",
+         "successMilestone": "questionnaire_submitted"},
+        {"_id": "f-plain", "title": "Plain", "updatedAt": "2026-10-01"},
+    ]})
+    text = result_text(call_tool(srv, "list_features", {}))
+    contains(text, "url: http://localhost:4173/pages/thank-you", "url plus start path")
+    contains(text, "goal: Submit the questionnaire.", "goal")
+    contains(text, "done when: questionnaire_submitted", "milestone")
+    contains(text, "A feature with a saved url needs no url from the user", "hint")
+    plain_line = [line for line in text.splitlines() if "f-plain" in line][0]
+    following = text.splitlines()[text.splitlines().index(plain_line) + 1]
+    expect(not following.startswith("    url"), "a feature without a target gets no target line")
+
+
+def case_8c_start_run_with_feature_only(srv: ServerProc, data_dir: Path) -> None:
+    write_auth(data_dir)
+    result = call_tool(srv, "start_run", {"feature_id": "f-twin-3"})
+    expect(not result.get("isError"), f"feature-only start_run errored: {result}")
+    body = STATE.last_for("/api/plugin/runs")["body"]
+    expect(body == {"featureId": "f-twin-3"}, f"no url sent when none given, got {body}")
+
+
+def case_8d_start_run_needs_url_or_feature(srv: ServerProc, data_dir: Path) -> None:
+    write_auth(data_dir)
+    result = call_tool(srv, "start_run", {"goal": "test signup"})
+    expect(result.get("isError"), "goal without url or feature is refused")
+    contains(result_text(result), "never guess one", "tells the actor to ask")
+    expect(not STATE.requests, "nothing reached the backend")
+
 def case_9_status_not_connected(srv: ServerProc, data_dir: Path) -> None:
     # status reports state; it must NOT self-heal into a login modal.
     clear_auth(data_dir)
@@ -1481,6 +1516,42 @@ def case_23_create_feature(srv: ServerProc, data_dir: Path) -> None:
     text = result_text(result)
     contains(text, "Trial signup", "create_feature echoes title")
     contains(text, "feat-new-001", "create_feature returns the feature id for start_run")
+    for key in ("url", "startPath", "goal", "successMilestone"):
+        expect(key not in body, f"no {key} sent when none given, got {body}")
+
+
+def case_23b_create_feature_with_target(srv: ServerProc, data_dir: Path) -> None:
+    write_auth(data_dir)
+    saved = {"_id": "feat-new-002", "title": "Twin F3", "url": "http://localhost:4173",
+             "startPath": "/pages/thank-you", "goal": "Submit it.",
+             "successMilestone": "questionnaire_submitted"}
+    STATE.error_overrides["/api/features"] = (201, {"ok": True, "feature": saved})
+    result = call_tool(srv, "create_feature", {
+        "title": "Twin F3", "url": " http://localhost:4173 ", "start_path": "/pages/thank-you",
+        "goal": "Submit it.", "success_milestone": "questionnaire_submitted",
+    })
+    body = STATE.last_for("/api/features")["body"]
+    expect(body.get("url") == "http://localhost:4173", f"url trimmed and sent, got {body}")
+    expect(body.get("startPath") == "/pages/thank-you", f"start_path -> startPath, got {body}")
+    expect(body.get("successMilestone") == "questionnaire_submitted", f"milestone sent, got {body}")
+    contains(result_text(result), "url: http://localhost:4173/pages/thank-you", "target echoed")
+
+
+def case_23c_create_feature_old_backend_drops_target(srv: ServerProc, data_dir: Path) -> None:
+    write_auth(data_dir)
+    result = call_tool(srv, "create_feature", {"title": "Trial signup", "url": "http://localhost:8321"})
+    contains(result_text(result), "did not keep the url", "an old backend is called out")
+
+
+def case_23d_create_feature_bad_target(srv: ServerProc, data_dir: Path) -> None:
+    write_auth(data_dir)
+    STATE.error_overrides["/api/features"] = (400, {
+        "ok": False, "error": "invalid_feature_target",
+        "message": "url must be a full http or https address, for example https://example.com.",
+    })
+    result = call_tool(srv, "create_feature", {"title": "x", "url": "localhost"})
+    expect(result.get("isError"), "a rejected target is an error")
+    contains(result_text(result), "full http or https address", "backend reason relayed")
 
 
 def case_24_logout_connected(srv: ServerProc, data_dir: Path) -> None:
@@ -1793,6 +1864,9 @@ CASES = [
     ("report text cannot break out of its fence", case_7g_report_text_cannot_break_out),
     ("run ids are checked before any request", case_7f_run_ids_are_checked),
     ("list_features renders title + _id", case_8_list_features),
+    ("list_features shows saved targets", case_8b_list_features_shows_targets),
+    ("start_run with only a feature_id sends no url", case_8c_start_run_with_feature_only),
+    ("start_run without url or feature is refused locally", case_8d_start_run_needs_url_or_feature),
     ("status: not connected, no login modal", case_9_status_not_connected),
     ("status: connected dashboard (account, features, portal)", case_10_status_connected),
     ("status: stale token degrades gracefully", case_11_status_invalid_token),
@@ -1811,6 +1885,9 @@ CASES = [
     ("start_run aborts when backend ignores poolId", case_22_start_run_pool_not_honored),
     ("status tolerates legacy persona_id run-log entries", case_22b_status_tolerates_legacy_run_log),
     ("create_feature POSTs title+fields, returns id", case_23_create_feature),
+    ("create_feature sends the test target", case_23b_create_feature_with_target),
+    ("create_feature warns when the backend drops the target", case_23c_create_feature_old_backend_drops_target),
+    ("create_feature relays a rejected target", case_23d_create_feature_bad_target),
     ("logout deletes auth.json, keeps run history", case_24_logout_connected),
     ("logout discards a half-finished login", case_24b_logout_discards_pending_login),
     ("logout when not connected is a friendly no-op", case_25_logout_not_connected),

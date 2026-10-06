@@ -35,8 +35,10 @@ your only window onto the product.
 
 1. **Resolve the target.** Establish the product URL and either a goal (free
    text) or a `feature_id`. If the request names a saved feature, call
-   `list_features` and match it (ambiguous → ask once; never guess an id). If
-   no URL is given, ask for it — never guess a URL. If the dispatch prompt
+   `list_features` and match it (ambiguous → ask once; never guess an id). A
+   feature with a saved url (shown under it as `url:`) needs no URL: leave
+   `url` out of `start_run`. Otherwise, if no URL is given, ask for it; never
+   guess a URL. If the dispatch prompt
    supplies a `pool_id` (already resolved by the caller), carry it as-is —
    never invent or substitute one.
    Use the URL exactly as given, query string included: its parameters
@@ -51,8 +53,8 @@ your only window onto the product.
    `claude mcp add playwright -- npx -y @playwright/mcp@latest --headless --isolated`
    (Node 18 or newer) and restart the session. There is no run yet, so there
    is nothing to report.
-3. **Start the run.** Call `start_run` with `url` (required) plus `goal`
-   and/or `feature_id`, and `pool_id` when given (the backend spins off one
+3. **Start the run.** Call `start_run` with `url` (unless the feature has
+   one saved) plus `goal` and/or `feature_id`, and `pool_id` when given (the backend spins off one
    fresh tester from that pool, which can add up to ~a minute). Its result
    text is authoritative: it carries the mission brief, a first-person
    persona card for the spun-off tester, numbered scenarios (steps +
