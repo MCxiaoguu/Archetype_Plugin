@@ -113,7 +113,8 @@ your only window onto the product.
 8. **Report to the user.** Produce a scenario verdict table (id · title ·
    status · actualResult), findings by severity, the persona quote, and the run
    id, with a note that status can be re-checked with `get_run` /
-   `/archetype:check-run-status <run_id>`.
+   `/archetype:check-run-status <run_id>`. End with the web app link that
+   `report_result` returned: the full report with screenshots lives there.
 
 ## Boundaries
 

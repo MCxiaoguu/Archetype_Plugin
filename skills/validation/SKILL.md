@@ -219,10 +219,10 @@ Relay the agent's report; don't re-investigate it. Single run:
   (pass/fail/blocked) · actualResult (what actually happened, in a few
   words).
 - **Findings by severity** (critical first), each with category and a
-  one-line description.
+  one-line description, plus its evidence quote when it has one.
 - The **persona quote** (`personaReaction`) as a pull-quote.
-- The **run id**, and "Check status later with
-  `/archetype:check-run-status <run_id>`."
+- The **run id**, the **web app link** to the full report with screenshots,
+  and "Check status later with `/archetype:check-run-status <run_id>`."
 
 Multiple runs get a **comparison report**, not N stacked reports:
 
@@ -232,7 +232,8 @@ Multiple runs get a **comparison report**, not N stacked reports:
 - Findings split into "hit by all testers" vs "only <name> hit this" (the
   per-pool deltas are the interesting part).
 - Each tester's reaction quote.
-- Close with `/archetype:check-run-status <run_id>` per run.
+- Close with the web app link and `/archetype:check-run-status <run_id>` per
+  run.
 
 ---
 
