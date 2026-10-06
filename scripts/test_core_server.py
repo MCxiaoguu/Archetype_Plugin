@@ -759,6 +759,15 @@ def case_2d_start_run_without_a_need(srv: ServerProc, data_dir: Path) -> None:
     expect("WHY YOU ARE HERE" not in text, "no empty need section")
 
 
+def case_2e_start_run_says_chosen_not_spun(srv: ServerProc, data_dir: Path) -> None:
+    write_auth(data_dir)
+    STATE.error_overrides["/api/plugin/runs"] = (201, dict(
+        RUN_RESPONSE, pool={"poolId": "pool-x", "name": "Valley", "spunOff": False}))
+    text = result_text(call_tool(srv, "start_run", {"goal": "g", "url": "http://x", "pool_id": "pool-x"}))
+    contains(text, "chosen from pool Valley as the member whose need fits this goal best", "chosen wording")
+    expect("spun from pool" not in text, "not called spun off")
+
+
 def case_2b_start_run_feature_id(srv: ServerProc, data_dir: Path) -> None:
     write_auth(data_dir)
     call_tool(srv, "start_run",
@@ -1875,6 +1884,7 @@ CASES = [
     ("initialize + tools/list shows 10 tools", case_1_tools_list),
     ("start_run happy path (camelCase body, rich tool text)", case_2_start_run_happy),
     ("start_run maps feature_id -> featureId", case_2b_start_run_feature_id),
+    ("start_run says when a pool member was chosen, not spun off", case_2e_start_run_says_chosen_not_spun),
     ("start_run names the persona's need", case_2c_start_run_names_the_need),
     ("start_run without a need has no empty section", case_2d_start_run_without_a_need),
     ("start_run no auth + declined login -> login hint error", case_3_start_run_no_auth_declined),

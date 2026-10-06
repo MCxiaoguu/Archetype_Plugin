@@ -884,10 +884,18 @@ def _render_run(body: dict[str, Any]) -> str:
     pool = body.get("pool") or {}
     pool_name = pool.get("name")
     if pool_name:
-        parts.append(
-            f"Running as {persona.get('name') or 'a fresh tester'}, "
-            f"spun from pool {pool_name}."
-        )
+        # Backends from 0.5.0 on say whether the tester was generated for
+        # this run or chosen from the pool's existing members.
+        if pool.get("spunOff") is False:
+            parts.append(
+                f"Running as {persona.get('name') or 'a tester'}, chosen from "
+                f"pool {pool_name} as the member whose need fits this goal best."
+            )
+        else:
+            parts.append(
+                f"Running as {persona.get('name') or 'a fresh tester'}, "
+                f"spun from pool {pool_name}."
+            )
 
     card = persona.get("personaCard")
     if card:

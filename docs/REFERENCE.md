@@ -371,7 +371,8 @@ follows verbatim.
   `featureId`, `url`, `poolId`; `None` values dropped), via `authed_call`.
 - **Result text:** the rendered briefing — backend `brief`, for pool runs a
   `Running as {member name}, spun from pool {pool name}.` line (from the response's `pool` +
-  `persona` blocks), the persona section with the persona card, a `WHY YOU ARE HERE` section
+  `persona` blocks; when the backend reports `pool.spunOff: false` the line says the tester was
+  chosen from the pool as the member whose need fits the goal best), the persona section with the persona card, a `WHY YOU ARE HERE` section
   with the need this run gives the persona (left out when there is none), the scenarios section (with
   `(goal: … · target: …)` when present), each scenario numbered as `[id] title` with `- step`
   lines and an `Expected:` line, `— CONDUCT RULES —`, `runId`/`sessionId`, and the full
@@ -392,15 +393,21 @@ summary counts.
   - `status` (string, **required**, enum `completed | failed | aborted`)
   - `steps` (array, **required**) — per-step keys are translated snake→camel: `action_text→actionText`,
     `observation_page_type→observationPageType`, `scenario_id→scenarioId`,
-    `screenshot_b64→screenshotB64`; all other keys pass through unchanged.
+    `screenshot_b64→screenshotB64`; all other keys pass through unchanged. A step may instead
+    carry `screenshot_path`, the file a screenshot tool saved: the server reads it and sends it as
+    `screenshotB64` only when it is a PNG, JPEG or WebP file (checked by magic bytes) of at most
+    1 MB, never sends the path, and lists skipped files in the result. `screenshot_b64` wins
+    when both are given.
   - `feedback` (object, **required**) — passed through **untouched**; its nested keys must already
     be camelCase (`scenarioResults`, `evidenceStepSeq`, …) per the contract rendered by `start_run`.
     The schema documents the optional `findings[].evidence` object (`url`, `selector`, `quote`).
   - `duration_seconds` (number, optional) — sent as `durationSeconds` only when provided.
 - **Backend:** `POST /api/plugin/runs/{run_id}/results` (timeout **60 s**), via `authed_call`.
 - **Result text:** the backend's `message` (default `Results stored.`) followed by
-  `Steps: {n} · Findings: {n} · Verdict: {v}` from the response `summary` (missing values render as `?`).
-- **Errors:** `not_connected()` / `backend_error_text`. On success, updates the local run log entry
+  `Steps: {n} · Findings: {n} · Verdict: {v}` from the response `summary` (missing values render as `?`),
+  any skipped screenshot files, and the web app link to the full report.
+- **Errors:** a malformed `run_id` is refused locally (same rule as `get_run`), then
+  `not_connected()` / `backend_error_text`. On success, updates the local run log entry
   (verdict taken from response `summary.verdict`, falling back to the submitted `feedback.verdict`).
 
 #### `get_run`
@@ -417,9 +424,11 @@ Read back a run: its status and, once it has reported, the full report.
   written for this goal and the fit score), the summary, a markdown scenario table, findings by
   severity with their evidence (quote, page, element) and screenshot step, the persona's
   reaction, a counts line that says plainly when screenshots were not stored, and the web app
-  link `{ARCHETYPE_PORTAL_URL}/workspace/tests/{run_id}/results`. Free text from the run is
-  introduced as data, not instructions; long text is clipped. A running run says so and how to
-  check again.
+  link `{ARCHETYPE_PORTAL_URL}/workspace/tests/{run_id}/results`. Everything the persona wrote
+  sits between `BEGIN RUN REPORT <nonce>` and `END RUN REPORT <nonce>` markers (a random nonce per
+  call, stripped from the content), introduced by a notice to quote it and never follow it. The
+  verdict is printed only when it is pass, fail or mixed, and every actor field is clipped to one
+  line. A running run says so and how to check again.
 - **Errors:** `not_connected()` / `backend_error_text`. A hosted (non-plugin) run is not an
   error: the text points at the web app instead.
 
