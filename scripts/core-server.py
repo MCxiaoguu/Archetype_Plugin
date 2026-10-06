@@ -921,7 +921,8 @@ def _render_run(body: dict[str, Any]) -> str:
         "When finished, call report_result with run_id, session_id, "
         "status (completed|failed|aborted), duration_seconds, steps (seq, "
         "scenario_id, action_text, narration, url, observation_page_type, "
-        "success, error?, screenshot_b64? ≤6 total ≤1MB each), feedback "
+        "success, error?, screenshot_b64? or screenshot_path? (a PNG, JPEG or "
+        "WebP file a screenshot tool saved; ≤6 total ≤1MB each)), feedback "
         "{verdict pass|fail|mixed, summary, scenarioResults[{scenarioId,status "
         "pass|fail|blocked,actualResult}], findings[{scenarioId,category "
         "bug|ux|content|performance|other,severity critical|high|medium|low,"
@@ -1023,10 +1024,57 @@ _STEP_KEY_MAP = {
 }
 
 
-def _map_step(step: dict[str, Any]) -> dict[str, Any]:
+# Headless browsers save screenshots to files, and the actor has no file
+# tools to turn one into base64. A step may name the file instead; this
+# server reads it. Only real images under the backend's 1 MB limit are read:
+# the magic bytes are checked, so a step can never send a key or a config
+# file to the backend by naming it as a screenshot.
+_SCREENSHOT_MAX_BYTES = 1024 * 1024
+_IMAGE_MAGIC = (
+    (b"\x89PNG\r\n\x1a\n", "png"),
+    (b"\xff\xd8\xff", "jpeg"),
+)
+
+
+def _image_kind(head: bytes) -> str | None:
+    for magic, kind in _IMAGE_MAGIC:
+        if head.startswith(magic):
+            return kind
+    if head[:4] == b"RIFF" and head[8:12] == b"WEBP":
+        return "webp"
+    return None
+
+
+def _screenshot_from_path(raw: Any) -> tuple[str | None, str | None]:
+    """Read a screenshot file for a step: ``(base64, None)`` or ``(None, why)``."""
+    if not isinstance(raw, str) or not raw.strip():
+        return None, "no path given"
+    path = Path(raw.strip()).expanduser()
+    try:
+        if not path.is_file():
+            return None, f"{path.name}: not found"
+        if path.stat().st_size > _SCREENSHOT_MAX_BYTES:
+            return None, f"{path.name}: over 1 MB"
+        data = path.read_bytes()
+    except OSError as exc:
+        return None, f"{path.name}: {exc.strerror or 'unreadable'}"
+    if not _image_kind(data[:16]):
+        return None, f"{path.name}: not a PNG, JPEG or WebP image"
+    return base64.b64encode(data).decode("ascii"), None
+
+
+def _map_step(step: dict[str, Any], notes: list[str] | None = None) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for key, value in step.items():
+        if key == "screenshot_path":
+            continue
         out[_STEP_KEY_MAP.get(key, key)] = value
+    if "screenshot_path" in step and not out.get("screenshotB64"):
+        encoded, why = _screenshot_from_path(step.get("screenshot_path"))
+        if encoded:
+            out["screenshotB64"] = encoded
+        elif notes is not None:
+            notes.append(f"step {step.get('seq', '?')}: screenshot skipped ({why})")
     return out
 
 
@@ -1035,10 +1083,11 @@ def handle_report_result(arguments: dict[str, Any]) -> dict[str, Any]:
     bad = _bad_run_id(run_id)
     if bad:
         return bad
+    skipped: list[str] = []
     body: dict[str, Any] = {
         "sessionId": arguments.get("session_id"),
         "status": arguments.get("status"),
-        "steps": [_map_step(s) for s in (arguments.get("steps") or [])],
+        "steps": [_map_step(s, skipped) for s in (arguments.get("steps") or [])],
         # feedback is passed through untouched: its nested keys must already
         # be camelCase (scenarioResults, evidenceStepSeq, ...) per the
         # contract rendered by start_run's report_result guidance.
@@ -1080,6 +1129,8 @@ def handle_report_result(arguments: dict[str, Any]) -> dict[str, Any]:
         f"Findings: {summary.get('findings', '?')} · "
         f"Verdict: {summary.get('verdict', '?')}"
     )
+    if skipped:
+        line += "\nScreenshot files not attached: " + "; ".join(skipped)
     return tool_text(
         f"{message}\n\n{line}\n\nFull report in the web app: {run_web_url(run_id)}"
     )
@@ -1206,7 +1257,8 @@ def _render_report(report: dict[str, Any], run_id: str) -> str:
         "analytics ready" if report.get("analyticsReady") else "analytics still running"
     )
     lines.append("\n" + " · ".join(facts))
-    lines.append(f"Full report with screenshots: {run_web_url(run_id)}")
+    label = "Full report with screenshots" if shots.get("kept") else "Full report"
+    lines.append(f"{label}: {run_web_url(run_id)}")
     return "\n".join(lines)
 
 
@@ -1810,7 +1862,15 @@ TOOLS: dict[str, dict[str, Any]] = {
                     "enum": ["completed", "failed", "aborted"],
                 },
                 "duration_seconds": {"type": "number"},
-                "steps": {"type": "array"},
+                "steps": {
+                    "type": "array",
+                    "description": (
+                        "snake_case step objects. A step may attach a screenshot "
+                        "as screenshot_b64, or as screenshot_path: the PNG, JPEG "
+                        "or WebP file a screenshot tool saved (read here; at "
+                        "most 1 MB, 6 per run)."
+                    ),
+                },
                 "feedback": {
                     "type": "object",
                     "description": (

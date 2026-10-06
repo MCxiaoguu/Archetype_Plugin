@@ -74,8 +74,10 @@ your only window onto the product.
    log as you go — for every meaningful action: `seq` (1-based, strictly
    increasing), `scenario_id`, `action_text`, `narration` (persona voice),
    `url`, `observation_page_type` (one or two words), `success`, optional
-   `error`. Attach `screenshot_b64` for at most a few key moments only if
-   readily available (≤6 total, ≤1 MB each) — otherwise omit.
+   `error`. Attach a screenshot for at most a few key moments (≤6 total,
+   ≤1 MB each): `screenshot_path` with the file a screenshot tool saved
+   (use its full path), or `screenshot_b64` when you have the image data.
+   Prefer the moments your findings point at, so the report can show them.
 
    **Stale or ambiguous targets.** Pages change under you: a cart count
    updates, a banner appears, a region re-renders. When a browser action

@@ -869,6 +869,56 @@ def case_4_report_result_happy(srv: ServerProc, data_dir: Path) -> None:
     contains(text, f"/workspace/tests/{args['run_id']}/results", "web link carries the run id")
 
 
+def case_4b_report_result_reads_screenshot_files(srv: ServerProc, data_dir: Path) -> None:
+    write_auth(data_dir)
+    png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
+    jpeg = b"\xff\xd8\xff\xe0" + b"\x00" * 64
+    webp = b"RIFF\x00\x00\x00\x00WEBPVP8 " + b"\x00" * 64
+    files = {
+        "shot.png": png, "shot.jpeg": jpeg, "shot.webp": webp,
+        "secret.png": b"-----BEGIN OPENSSH PRIVATE KEY-----\nabc",
+        "big.png": b"\x89PNG\r\n\x1a\n" + b"\x00" * (1024 * 1024 + 1),
+    }
+    for name, data in files.items():
+        (data_dir / name).write_bytes(data)
+    steps = [
+        {"seq": 1, "scenario_id": "SC-1", "action_text": "a", "narration": "n",
+         "observation_page_type": "home", "success": True, "screenshot_path": str(data_dir / "shot.png")},
+        {"seq": 2, "scenario_id": "SC-1", "action_text": "a", "narration": "n",
+         "observation_page_type": "home", "success": True, "screenshot_path": str(data_dir / "shot.jpeg")},
+        {"seq": 3, "scenario_id": "SC-1", "action_text": "a", "narration": "n",
+         "observation_page_type": "home", "success": True, "screenshot_path": str(data_dir / "shot.webp")},
+        {"seq": 4, "scenario_id": "SC-1", "action_text": "a", "narration": "n",
+         "observation_page_type": "home", "success": True, "screenshot_path": str(data_dir / "secret.png")},
+        {"seq": 5, "scenario_id": "SC-1", "action_text": "a", "narration": "n",
+         "observation_page_type": "home", "success": True, "screenshot_path": str(data_dir / "big.png")},
+        {"seq": 6, "scenario_id": "SC-1", "action_text": "a", "narration": "n",
+         "observation_page_type": "home", "success": True, "screenshot_path": "/no/such/file.png"},
+        {"seq": 7, "scenario_id": "SC-1", "action_text": "a", "narration": "n",
+         "observation_page_type": "home", "success": True, "screenshot_path": str(data_dir / "shot.png"),
+         "screenshot_b64": "already"},
+    ]
+    result = call_tool(srv, "report_result", {
+        "run_id": "r9", "session_id": "s9", "status": "completed", "steps": steps,
+        "feedback": {"verdict": "pass", "summary": "fine"},
+    })
+    expect(not result.get("isError"), f"report_result errored: {result}")
+    sent = STATE.last_for("/results")["body"]["steps"]
+    import base64 as _b64
+    expect(_b64.b64decode(sent[0]["screenshotB64"]) == png, "png file attached")
+    expect(_b64.b64decode(sent[1]["screenshotB64"]) == jpeg, "jpeg file attached")
+    expect(_b64.b64decode(sent[2]["screenshotB64"]) == webp, "webp file attached")
+    for idx in (3, 4, 5):
+        expect("screenshotB64" not in sent[idx], f"step {idx + 1} must not attach anything: {sent[idx].keys()}")
+    expect(sent[6]["screenshotB64"] == "already", "explicit base64 wins over a path")
+    expect(all("screenshot_path" not in st and "screenshotPath" not in st for st in sent), "path never sent")
+    expect("OPENSSH" not in json.dumps(STATE.last_for("/results")["body"]), "a non-image file is never sent")
+    text = result_text(result)
+    contains(text, "step 4: screenshot skipped (secret.png: not a PNG, JPEG or WebP image)", "non-image named")
+    contains(text, "step 5: screenshot skipped (big.png: over 1 MB)", "oversize named")
+    contains(text, "step 6: screenshot skipped (file.png: not found)", "missing named")
+
+
 def case_5_report_result_conflict(srv: ServerProc, data_dir: Path) -> None:
     write_auth(data_dir)
     STATE.error_overrides["/results"] = (
@@ -1703,6 +1753,7 @@ CASES = [
     ("start_run maps feature_id -> featureId", case_2b_start_run_feature_id),
     ("start_run no auth + declined login -> login hint error", case_3_start_run_no_auth_declined),
     ("report_result happy path (snake->camel, message surfaced)", case_4_report_result_happy),
+    ("report_result attaches screenshot files, images only", case_4b_report_result_reads_screenshot_files),
     ("report_result 409 conflict -> NL message error", case_5_report_result_conflict),
     ("persistent 401 + declined heal -> login hint", case_6_401_declined_heal_appends_login_hint),
     ("get_run renders the full report", case_7_get_run),
