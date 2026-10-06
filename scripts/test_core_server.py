@@ -1543,6 +1543,14 @@ def case_23c_create_feature_old_backend_drops_target(srv: ServerProc, data_dir: 
     contains(result_text(result), "did not keep the url", "an old backend is called out")
 
 
+def case_23e_create_feature_non_text_target(srv: ServerProc, data_dir: Path) -> None:
+    write_auth(data_dir)
+    result = call_tool(srv, "create_feature", {"title": "x", "url": 123})
+    expect(result.get("isError"), "a number as url is refused")
+    contains(result_text(result), "url must be text", "says which argument")
+    expect(not STATE.requests, "nothing reached the backend")
+
+
 def case_23d_create_feature_bad_target(srv: ServerProc, data_dir: Path) -> None:
     write_auth(data_dir)
     STATE.error_overrides["/api/features"] = (400, {
@@ -1888,6 +1896,7 @@ CASES = [
     ("create_feature sends the test target", case_23b_create_feature_with_target),
     ("create_feature warns when the backend drops the target", case_23c_create_feature_old_backend_drops_target),
     ("create_feature relays a rejected target", case_23d_create_feature_bad_target),
+    ("create_feature refuses a non-text target", case_23e_create_feature_non_text_target),
     ("logout deletes auth.json, keeps run history", case_24_logout_connected),
     ("logout discards a half-finished login", case_24b_logout_discards_pending_login),
     ("logout when not connected is a friendly no-op", case_25_logout_not_connected),

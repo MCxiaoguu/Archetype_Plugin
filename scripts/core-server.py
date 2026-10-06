@@ -1479,9 +1479,13 @@ def handle_create_feature(arguments: dict[str, Any]) -> dict[str, Any]:
         ("goal", "goal"),
         ("success_milestone", "successMilestone"),
     ):
-        value = (arguments.get(arg) or "").strip()
-        if value:
-            body[key] = value
+        value = arguments.get(arg)
+        if value is None:
+            continue
+        if not isinstance(value, str):
+            return tool_text(f"{arg} must be text, for example a url or a sentence.", is_error=True)
+        if value.strip():
+            body[key] = value.strip()
 
     result = authed_call(
         lambda token: backend_post("/api/features", body, auth_token=token)
