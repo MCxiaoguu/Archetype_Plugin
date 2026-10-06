@@ -19,7 +19,8 @@ Tools:
 - ``report_result``— ``POST /api/plugin/runs/<id>/results``: ingest the
                      actor's structured results; renders the backend
                      confirmation + summary counts.
-- ``get_run``      — ``GET /api/plugin/runs/<id>``: status/results readback.
+- ``get_run``:       ``GET /api/plugin/runs/<id>/report``, the full run
+                     report (falls back to ``GET /api/plugin/runs/<id>``).
 - ``list_features``— ``GET /api/features``: list the user's saved features
                      (their ``_id`` is the ``feature_id`` for ``start_run``).
 
@@ -55,7 +56,7 @@ from typing import Any, Callable
 
 PROTOCOL_VERSION = "2025-06-18"
 SERVER_NAME = "archetype-core"
-SERVER_VERSION = "0.4.0"
+SERVER_VERSION = "0.5.0"
 
 
 
