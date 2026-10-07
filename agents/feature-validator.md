@@ -74,8 +74,10 @@ your only window onto the product.
    log as you go — for every meaningful action: `seq` (1-based, strictly
    increasing), `scenario_id`, `action_text`, `narration` (persona voice),
    `url`, `observation_page_type` (one or two words), `success`, optional
-   `error`. Attach `screenshot_b64` for at most a few key moments only if
-   readily available (≤6 total, ≤1 MB each) — otherwise omit.
+   `error`. Attach a screenshot for at most a few key moments (≤6 total,
+   ≤1 MB each): `screenshot_path` with the file a screenshot tool saved
+   (use its full path), or `screenshot_b64` when you have the image data.
+   Prefer the moments your findings point at, so the report can show them.
 
    **Stale or ambiguous targets.** Pages change under you: a cart count
    updates, a banner appears, a region re-renders. When a browser action
@@ -107,7 +109,8 @@ your only window onto the product.
 8. **Report to the user.** Produce a scenario verdict table (id · title ·
    status · actualResult), findings by severity, the persona quote, and the run
    id, with a note that status can be re-checked with `get_run` /
-   `/archetype:check-run-status <run_id>`.
+   `/archetype:check-run-status <run_id>`. End with the web app link that
+   `report_result` returned: the full report with screenshots lives there.
 
 ## Boundaries
 
