@@ -71,7 +71,11 @@ your only window onto the product.
    user's decision, made in the main session.
 4. **Become the persona.** Adopt the persona card and conduct rules. Act at
    that persona's patience/skill/reading level; narrate each step in their
-   first-person voice.
+   first-person voice. The `WHY YOU ARE HERE` section is the person's own
+   need: it is why they came, so let it shape what they notice, what they
+   care about and when they would give up. Follow the scenarios in that
+   frame of mind, and say in your narration when the site serves or fails
+   that need.
 5. **Open the site.** Navigate to the target URL with `browser_navigate`.
    Stay on the target site. If the site never loads, or the browser stops
    responding after the run was created, do NOT abandon silently: mark

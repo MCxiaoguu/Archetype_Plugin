@@ -743,6 +743,31 @@ def case_2_start_run_happy(srv: ServerProc, data_dir: Path) -> None:
     contains(text, "evidence?{url?,selector?,quote?}", "start_run text (optional evidence)")
 
 
+def case_2c_start_run_names_the_need(srv: ServerProc, data_dir: Path) -> None:
+    write_auth(data_dir)
+    text = result_text(call_tool(srv, "start_run", {"goal": "test signup", "url": "http://localhost:8321"}))
+    contains(text, "WHY YOU ARE HERE\n" + RUN_RESPONSE["persona"]["personaNeed"], "need section")
+    contains(text, "Work through the scenarios in that frame of mind", "how to use it")
+    expect(text.index("WHY YOU ARE HERE") < text.index("YOUR SCENARIOS"), "need comes before scenarios")
+
+
+def case_2d_start_run_without_a_need(srv: ServerProc, data_dir: Path) -> None:
+    write_auth(data_dir)
+    persona = dict(RUN_RESPONSE["persona"], personaNeed=None)
+    STATE.error_overrides["/api/plugin/runs"] = (201, dict(RUN_RESPONSE, persona=persona))
+    text = result_text(call_tool(srv, "start_run", {"goal": "test signup", "url": "http://localhost:8321"}))
+    expect("WHY YOU ARE HERE" not in text, "no empty need section")
+
+
+def case_2e_start_run_says_chosen_not_spun(srv: ServerProc, data_dir: Path) -> None:
+    write_auth(data_dir)
+    STATE.error_overrides["/api/plugin/runs"] = (201, dict(
+        RUN_RESPONSE, pool={"poolId": "pool-x", "name": "Valley", "spunOff": False}))
+    text = result_text(call_tool(srv, "start_run", {"goal": "g", "url": "http://x", "pool_id": "pool-x"}))
+    contains(text, "chosen from pool Valley as the member whose need fits this goal best", "chosen wording")
+    expect("spun from pool" not in text, "not called spun off")
+
+
 def case_2b_start_run_feature_id(srv: ServerProc, data_dir: Path) -> None:
     write_auth(data_dir)
     call_tool(srv, "start_run",
@@ -964,7 +989,7 @@ def case_7_get_run(srv: ServerProc, data_dir: Path) -> None:
     contains(text, "verdict: MIXED", "verdict in the header")
     contains(text, "Feature: Signup (done when: account_created)", "feature and milestone")
     contains(text, "Need: I want to get my team onto a notes tool", "the run's need")
-    contains(text, "written for this goal; their own need scored 22/100", "why the need was written")
+    contains(text, "(written for this goal; their own need scored 22/100)\n", "why the need was written")
     contains(text, "| SC-2 | Pick a plan | blocked | The Next button did nothing |", "scenario row")
     contains(text, "Trial started \\| after one retry", "pipes in a cell are escaped")
     contains(text, "Findings (2: 1 critical, 1 low):", "finding tally")
@@ -1859,6 +1884,9 @@ CASES = [
     ("initialize + tools/list shows 10 tools", case_1_tools_list),
     ("start_run happy path (camelCase body, rich tool text)", case_2_start_run_happy),
     ("start_run maps feature_id -> featureId", case_2b_start_run_feature_id),
+    ("start_run says when a pool member was chosen, not spun off", case_2e_start_run_says_chosen_not_spun),
+    ("start_run names the persona's need", case_2c_start_run_names_the_need),
+    ("start_run without a need has no empty section", case_2d_start_run_without_a_need),
     ("start_run no auth + declined login -> login hint error", case_3_start_run_no_auth_declined),
     ("report_result happy path (snake->camel, message surfaced)", case_4_report_result_happy),
     ("report_result attaches screenshot files, images only", case_4b_report_result_reads_screenshot_files),

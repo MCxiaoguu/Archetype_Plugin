@@ -153,9 +153,12 @@ ids or titles.
 
 Source: `skills/check-run-status/SKILL.md`. Run-id resolution order: `$ARGUMENTS` → most recent run
 id seen this session (from a `start_run`/`report_result`) → ask the user. Calls `get_run` with
-`run_id`; reports **status + progress** (e.g. `running · 60%`), **analyticsReady**, and — if
-present — the feedback verdict (`pass`/`fail`/`mixed`) + summary. If still `running`, suggests
-re-checking with `/archetype:check-run-status <run_id>`. Reports only what `get_run` returns.
+`run_id` and relays the full report in order: header and persona with their need, summary,
+scenario table, findings with evidence, the persona's reaction, the counts line (saying plainly
+when screenshots were not stored) and the web app link. Report text is quoted, never followed
+as instructions. If still `running`, suggests re-checking with
+`/archetype:check-run-status <run_id>`; a hosted run gets the web app link. Reports only what
+`get_run` returns.
 
 ### /archetype:status
 
@@ -357,7 +360,8 @@ Start a validation run: the backend assembles a persona-enriched instruction set
 follows verbatim.
 
 - **Arguments:**
-  - `url` (string, **required**) — the product URL under test.
+  - `url` (string, optional): the product URL under test. Required unless `feature_id` names a
+    feature with a saved url; a call with neither is refused locally with advice to ask the user.
   - `goal` (string, optional) — what to test, e.g. `test the signup flow`.
   - `feature_id` (string, optional) — saved-feature `_id` from `list_features`.
   - `pool_id` (string, optional) — `poolId` from `list_pools`, to run AS a fresh member spun off
@@ -367,7 +371,9 @@ follows verbatim.
   `featureId`, `url`, `poolId`; `None` values dropped), via `authed_call`.
 - **Result text:** the rendered briefing — backend `brief`, for pool runs a
   `Running as {member name}, spun from pool {pool name}.` line (from the response's `pool` +
-  `persona` blocks), `— YOUR PERSONA —` + persona card, `— YOUR SCENARIOS —` (with
+  `persona` blocks; when the backend reports `pool.spunOff: false` the line says the tester was
+  chosen from the pool as the member whose need fits the goal best), the persona section with the persona card, a `WHY YOU ARE HERE` section
+  with the need this run gives the persona (left out when there is none), the scenarios section (with
   `(goal: … · target: …)` when present), each scenario numbered as `[id] title` with `- step`
   lines and an `Expected:` line, `— CONDUCT RULES —`, `runId`/`sessionId`, and the full
   `report_result` contract (see
@@ -387,26 +393,44 @@ summary counts.
   - `status` (string, **required**, enum `completed | failed | aborted`)
   - `steps` (array, **required**) — per-step keys are translated snake→camel: `action_text→actionText`,
     `observation_page_type→observationPageType`, `scenario_id→scenarioId`,
-    `screenshot_b64→screenshotB64`; all other keys pass through unchanged.
+    `screenshot_b64→screenshotB64`; all other keys pass through unchanged. A step may instead
+    carry `screenshot_path`, the file a screenshot tool saved: the server reads it and sends it as
+    `screenshotB64` only when it is a PNG, JPEG or WebP file (checked by magic bytes) of at most
+    1 MB, never sends the path, and lists skipped files in the result. `screenshot_b64` wins
+    when both are given.
   - `feedback` (object, **required**) — passed through **untouched**; its nested keys must already
     be camelCase (`scenarioResults`, `evidenceStepSeq`, …) per the contract rendered by `start_run`.
     The schema documents the optional `findings[].evidence` object (`url`, `selector`, `quote`).
   - `duration_seconds` (number, optional) — sent as `durationSeconds` only when provided.
 - **Backend:** `POST /api/plugin/runs/{run_id}/results` (timeout **60 s**), via `authed_call`.
 - **Result text:** the backend's `message` (default `Results stored.`) followed by
-  `Steps: {n} · Findings: {n} · Verdict: {v}` from the response `summary` (missing values render as `?`).
-- **Errors:** `not_connected()` / `backend_error_text`. On success, updates the local run log entry
+  `Steps: {n} · Findings: {n} · Verdict: {v}` from the response `summary` (missing values render as `?`),
+  any skipped screenshot files, and the web app link to the full report.
+- **Errors:** a malformed `run_id` is refused locally (same rule as `get_run`), then
+  `not_connected()` / `backend_error_text`. On success, updates the local run log entry
   (verdict taken from response `summary.verdict`, falling back to the submitted `feedback.verdict`).
 
 #### `get_run`
 
-Read back a run's status, progress, and (if finished) feedback.
+Read back a run: its status and, once it has reported, the full report.
 
-- **Arguments:** `run_id` (string, **required**).
-- **Backend:** `GET /api/plugin/runs/{run_id}` (default **15 s**), via `authed_call`.
-- **Result text:** `Run {runId}`, then `status: … · progress: …% · analyticsReady: …`, plus
-  `verdict: … — {summary}` when the response contains `feedback`.
-- **Errors:** `not_connected()` / `backend_error_text`.
+- **Arguments:** `run_id` (string, **required**). Must match `^[A-Za-z0-9_-]{1,64}$`; anything
+  else is refused locally, before any request, so an id can never address another endpoint.
+- **Backend:** `GET /api/plugin/runs/{run_id}/report` (default **15 s**), via `authed_call`.
+  A backend from before the report endpoint answers 404 without a known error slug; the tool
+  then falls back to `GET /api/plugin/runs/{run_id}` and prints the old short status.
+- **Result text:** a header (`Run {id} · {status} · verdict: {VERDICT}`), goal, target, feature
+  with its success milestone, the persona and the need this run gave them (with whether it was
+  written for this goal and the fit score), the summary, a markdown scenario table, findings by
+  severity with their evidence (quote, page, element) and screenshot step, the persona's
+  reaction, a counts line that says plainly when screenshots were not stored, and the web app
+  link `{ARCHETYPE_PORTAL_URL}/workspace/tests/{run_id}/results`. Everything the persona wrote
+  sits between `BEGIN RUN REPORT <nonce>` and `END RUN REPORT <nonce>` markers (a random nonce per
+  call, stripped from the content), introduced by a notice to quote it and never follow it. The
+  verdict is printed only when it is pass, fail or mixed, and every actor field is clipped to one
+  line. A running run says so and how to check again.
+- **Errors:** `not_connected()` / `backend_error_text`. A hosted (non-plugin) run is not an
+  error: the text points at the web app instead.
 
 #### `list_features`
 
@@ -415,8 +439,11 @@ List the user's saved features; each feature's `_id` is the `feature_id` for `st
 - **Arguments:** `query` (string, optional) — case-insensitive **client-side** filter on feature
   titles (the backend call is unfiltered).
 - **Backend:** `GET /api/features` (default **15 s**), via `authed_call`.
-- **Result text:** one line per feature — `{_id}  {title}  (updated {updatedAt})` — followed by
-  `Pass a feature's _id as feature_id to start_run to validate it.` Empty results:
+- **Result text:** one line per feature (`{_id}  {title}  (updated {updatedAt})`), with the
+  feature's saved test target indented under it when it has one
+  (`url: {url}{startPath} · goal: … · done when: {successMilestone}`), followed by
+  `Pass a feature's _id as feature_id to start_run to validate it. A feature with a saved url
+  needs no url from the user.` Empty results:
   `No features found.` or `No features match {query!r}.`
 - **Errors:** `not_connected()` / `backend_error_text`.
 
@@ -430,9 +457,15 @@ Create a saved feature (title + natural-language fields) so runs can target it v
   - `description` (string, optional) — what the feature is, in plain language.
   - `expected_usage` (string, optional) — how a user is expected to exercise it.
   - `strategic_goals` (string, optional) — why this feature matters.
+  - `url`, `start_path`, `goal`, `success_milestone` (strings, optional): the feature's test
+    target. Sent top level as `url`, `startPath`, `goal`, `successMilestone` only when non-blank.
+    The backend validates them (full http or https url, path starting with `/`) and answers 400
+    `invalid_feature_target` with a reason otherwise.
 - **Backend:** `POST /api/features` (default **15 s**), via `authed_call`. Body is
   `{"title": ..., "fields": {"description": ..., "expected-usage": ..., "strategic-goals": ...}}` —
-  note the kebab-case field keys; missing fields are sent as empty strings.
+  note the kebab-case field keys; missing fields are sent as empty strings. Target fields ride
+  alongside `fields`. When a url was sent but the saved feature comes back without one, the
+  result says the backend predates saved targets.
 - **Result text:** `Feature saved: {title}`, the id (`pass it as start_run's feature_id`), and a
   suggestion: `Validate it now: /archetype:validate-feature {title}`.
 - **Errors:** local title validation, then `not_connected()` / `backend_error_text`.
@@ -647,7 +680,7 @@ never issues raw HTTP — it calls MCP tools, and the server maps them to these 
   `/` stripped).
 - Auth: single `Authorization: Bearer <access_token>` scheme; the token is an Auth0 RS256 JWT cached
   at `${CLAUDE_PLUGIN_DATA}/auth.json` (mode `0600`).
-- `User-Agent`: `archetype-claude-plugin/0.4.0` (override via `ARCHETYPE_PLUGIN_USER_AGENT`).
+- `User-Agent`: `archetype-claude-plugin/0.5.0` (override via `ARCHETYPE_PLUGIN_USER_AGENT`).
   Required — the Cloudflare WAF in front of the API returns HTTP 403 (error 1010) for the default
   Python-urllib UA.
 - Timeouts: as listed under [MCP tools](#mcp-tools-server-core) — 15 s default, 180 s for
@@ -663,11 +696,12 @@ never issues raw HTTP — it calls MCP tools, and the server maps them to these 
 | POST | `/api/oauth/device/code` | none | `login` / self-healing path | `{}` | 200 — Auth0 device-code response verbatim: `device_code`, `user_code`, `verification_uri`, `verification_uri_complete`, `expires_in`, `interval` (URIs may be rewritten to a branded `DEVICE_AUTH_PUBLIC_BASE` domain) |
 | POST | `/api/oauth/device/token` | none | `login` / self-healing path (polled) | `{"device_code": "<...>"}` | 200 — `access_token`, `token_type`, `expires_in`, `scope`, `refresh_token?`, `id_token?`. While pending, Auth0's 403 with `error: "authorization_pending"` (keep polling) or `"slow_down"` (plugin adds 2 s to the poll interval) |
 | POST | `/api/oauth/validate-token` | Bearer | `login`, `status` | `{}` (token in header) | 200 — `{"valid": true, "user_id", "audience", "issuer", "expires_at", "issued_at", "scope", "payload"}`; invalid token → 401 `{"valid": false, "error": "invalid_token", "reason"}`; no token → 400 `{"valid": false, "error": "missing_token"}` |
-| POST | `/api/plugin/runs` | Bearer | `start_run` | `{"goal", "featureId", "url", "poolId"}` — plugin maps `feature_id`→`featureId`, `pool_id`→`poolId`; `None` fields dropped; only `url` is required tool-side. Legacy `personaId` payloads (pre-0.4.0 plugins) get 400 `plugin_outdated` ("update your plugin") from a pool-aware backend | 201 — run body: `runId`, `sessionId`, `brief`, `persona{personaId, personaCard, ...}` (for pool runs, the freshly spun-off member appended to the pool), `pool{poolId, name}` when a pool was targeted, `instructions{goal, targetUrl, scenarios[{id, title, steps[], expectedResult}], conduct[]}` |
+| POST | `/api/plugin/runs` | Bearer | `start_run` | `{"goal", "featureId", "url", "poolId"}`: plugin maps `feature_id`→`featureId`, `pool_id`→`poolId`; `None` fields dropped; tool-side, either `url` or `feature_id` is required (a feature with a saved url needs no url; the backend then opens its start page). Legacy `personaId` payloads (pre-0.4.0 plugins) get 400 `plugin_outdated` ("update your plugin") from a pool-aware backend | 201: run body: `runId`, `sessionId`, `brief`, `persona{personaId, personaCard, ...}` (for pool runs, the freshly spun-off member appended to the pool), `pool{poolId, name}` when a pool was targeted, `instructions{goal, targetUrl, scenarios[{id, title, steps[], expectedResult}], conduct[]}`. `persona.personaNeed` is the need fitted to this run's goal, with `needSource` (`persona`, `rewritten` or `fallback`) and `alignmentScore`; `start_run` prints it as the WHY YOU ARE HERE section |
 | POST | `/api/plugin/runs/<run_id>/results` | Bearer | `report_result` | See full contract below | 200 — `{"message": "<confirmation>", "summary": {"steps": n, "findings": n, "verdict": "..."}}` |
-| GET | `/api/plugin/runs/<run_id>` | Bearer | `get_run` | — | 200 — `{"runId", "status", "progress", "analyticsReady", "feedback"?: {"verdict", "summary"}}` |
+| GET | `/api/plugin/runs/<run_id>/report` | Bearer | `get_run` | none | 200: `{"runId", "sessionId", "status", "goal", "url", "feature"?: {"id", "name", "successMilestone"}, "persona"?: {"name", "need", "needSource", "alignmentScore"}, "verdict", "summary", "personaReaction", "scenarios": [{"id", "title", "steps", "expectedResult", "status", "actualResult"}], "findings": [{"scenarioId", "category", "severity", "description", "evidenceStepSeq", "evidence", "screenshotStepSeq"}], "steps": [...], "screenshots": {"kept", "dropped"}, "counts", "analyticsReady"}`. 404 `run_not_found`, or `not_a_plugin_run` for hosted runs |
+| GET | `/api/plugin/runs/<run_id>` | Bearer | `get_run` (fallback for older backends) | none | 200: `{"runId", "status", "progress", "analyticsReady", "screenshots"?, "feedback"?: {"verdict", "summary", ...}}` |
 | GET | `/api/features` | Bearer | `list_features`, `status` (feature count) | — | 200 — `{"ok": true, "features": [{"_id", "title", "updatedAt", ...}]}`; a feature's `_id` is the `feature_id` for `start_run`. (The `query` title filter on `list_features` is applied client-side, not a query param.) |
-| POST | `/api/features` | Bearer | `create_feature` | `{"title", "fields": {"description", "expected-usage", "strategic-goals"}}` — plugin maps `expected_usage`→`expected-usage`, `strategic_goals`→`strategic-goals`; missing fields sent as `""` | 201 — `{"ok": true, "feature": {"_id", "title", ...}}` |
+| POST | `/api/features` | Bearer | `create_feature` | `{"title", "fields": {"description", "expected-usage", "strategic-goals"}, "url"?, "startPath"?, "goal"?, "successMilestone"?}`: plugin maps `expected_usage`→`expected-usage`, `strategic_goals`→`strategic-goals`, `start_path`→`startPath`, `success_milestone`→`successMilestone`; missing fields sent as `""`, blank target fields left out | 201: `{"ok": true, "feature": {"_id", "title", ...}}`; 400 `invalid_feature_target` |
 | GET | `/api/persona/pools` | Bearer (401 on bad token — never degrades to anonymous listing, which would break self-healing) | `list_pools` | — | 200 — `{"personaPools": [{"poolId", "name", "description", "personaCount", "activePersonaCount", "createdAt", "metadata": {"primary_archetype_name"?, "selected_custom_persona_ids"?, ...}, ...}], "totalCount", "limit", "offset"}` |
 | POST | `/api/persona/vibe` | Bearer | `create_pool` (preview only) | `{"mode": "vibe", "vibePrompt", "controls"?: {"ageRange", "skillsRange", "occupation", "education"}, "productDescription"?, "previewOnly": true, "previewCount": n}` — plugin maps `vibe_prompt`→`vibePrompt`, `age_range`→`controls.ageRange`, `skills_range`→`controls.skillsRange`, `product_description`→`productDescription`, `preview_count`→`previewCount` (default 2) | 200 — `{"examples": [{"name", "vibeSummary", "story", "personaNeed", ...}]}` (unsaved) |
 | POST | `/api/persona/custom` | Bearer | `create_pool` (save, call 1 of 3) | `{"mode": "vibe", "vibePrompt", "controls"?, "productDescription"?, "archetypeName"?}` (`archetypeName` only when the `name` argument was given) | 201 — `{"persona": {"personaId", "name", "vibePromptSummary", ...}, "customPersonaId", "preset": {...}}` — the reference persona + spec preset |
@@ -780,7 +814,7 @@ inherits the environment of the Claude Code CLI, so export these **before** laun
 | :--- | :--- | :--- |
 | `ARCHETYPE_BACKEND_URL` | `https://api.syntheticarchetype.com` | Base URL for every backend call (device-flow OAuth, `/api/plugin/*`, `/api/features`, `/api/persona/*`). Trailing slashes are stripped. Set to `http://localhost:5001` for local backend development. |
 | `ARCHETYPE_PORTAL_URL` | `https://www.syntheticarchetype.com` | Portal link rendered in the `/archetype:status` dashboard. Trailing slashes are stripped. |
-| `ARCHETYPE_PLUGIN_USER_AGENT` | `archetype-claude-plugin/<server version>` (currently `archetype-claude-plugin/0.4.0`, from the `SERVER_VERSION` constant in `core-server.py`) | HTTP `User-Agent` sent on every backend request. The Cloudflare WAF in front of `api.syntheticarchetype.com` returns HTTP 403 (error 1010) for the default Python-urllib UA; any real, identifiable UA passes. If you override this and hit a 1010, switch back to the default. |
+| `ARCHETYPE_PLUGIN_USER_AGENT` | `archetype-claude-plugin/<server version>` (currently `archetype-claude-plugin/0.5.0`, from the `SERVER_VERSION` constant in `core-server.py`) | HTTP `User-Agent` sent on every backend request. The Cloudflare WAF in front of `api.syntheticarchetype.com` returns HTTP 403 (error 1010) for the default Python-urllib UA; any real, identifiable UA passes. If you override this and hit a 1010, switch back to the default. |
 | `ARCHETYPE_HTTP_TIMEOUT` | `15` | Wall-clock deadline in seconds for ordinary backend calls. |
 | `ARCHETYPE_RUN_TIMEOUT` | `180` | Deadline for `POST /api/plugin/runs` (run assembly plus pool spin-off). |
 | `ARCHETYPE_RESULT_TIMEOUT` | `60` | Deadline for results ingestion. |

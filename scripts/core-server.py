@@ -19,7 +19,8 @@ Tools:
 - ``report_result``— ``POST /api/plugin/runs/<id>/results``: ingest the
                      actor's structured results; renders the backend
                      confirmation + summary counts.
-- ``get_run``      — ``GET /api/plugin/runs/<id>``: status/results readback.
+- ``get_run``:       ``GET /api/plugin/runs/<id>/report``, the full run
+                     report (falls back to ``GET /api/plugin/runs/<id>``).
 - ``list_features``— ``GET /api/features``: list the user's saved features
                      (their ``_id`` is the ``feature_id`` for ``start_run``).
 
@@ -55,7 +56,7 @@ from typing import Any, Callable
 
 PROTOCOL_VERSION = "2025-06-18"
 SERVER_NAME = "archetype-core"
-SERVER_VERSION = "0.4.0"
+SERVER_VERSION = "0.5.0"
 
 
 
@@ -883,14 +884,34 @@ def _render_run(body: dict[str, Any]) -> str:
     pool = body.get("pool") or {}
     pool_name = pool.get("name")
     if pool_name:
-        parts.append(
-            f"Running as {persona.get('name') or 'a fresh tester'}, "
-            f"spun from pool {pool_name}."
-        )
+        # Backends from 0.5.0 on say whether the tester was generated for
+        # this run or chosen from the pool's existing members.
+        if pool.get("spunOff") is False:
+            parts.append(
+                f"Running as {persona.get('name') or 'a tester'}, chosen from "
+                f"pool {pool_name} as the member whose need fits this goal best."
+            )
+        else:
+            parts.append(
+                f"Running as {persona.get('name') or 'a fresh tester'}, "
+                f"spun from pool {pool_name}."
+            )
 
     card = persona.get("personaCard")
     if card:
         parts.append("— YOUR PERSONA —\n" + card)
+
+    # The need is why this person is on the site at all. Named on its own so
+    # the actor plays a person with a reason, not a tester with a checklist.
+    need = persona.get("personaNeed")
+    if need:
+        parts.append(
+            "WHY YOU ARE HERE\n"
+            f"{need}\n"
+            "This is your reason for visiting. Let it decide what you look at "
+            "first, what matters to you, and when you would give up. Work "
+            "through the scenarios in that frame of mind."
+        )
 
     goal = instructions.get("goal")
     target = instructions.get("targetUrl")
@@ -1209,9 +1230,9 @@ def _render_report(report: dict[str, Any], run_id: str) -> str:
             note = " (written for this goal"
             if isinstance(persona.get("alignmentScore"), int):
                 note += f"; their own need scored {persona['alignmentScore']}/100"
+            note += ")"
         elif persona.get("needSource") == "fallback":
             note = " (built from the goal: no model could fit the persona's own need)"
-            note += ")"
         elif isinstance(persona.get("alignmentScore"), int):
             note = f" (fits the goal {persona['alignmentScore']}/100)"
         lines.append(f"Need: {_clip(persona['need'], 400)}{note}")
