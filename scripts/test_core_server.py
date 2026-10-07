@@ -989,7 +989,7 @@ def case_7_get_run(srv: ServerProc, data_dir: Path) -> None:
     contains(text, "verdict: MIXED", "verdict in the header")
     contains(text, "Feature: Signup (done when: account_created)", "feature and milestone")
     contains(text, "Need: I want to get my team onto a notes tool", "the run's need")
-    contains(text, "written for this goal; their own need scored 22/100", "why the need was written")
+    contains(text, "(written for this goal; their own need scored 22/100)\n", "why the need was written")
     contains(text, "| SC-2 | Pick a plan | blocked | The Next button did nothing |", "scenario row")
     contains(text, "Trial started \\| after one retry", "pipes in a cell are escaped")
     contains(text, "Findings (2: 1 critical, 1 low):", "finding tally")

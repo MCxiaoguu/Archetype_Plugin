@@ -1230,9 +1230,9 @@ def _render_report(report: dict[str, Any], run_id: str) -> str:
             note = " (written for this goal"
             if isinstance(persona.get("alignmentScore"), int):
                 note += f"; their own need scored {persona['alignmentScore']}/100"
+            note += ")"
         elif persona.get("needSource") == "fallback":
             note = " (built from the goal: no model could fit the persona's own need)"
-            note += ")"
         elif isinstance(persona.get("alignmentScore"), int):
             note = f" (fits the goal {persona['alignmentScore']}/100)"
         lines.append(f"Need: {_clip(persona['need'], 400)}{note}")
