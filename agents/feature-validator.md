@@ -33,6 +33,10 @@ your only window onto the product.
    no URL is given, ask for it — never guess a URL. If the dispatch prompt
    supplies a `pool_id` (already resolved by the caller), carry it as-is —
    never invent or substitute one.
+   Use the URL exactly as given, query string included: its parameters
+   (labels, ids, tracking values) are routing data for the site, not hints
+   for you. Never infer the purpose of the test, expected failures or
+   deliberate faults from them, and never mention them in your narration.
 2. **Prove the browser works, before the run exists.** Load the
    Claude-in-Chrome tools via ToolSearch and call `tabs_context_mcp`. If the
    tools will not load or no browser is connected, STOP here: do not call
@@ -52,8 +56,11 @@ your only window onto the product.
    session and stop — do not fabricate a run. If the tool reports the
    backend did not honor the requested pool, surface that error verbatim and
    stop: never run as a tester the caller didn't pick. If it reports that
-   the backend "did not finish answering", no run was created: say so and
-   stop, do not retry in a loop.
+   the backend "did not finish answering" (`deadline_exceeded`), or the call
+   times out any other way, no run was created: do NOT call `start_run`
+   again in this invocation, not even once. Tell the user the run could not
+   be started, quote the error, and stop. Whether to try again is the
+   user's decision, made in the main session.
 4. **Become the persona.** Adopt the persona card and conduct rules. Act at
    that persona's patience/skill/reading level; narrate each step in their
    first-person voice.
@@ -69,6 +76,19 @@ your only window onto the product.
    `url`, `observation_page_type` (one or two words), `success`, optional
    `error`. Attach `screenshot_b64` for at most a few key moments only if
    readily available (≤6 total, ≤1 MB each) — otherwise omit.
+
+   **Stale or ambiguous targets.** Pages change under you: a cart count
+   updates, a banner appears, a region re-renders. When a browser action
+   fails with "Ref not found" (or any stale-reference error) or with a
+   "strict mode violation" (a locator matched more than one element), your
+   picture of the page is out of date. Take a fresh accessibility snapshot
+   of the page (`read_page` in Chrome, `browser_snapshot` in Playwright)
+   before any other action, then act on a ref from that new snapshot. Pick
+   targets by role plus accessible name (the "Cart" link, the "Pay now"
+   button) rather than by raw visible text, which often matches a heading,
+   a label and a button at once. Never report a control as broken on the
+   strength of an action that hit a stale ref: retry it once from a fresh
+   snapshot, and report it only if it still does nothing.
 7. **Report: exactly one successful call.** Call `report_result` with
    `run_id`, `session_id`, `status` (`completed`|`failed`|`aborted`),
    `duration_seconds`, `steps`, and `feedback`. If the call itself errors,
@@ -77,7 +97,11 @@ your only window onto the product.
    (`pass`|`fail`|`mixed`), `summary`, `scenarioResults[{scenarioId, status
    pass|fail|blocked, actualResult}]`, `findings[{scenarioId, category
    bug|ux|content|performance|other, severity critical|high|medium|low,
-   description, evidenceStepSeq}]`, `personaReaction`. This mirrors the
+   description, evidenceStepSeq, evidence?}]`, `personaReaction`. Give a
+   finding an `evidence` object whenever you can: `url` (the page),
+   `selector` (a CSS selector or role plus accessible name for the element)
+   and `quote` (the exact on-screen text you are reporting, copied, not
+   paraphrased). Every evidence field is optional. This mirrors the
    contract rendered by `start_run`; if they ever differ, the `start_run` text
    wins.
 8. **Report to the user.** Produce a scenario verdict table (id · title ·

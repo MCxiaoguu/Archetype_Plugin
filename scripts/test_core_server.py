@@ -655,6 +655,16 @@ def case_1_tools_list(srv: ServerProc, data_dir: Path) -> None:
         ),
         f"tools/list should show exactly the 10 tools, got {names}",
     )
+    report = next(t for t in tools if t["name"] == "report_result")
+    finding = report["inputSchema"]["properties"]["feedback"]["properties"]["findings"]["items"]
+    evidence = finding["properties"]["evidence"]
+    expect(evidence["type"] == "object", f"evidence must be an object, got {evidence}")
+    expect(
+        sorted(evidence["properties"]) == ["quote", "selector", "url"],
+        f"evidence carries url, selector, quote, got {evidence['properties']}",
+    )
+    expect("required" not in evidence and "required" not in finding,
+           "every evidence field must stay optional")
 
 
 def case_2_start_run_happy(srv: ServerProc, data_dir: Path) -> None:
@@ -688,6 +698,7 @@ def case_2_start_run_happy(srv: ServerProc, data_dir: Path) -> None:
     contains(text, RUN_RESPONSE["runId"], "start_run text (runId)")
     contains(text, RUN_RESPONSE["sessionId"], "start_run text (sessionId)")
     contains(text, "report_result", "start_run text (report guidance)")
+    contains(text, "evidence?{url?,selector?,quote?}", "start_run text (optional evidence)")
 
 
 def case_2b_start_run_feature_id(srv: ServerProc, data_dir: Path) -> None:
@@ -748,7 +759,19 @@ def case_4_report_result_happy(srv: ServerProc, data_dir: Path) -> None:
                     "severity": "medium",
                     "description": "CTA takes ~900ms with no loading state.",
                     "evidenceStepSeq": 1,
-                }
+                    "evidence": {
+                        "url": "http://localhost:8321/",
+                        "selector": "button[name='Start free trial']",
+                        "quote": "Start free trial",
+                    },
+                },
+                {
+                    "scenarioId": "SC-1",
+                    "category": "ux",
+                    "severity": "low",
+                    "description": "No evidence on this one.",
+                    "evidenceStepSeq": 1,
+                },
             ],
             "personaReaction": "That button felt broken for a second.",
         },
@@ -789,6 +812,11 @@ def case_4_report_result_happy(srv: ServerProc, data_dir: Path) -> None:
         and findings[0].get("evidenceStepSeq") == 1,
         f"feedback.findings must pass through camelCase, got {findings}",
     )
+    expect(
+        findings[0].get("evidence") == args["feedback"]["findings"][0]["evidence"],
+        f"findings[].evidence must pass through untouched, got {findings[0]}",
+    )
+    expect("evidence" not in findings[1], "a finding without evidence must not gain one")
     # run_id is a path param, must NOT appear in the body
     expect("runId" not in body and "run_id" not in body, "run_id must not be in body")
     assert_no_snake_case(body, "report_result body")
@@ -1346,7 +1374,9 @@ def case_28_start_run_deadline_guidance(srv: ServerProc, data_dir: Path) -> None
     expect(elapsed < 3.5, f"start_run deadline (1.5 s) must hold, took {elapsed:.1f} s")
     text = result_text(result)
     contains(text, "No run was handed to this session", "actor is told not to act")
-    contains(text, "retry without pool=", "pool runs get the no-pool fallback")
+    contains(text, "Do not call start_run again", "actor is told not to retry by itself")
+    expect("Retry once" not in text, "the actor must never be told to retry start_run")
+    contains(text, "without pool=", "pool runs get the no-pool fallback")
     expect(not (data_dir / "runs.json").exists(), "an abandoned run must not enter the run log")
     expect(len(srv.elicitations) == 0, "a deadline is not an auth failure: no login modal")
 

@@ -171,15 +171,33 @@ For the confirmed run list (one run or many):
    against the brief). Deliberately include nothing else: no product
    background, no known issues, no prior run results — a clean actor is the
    point.
+
+   **Labels in the URL must be opaque.** Pass the url exactly as the user
+   gave it: query parameters can carry attribution the site under test or
+   a harness needs (for example `?twin_label=...`), so never strip or
+   rewrite them. But the actor reads that URL, so a parameter value that
+   describes the test gives the test away: in a 2026-09-24 stress run the
+   actor saw `twin_label=chaos-trickle-start` and concluded a stalled
+   backend was deliberate. When a query value reads like a description of
+   the test, its expected outcome or an injected fault (`chaos-...`,
+   `slow-backend`, `expect-fail`, `bug-...`), say so once when you confirm
+   the run list and suggest an opaque value such as a short random id; use
+   whatever the user decides. In an unattended session, run it as given.
+   Never explain, paraphrase or comment on query parameters in the dispatch
+   prompt.
 4. Multiple runs execute **sequentially**: the agents share one Chrome;
    parallel dispatch makes them fight over the browser.
 5. If a run comes back with the "backend did not honor the pool" error,
    stop the remaining pool-selected runs (they will fail the same way)
    and surface it once.
 6. If a run comes back with "did not finish answering" (the backend missed
-   its deadline), no run was created for this session. Offer one retry; for
-   a pool run that times out twice, offer to run without the pool instead of
-   retrying again.
+   its deadline), no run was created for this session. Tell the user and
+   offer one retry, but dispatch it only if the user says yes: never retry
+   on your own, and never ask the actor to retry `start_run` itself (the
+   actor stops after one deadline by design). For a pool run that times out
+   twice, offer to run without the pool instead of retrying again. In an
+   unattended session with nobody to answer, do not retry: report the
+   failure and stop.
 
 The full actor loop (become the persona, drive the browser, keep the step
 log, `report_result` exactly once) is defined in the `feature-validator`

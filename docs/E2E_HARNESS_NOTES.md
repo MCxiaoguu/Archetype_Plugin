@@ -289,6 +289,11 @@ liveness, backend-driven runs once a token exists) and supports
 render elicitation (docs: print mode is non-interactive by design) → the
 login wizard leg must run in the tmux TUI.
 
+Never combine `--strict-mcp-config` with `--plugin-dir` in `-p` mode: strict
+mode keeps only the servers named in `--mcp-config` and drops the plugin's
+own `core` server, so none of the Archetype tools load `[verified 2026-09-24]`.
+Pass extra servers (for example Playwright) with `--mcp-config` alone.
+
 ---
 
 ## 7. Vision verification for the outer session

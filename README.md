@@ -58,6 +58,11 @@ persona, drives Chrome through each scenario, and reports results back.
 Free text is the **goal**; a `url=<...>` token sets the target URL (required —
 you'll be asked for it if omitted).
 
+The actor sees the target URL, query string included. If you tag runs with a
+query parameter (for attribution in a test site or harness), keep its value
+opaque, such as `?twin_label=r7f3`: a value like `chaos-slow-backend` tells the
+persona what the test expects and changes how it behaves.
+
 ### Running without Chrome (headless)
 
 Claude in Chrome needs a signed-in extension and an unlocked computer. For
@@ -71,6 +76,20 @@ claude mcp add playwright -- npx -y @playwright/mcp@latest --headless --isolated
 Chrome connected it uses Chrome; otherwise, if `playwright` is registered, it
 runs the same persona loop headless and tells you so; with neither, it stops
 and explains what to fix instead of creating a run nobody can execute.
+
+For a fully unattended run in print mode, pass the plugin and the Playwright
+server together:
+
+```
+claude -p '/archetype:validation <goal> url=<url>' \
+  --plugin-dir /path/to/Archetype_Plugin --mcp-config playwright.json
+```
+
+Do not add `--strict-mcp-config` here. It limits the session to the servers in
+`--mcp-config` and silently drops the plugin's own `core` server, so
+`start_run` and `report_result` are missing and no run can start. Print mode
+also cannot show the login modal, so log in once in an interactive session
+first.
 
 ## Dev quickstart — for handoff
 

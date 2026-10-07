@@ -216,6 +216,10 @@ ambiguous → ask once, never guess an id), and optionally a **pre-resolved** `p
 pool's display name — the agent carries it as-is and never invents or substitutes one (the backend
 spins off one fresh tester from the pool, which can add up to ~a minute). If `start_run` reports
 the backend did not honor the requested pool, the agent surfaces the error verbatim and stops.
+The URL is used exactly as given, query string included, and the agent treats its parameters as
+opaque routing data. The actor can still read them, so run labels in the URL must not describe the
+test (use `?twin_label=r7f3`, not `?twin_label=chaos-trickle-start`); the validation skill flags
+descriptive values when it confirms the run list.
 
 **Why login can't happen inside it.** The `login` tool is deliberately absent from its tool list:
 the login elicitation modal cannot render inside a subagent, so authentication must happen in the
@@ -223,7 +227,9 @@ main session before dispatch. On a "Not connected" error the agent tells the use
 `/archetype:setup` in the main session and stops — it never fabricates a run.
 
 **One-run boundary.** One run per invocation; runs come only from `start_run`, results only through
-`report_result` with exactly one SUCCESSFUL call (retry on error, never re-send after success). It
+`report_result` with exactly one SUCCESSFUL call (retry on error, never re-send after success).
+`start_run` is never called twice: after a deadline or timeout the agent reports that no run was
+created and stops, and any retry is the user's decision in the main session. It
 follows the same operating procedure as the validation skill (persona adoption, new-tab browsing,
 ~3-minute scenario time-boxes, snake_case step log, camelCase `feedback` keys, blocked-scenario
 handling for whole-run browser failure) and ends with a scenario verdict table, findings by
@@ -237,6 +243,12 @@ With no browser the agent stops without creating anything.
 **Do it once.** A purchase, booking or submission that went through is never repeated to double
 check it; the agent verifies from the confirmation page, the account area or the inbox. It is
 repeated only when a scenario explicitly asks for a second pass.
+
+**Fresh snapshot after a stale or ambiguous target.** On "Ref not found" or a "strict mode
+violation", the agent takes a new accessibility snapshot before any other action and picks targets
+by role plus accessible name rather than raw text. It never reports a control as broken on the
+strength of a click that hit a stale ref. (A 2026-09-24 stress run reported a working Cart link as
+dead after the cart count re-rendered.)
 
 ### `feature-validator-headless`
 
@@ -295,7 +307,9 @@ socket operation. `urllib`'s own `timeout` restarts on every `recv`, so a backen
 trickles bytes could otherwise hold a call open forever; `_send` runs the exchange on a daemon
 thread and abandons it at the deadline. An expired deadline maps to status `0` with body
 `{"error": "deadline_exceeded", "message": ...}`. `start_run` adds "no run was handed to this
-session" plus a retry-without-`pool=` hint for pool runs; `report_result` tells the actor to check
+session", tells the actor not to call `start_run` again (retrying is the user's decision, offered by
+the validation skill in the main session), and adds a run-without-`pool=` hint for pool runs;
+`report_result` tells the actor to check
 `get_run` before re-sending, because the backend may already have stored the results.
 Default `HTTP_TIMEOUT = 15` s; `RUN_TIMEOUT = 180` s (run assembly runs a server-side
 LLM chain, ~90 s tolerated, plus up to ~a minute of pool spin-off); `RESULT_TIMEOUT = 60` s
@@ -376,6 +390,7 @@ summary counts.
     `screenshot_b64→screenshotB64`; all other keys pass through unchanged.
   - `feedback` (object, **required**) — passed through **untouched**; its nested keys must already
     be camelCase (`scenarioResults`, `evidenceStepSeq`, …) per the contract rendered by `start_run`.
+    The schema documents the optional `findings[].evidence` object (`url`, `selector`, `quote`).
   - `duration_seconds` (number, optional) — sent as `durationSeconds` only when provided.
 - **Backend:** `POST /api/plugin/runs/{run_id}/results` (timeout **60 s**), via `authed_call`.
 - **Result text:** the backend's `message` (default `Results stored.`) followed by
@@ -701,7 +716,13 @@ As rendered to the actor at the end of every `start_run` briefing:
   - `verdict`: `pass | fail | mixed`
   - `summary`: string
   - `scenarioResults[]`: `{scenarioId, status: pass | fail | blocked, actualResult}`
-  - `findings[]`: `{scenarioId, category: bug | ux | content | performance | other, severity: critical | high | medium | low, description, evidenceStepSeq}`
+  - `findings[]`: `{scenarioId, category: bug | ux | content | performance | other, severity: critical | high | medium | low, description, evidenceStepSeq, evidence?}`
+  - `findings[].evidence` (optional object, every field optional): `url` (the page, up to 2048
+    characters), `selector` (CSS selector or role plus accessible name, up to 512) and `quote` (the
+    exact on-screen text, up to 1000). The backend trims over-long strings and drops unusable
+    evidence instead of rejecting the results, stores it with the finding and returns it in
+    `GET /api/plugin/runs/<run_id>` under `feedback.findings[]`. It lets a grader check a finding
+    mechanically instead of re-running the persona.
   - `personaReaction`: string
 
 Wire body sent to `POST /api/plugin/runs/<run_id>/results`:
@@ -717,7 +738,8 @@ Wire body sent to `POST /api/plugin/runs/<run_id>/results`:
   "feedback": {"verdict": "pass", "summary": "...",
                "scenarioResults": [{"scenarioId": "...", "status": "pass", "actualResult": "..."}],
                "findings": [{"scenarioId": "...", "category": "bug", "severity": "high",
-                             "description": "...", "evidenceStepSeq": 3}],
+                             "description": "...", "evidenceStepSeq": 3,
+                             "evidence": {"url": "...", "selector": "...", "quote": "..."}}],
                "personaReaction": "..."}
 }
 ```
