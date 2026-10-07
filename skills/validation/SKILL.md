@@ -1,6 +1,6 @@
 ---
 name: validation
-description: The core Archetype actor loop. Use for the /archetype:validation command. With no arguments, connects the session to Archetype (login wizard). With arguments, parses the natural language into one or MORE run objects (goal, url, pool, feature) — comparison phrasing like "as <pool A> and as <pool B>" fans out into multiple runs. Every run executes in a freshly launched feature-validator agent (zero dev context) and multi-run output is a cross-pool comparison report.
+description: The core Archetype actor loop. Use for the /archetype:validation command. With no arguments, connects the session to Archetype (login wizard). With arguments, parses the natural language into one or MORE run objects (goal, url, pool, feature, preconditions) — comparison phrasing like "as <pool A> and as <pool B>" fans out into multiple runs. Every run executes in a freshly launched feature-validator agent (zero dev context) and multi-run output is a cross-pool comparison report.
 ---
 
 # Validation
@@ -60,7 +60,7 @@ so parse like one intelligent reader, not a regex. The output of intake is a
 **list of run objects**, each:
 
 ```jsonc
-{ "goal": "...", "url": "...", "pool": "<intent or null>", "feature": "<name or null>" }
+{ "goal": "...", "url": "...", "pool": "<intent or null>", "feature": "<name or null>", "preconditions": ["<context the tester bears>", ...] }
 ```
 
 | field | what to look for |
@@ -69,6 +69,17 @@ so parse like one intelligent reader, not a regex. The output of intake is a
 | `url` | a `url=<...>` token or any URL in the text |
 | `pool` | ANY tester/persona intent: a `pool=<...>` token, a saved pool's name ("as <name>", "with <name>"), or a description ("as cautious non-technical first-timers", "from the perspective of ...") |
 | `feature` | a named saved feature (prefer the `validate-feature` skill when feature-first) |
+| `preconditions` | context the tester BEARS on arrival: provisioned accounts/credentials ("staging login: X/Y"), "your own X" phrasing ("with your own suite of endpoints"), prior knowledge or state. Not the goal. |
+
+**Goal vs preconditions.** Split the free text into the GOAL (the outcome the
+run evaluates) and PRECONDITIONS (context the tester carries on arrival).
+Canonical example: "test Relay with your own suite of endpoints" → the goal
+is evaluating Relay; the precondition is that the tester owns a suite of
+endpoints — something THEY know about even though the prompt doesn't say what
+the endpoints are. Preconditions pass to `start_run` verbatim (a list of
+strings); specifics a precondition implies but doesn't state are elaborated
+by the persona in-character during the run — never asked back to the user,
+never skipped.
 
 **One command can mean several runs.** Comparison or fan-out phrasing
 produces one object per combination the user actually means:
@@ -79,7 +90,8 @@ produces one object per combination the user actually means:
   `list_pools`, one run per pool (confirm the count before starting).
 - "on staging and on prod" (two URLs) → one run per URL.
 - Unmentioned fields are SHARED: one url + two pools → both objects carry
-  that url. Don't multiply dimensions the user didn't ask to cross.
+  that url. Comparison runs share `preconditions` too, unless the user gives
+  per-pool ones. Don't multiply dimensions the user didn't ask to cross.
 
 A single-intent command is simply a list of one — behavior unchanged.
 
@@ -113,7 +125,7 @@ and a one-line description distilled from their words; ask only for what
 you genuinely can't infer), then run with the new `feature_id`.
 
 **Confirm before starting**: present the run list as a table (one row per
-run: goal · url · pool · feature). Single run with every field explicit
+run: goal · url · pool · feature · preconditions). Single run with every field explicit
 and unambiguous → proceed straight away, stating the row as what you're
 about to do. Anything missing (a URL is required — never guess one),
 inferred, or fuzzy-matched → ask about exactly those fields first — one
@@ -168,7 +180,8 @@ For the confirmed run list (one run or many):
    `feature-validator-headless` per the preflight) once per run object. The dispatch
    prompt carries ONLY the run's resolved fields — goal, url, `feature_id`,
    `pool_id` plus the pool's display name (for the agent's sanity check
-   against the brief). Deliberately include nothing else: no product
+   against the brief), and `preconditions` verbatim (the agent passes the
+   list unchanged to `start_run`). Deliberately include nothing else: no product
    background, no known issues, no prior run results — a clean actor is the
    point.
 
