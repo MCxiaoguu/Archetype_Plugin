@@ -936,6 +936,13 @@ def _render_run(body: dict[str, Any]) -> str:
 
 
 def handle_start_run(arguments: dict[str, Any]) -> dict[str, Any]:
+    if not arguments.get("url") and not arguments.get("feature_id"):
+        return tool_text(
+            "start_run needs a url, or a feature_id whose feature has a url "
+            "saved (list_features shows it). Ask the user for the product URL; "
+            "never guess one.",
+            is_error=True,
+        )
     body = {
         "goal": arguments.get("goal"),
         "featureId": arguments.get("feature_id"),
@@ -1371,14 +1378,34 @@ def handle_list_features(arguments: dict[str, Any]) -> dict[str, Any]:
         note = "No features found." if not query else f"No features match {query!r}."
         return tool_text(note)
 
-    lines = [
-        f"{f.get('_id', '')}  {f.get('title', '')}  (updated {f.get('updatedAt', '?')})"
-        for f in features
-    ]
+    lines = []
+    for f in features:
+        lines.append(
+            f"{f.get('_id', '')}  {f.get('title', '')}  (updated {f.get('updatedAt', '?')})"
+        )
+        target = _target_line(f)
+        if target:
+            lines.append(f"    {target}")
     lines.append(
-        "\nPass a feature's _id as feature_id to start_run to validate it."
+        "\nPass a feature's _id as feature_id to start_run to validate it. "
+        "A feature with a saved url needs no url from the user."
     )
     return tool_text("\n".join(lines))
+
+
+def _target_line(feature: dict[str, Any]) -> str:
+    """A feature's saved test target on one line, or "" when it has none."""
+    parts = []
+    if feature.get("url"):
+        parts.append(f"url: {feature['url']}{feature.get('startPath') or ''}")
+    elif feature.get("startPath"):
+        parts.append(f"start: {feature['startPath']}")
+    if feature.get("goal"):
+        goal = " ".join(str(feature["goal"]).split())
+        parts.append(f"goal: {goal[:157] + '...' if len(goal) > 160 else goal}")
+    if feature.get("successMilestone"):
+        parts.append(f"done when: {feature['successMilestone']}")
+    return " · ".join(parts)
 
 
 # ---------- tool: logout ----------
@@ -1443,7 +1470,22 @@ def handle_create_feature(arguments: dict[str, Any]) -> dict[str, Any]:
         "expected-usage": arguments.get("expected_usage") or "",
         "strategic-goals": arguments.get("strategic_goals") or "",
     }
-    body = {"title": title, "fields": fields}
+    body: dict[str, Any] = {"title": title, "fields": fields}
+    # The optional test target: snake_case here, camelCase for the backend,
+    # which validates it (http or https url, path starting with /).
+    for arg, key in (
+        ("url", "url"),
+        ("start_path", "startPath"),
+        ("goal", "goal"),
+        ("success_milestone", "successMilestone"),
+    ):
+        value = arguments.get(arg)
+        if value is None:
+            continue
+        if not isinstance(value, str):
+            return tool_text(f"{arg} must be text, for example a url or a sentence.", is_error=True)
+        if value.strip():
+            body[key] = value.strip()
 
     result = authed_call(
         lambda token: backend_post("/api/features", body, auth_token=token)
@@ -1456,10 +1498,17 @@ def handle_create_feature(arguments: dict[str, Any]) -> dict[str, Any]:
 
     feature = resp.get("feature") or {}
     feature_id = feature.get("_id", "")
+    target = _target_line(feature)
+    if body.get("url") and not feature.get("url"):
+        target = (
+            "The backend did not keep the url: it predates saved targets, so "
+            "pass url to start_run as before."
+        )
     return tool_text(
         f"Feature saved: {feature.get('title', title)}\n"
-        f"(id for tool calls: {feature_id} — pass it as start_run's feature_id)\n\n"
-        f"Validate it now: /archetype:validate-feature {feature.get('title', title)}"
+        f"(id for tool calls: {feature_id}; pass it as start_run's feature_id)\n"
+        + (f"{target}\n" if target else "")
+        + f"\nValidate it now: /archetype:validate-feature {feature.get('title', title)}"
     )
 
 
@@ -1862,7 +1911,12 @@ TOOLS: dict[str, dict[str, Any]] = {
                 },
                 "url": {
                     "type": "string",
-                    "description": "The product URL under test.",
+                    "description": (
+                        "The product URL under test. Optional when feature_id "
+                        "names a feature with a saved url; a bare site url "
+                        "(plus any query string) is then sent to the feature's "
+                        "start page."
+                    ),
                 },
                 "pool_id": {
                     "type": "string",
@@ -1874,7 +1928,7 @@ TOOLS: dict[str, dict[str, Any]] = {
                     ),
                 },
             },
-            "required": ["url"],
+            "required": [],
         },
         "handler": handle_start_run,
     },
@@ -2056,6 +2110,28 @@ TOOLS: dict[str, dict[str, Any]] = {
                 "strategic_goals": {
                     "type": "string",
                     "description": "Optional: why this feature matters.",
+                },
+                "url": {
+                    "type": "string",
+                    "description": (
+                        "Optional: the site to test, a full http or https url. "
+                        "Saved so later runs need no url."
+                    ),
+                },
+                "start_path": {
+                    "type": "string",
+                    "description": "Optional: the page a run starts on, starting with /.",
+                },
+                "goal": {
+                    "type": "string",
+                    "description": "Optional: what a run should get done, in one sentence.",
+                },
+                "success_milestone": {
+                    "type": "string",
+                    "description": (
+                        "Optional: the event that proves the feature worked, "
+                        "for example order_paid."
+                    ),
                 },
             },
             "required": ["title"],

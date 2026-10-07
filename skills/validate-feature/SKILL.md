@@ -26,18 +26,29 @@ tool returns a list of features, each with an `_id`, `title`, and `updatedAt`.
 - **No match** → show what exists (or none), then offer to create it right
   here: one confirmation, then `create_feature` with a title and one-line
   description distilled from what they said (ask only for what you can't
-  infer), and continue the run with the new feature's `_id`. Don't make the
+  infer), plus the `url` (and a `goal` if they stated one) so later runs
+  need no questions, and continue the run with the new feature's `_id`. Don't make the
   user go elsewhere first.
 - Auth is self-healing: if the session isn't connected, the tool itself opens
   the login modal and then completes the request — do not pre-call `login`.
   A "Not connected" error only comes back if the user declined the login;
   surface it and stop.
 
-### 2. Ask for the target URL
+### 2. Settle the target URL
 
-`list_features` returns features but not necessarily a URL to test. If the user
-didn't supply a `url=<...>` token in `$ARGUMENTS`, ASK them for the product
-URL. Never guess a URL.
+`list_features` prints a feature's saved test target under it (`url:`,
+`goal:`, `done when:`) when it has one.
+
+- **The feature has a saved url** → do not ask. Leave `url` out of
+  `start_run`; the backend opens the feature's own start page. If the user
+  gave a `url=<...>` token anyway, pass it: a bare site address (with any
+  query string, such as a run label) still lands on the feature's start
+  page, and a deeper path wins.
+- **No saved url** and no `url=<...>` token in `$ARGUMENTS` → ASK the user
+  for the product URL. Never guess a URL. When they answer, offer once to
+  save it on the feature for next time (`create_feature` is for new
+  features only; for an existing one, tell them they can set it in the web
+  app's feature page).
 
 ### 3. Run the standard actor loop
 
@@ -45,8 +56,8 @@ Now follow the **Validation run flow** from the `validation` skill, with these
 deltas:
 
 - When you call `start_run`, pass `feature_id` set to the resolved feature's
-  `_id`, and `url` set to the target URL. The **goal is optional** — the
-  backend derives it from the feature's fields when `feature_id` is given. Only
+  `_id`, and `url` only when step 2 settled one. The **goal is optional**:
+  the backend uses the feature's saved goal, else its description. Only
   pass a `goal` if the user gave you extra free-text intent to layer on top.
 - Tester/persona intent in `$ARGUMENTS` (a `pool=<...>` token, a pool's
   name, or a description) works here too — run the `validation` skill's pool
