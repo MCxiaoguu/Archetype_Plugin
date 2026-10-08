@@ -461,12 +461,15 @@ class ServerProc:
     def __init__(
         self, port: int, data_dir: Path, extra_env: dict[str, str] | None = None
     ) -> None:
+        self.port = port
         env = dict(os.environ)
-        env.update(extra_env or {})
         env["CLAUDE_PLUGIN_DATA"] = str(data_dir)
         env["ARCHETYPE_BACKEND_URL"] = f"http://127.0.0.1:{port}"
-        # Neuter webbrowser.open in the login flow: `true` is a no-op command.
+        # Neuter webbrowser.open in the login flow: `true` is a no-op command
+        # (which the server also treats as "never open a browser").
         env["BROWSER"] = "true"
+        env.pop("ARCHETYPE_NO_BROWSER", None)
+        env.update(extra_env or {})
         # How this harness answers elicitation/create: "accept" or "decline".
         self.elicit_action = "decline"
         self.elicitations: list[dict] = []
@@ -777,6 +780,37 @@ def case_2b_start_run_feature_id(srv: ServerProc, data_dir: Path) -> None:
     expect(body.get("featureId") == "665f0a1b2c3d4e5f60718293",
            f"feature_id must map to camelCase featureId, got {body}")
     assert_no_snake_case(body, "start_run body (with feature)")
+
+
+def case_2f_start_run_preconditions(srv: ServerProc, data_dir: Path) -> None:
+    write_auth(data_dir)
+    preconditions = [
+        "You run your own suite of production endpoints",
+        "Staging login already provisioned: qa@example.com / relay-staging",
+    ]
+    result = call_tool(srv, "start_run", {
+        "goal": "evaluate Relay", "url": "http://localhost:8321", "preconditions": preconditions,
+    })
+    body = STATE.last_for("/api/plugin/runs")["body"]
+    expect(body.get("preconditions") == preconditions,
+           f"preconditions must forward verbatim as a list, got {body.get('preconditions')}")
+    assert_no_snake_case(body, "start_run body (with preconditions)")
+    expect(not result.get("isError"), "start_run with preconditions must succeed")
+    text = result_text(result)
+    contains(text, "You arrive with:\n- " + preconditions[0], "kickoff renders the preconditions")
+    contains(text, preconditions[1], "kickoff renders each precondition")
+    expect(text.index("You arrive with:") < text.index("YOUR SCENARIOS"),
+           "preconditions come before the scenarios")
+
+    # A lone string becomes a one-item list; absent or blank is left out.
+    call_tool(srv, "start_run", {"goal": "g", "url": "http://x", "preconditions": "own endpoints"})
+    body = STATE.last_for("/api/plugin/runs")["body"]
+    expect(body.get("preconditions") == ["own endpoints"], f"a string is sent as a list, got {body}")
+    for absent in ({}, {"preconditions": []}, {"preconditions": ["  "]}):
+        text = result_text(call_tool(srv, "start_run", {"goal": "g", "url": "http://x", **absent}))
+        body = STATE.last_for("/api/plugin/runs")["body"]
+        expect("preconditions" not in body, f"{absent} must not send preconditions, got {body}")
+        expect("You arrive with" not in text, f"{absent} must not render an empty section")
 
 
 def case_3_start_run_no_auth_declined(srv: ServerProc, data_dir: Path) -> None:
@@ -1880,6 +1914,70 @@ def case_41_concurrent_401s_share_one_login(srv: ServerProc, data_dir: Path) -> 
     expect(count_requests("/api/oauth/device/code") == 1, "one device code for two 401s")
 
 
+def browser_recorder(data_dir: Path) -> tuple[str, Path]:
+    """A BROWSER command that logs each URL it is asked to open, so a case
+    can count real webbrowser.open calls."""
+    opens_log = data_dir / "browser_opens.log"
+    opens_log.unlink(missing_ok=True)
+    script = data_dir / "record_browser_open"
+    script.write_text(f'#!/bin/sh\necho "$1" >> "{opens_log}"\n')
+    script.chmod(0o755)
+    return str(script), opens_log
+
+
+def browser_opens(opens_log: Path) -> list[str]:
+    return opens_log.read_text().splitlines() if opens_log.exists() else []
+
+
+def case_42_login_reprompt_opens_no_second_tab(srv: ServerProc, data_dir: Path) -> None:
+    """A code that is still pending is re-prompted without a new tab: one
+    tab per prompt leaves stale approval pages to approve by mistake."""
+    browser_cmd, opens_log = browser_recorder(data_dir)
+    own = ServerProc(srv.port, data_dir, {**LOGIN_FAST, "BROWSER": browser_cmd})
+    try:
+        own.initialize()
+        own.elicit_action = "error"
+        STATE.error_overrides["/api/oauth/device/token"] = PENDING
+        expect(call_tool(own, "login", {}).get("isError") is True, "first login not complete yet")
+        expect(len(browser_opens(opens_log)) == 1, "a new code opens the browser once")
+        contains(own.elicitations[0]["message"], "should already be on that page",
+                 "the first prompt says the browser opened")
+
+        # Not approved yet: the second login re-prompts with the same code.
+        own.elicit_action = "accept"
+        expect(call_tool(own, "login", {}).get("isError") is True, "still waiting on approval")
+        expect(count_requests("/api/oauth/device/code") == 1, "the pending code is reused")
+        expect(len(own.elicitations) == 2, "the user is prompted again")
+        second = own.elicitations[1]["message"]
+        contains(second, DEVICE_CODE_RESPONSE["verification_uri_complete"], "same URL")
+        contains(second, DEVICE_CODE_RESPONSE["user_code"], "same code")
+        contains(second, "reuse the tab if it is already open", "the re-prompt says to open it")
+        opens = browser_opens(opens_log)
+        expect(len(opens) == 1, f"a re-prompt must not open another tab, got {opens}")
+        contains(opens[0], "auth0.test/activate", "the opened tab is the verify URL")
+    finally:
+        own.close()
+
+
+def case_43_no_browser_env(srv: ServerProc, data_dir: Path) -> None:
+    """ARCHETYPE_NO_BROWSER=1 never opens a tab; the modal still carries the
+    URL and the login completes."""
+    browser_cmd, opens_log = browser_recorder(data_dir)
+    own = ServerProc(srv.port, data_dir, {"BROWSER": browser_cmd, "ARCHETYPE_NO_BROWSER": "1"})
+    try:
+        own.initialize()
+        own.elicit_action = "accept"
+        result = call_tool(own, "login", {})
+        expect(not result.get("isError"), f"login must succeed, got {result_text(result)!r}")
+        opens = browser_opens(opens_log)
+        expect(not opens, f"ARCHETYPE_NO_BROWSER=1 must suppress the auto-open, got {opens}")
+        msg = own.elicitations[0]["message"]
+        contains(msg, DEVICE_CODE_RESPONSE["verification_uri_complete"], "the modal carries the URL")
+        contains(msg, "Open that page in your browser", "the modal says to open it")
+    finally:
+        own.close()
+
+
 CASES = [
     ("initialize + tools/list shows 10 tools", case_1_tools_list),
     ("start_run happy path (camelCase body, rich tool text)", case_2_start_run_happy),
@@ -1887,6 +1985,7 @@ CASES = [
     ("start_run says when a pool member was chosen, not spun off", case_2e_start_run_says_chosen_not_spun),
     ("start_run names the persona's need", case_2c_start_run_names_the_need),
     ("start_run without a need has no empty section", case_2d_start_run_without_a_need),
+    ("start_run forwards preconditions and the briefing renders them", case_2f_start_run_preconditions),
     ("start_run no auth + declined login -> login hint error", case_3_start_run_no_auth_declined),
     ("report_result happy path (snake->camel, message surfaced)", case_4_report_result_happy),
     ("report_result attaches screenshot files, images only", case_4b_report_result_reads_screenshot_files),
@@ -1944,6 +2043,8 @@ CASES = [
     ("expired pending login is discarded", case_39_stale_pending_login_is_discarded),
     ("authed tool without a modal surfaces login instructions", case_40_authed_tool_surfaces_login_instructions, LOGIN_FAST),
     ("concurrent 401s share one login", case_41_concurrent_401s_share_one_login),
+    ("login re-prompt for a pending code opens no second tab", case_42_login_reprompt_opens_no_second_tab),
+    ("ARCHETYPE_NO_BROWSER=1 suppresses the auto-open", case_43_no_browser_env),
 ]
 
 

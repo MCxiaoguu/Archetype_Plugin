@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Relay — Know your APIs are down before your customers do</title>
+  <meta name="description" content="Relay is API monitoring with incident timelines built in. Uptime checks, latency percentiles, and alerting that pages the right engineer." />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <!-- Top navigation -->
+  <nav class="nav">
+    <div class="nav-inner">
+      <a class="brand" href="index.html">
+        <svg class="brand-mark" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <rect width="28" height="28" rx="7" fill="url(#lg-nav)"/>
+          <path d="M5 15.5h4.2l2.3-6.5 3.6 10 2.4-6.5H23" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          <defs>
+            <linearGradient id="lg-nav" x1="0" y1="0" x2="28" y2="28" gradientUnits="userSpaceOnUse">
+              <stop stop-color="#8b6bff"/><stop offset="1" stop-color="#5b3fd6"/>
+            </linearGradient>
+          </defs>
+        </svg>
+        Relay
+      </a>
+      <ul class="nav-links">
+        <li><a class="nav-link" href="docs.html">Docs</a></li>
+        <li><a class="nav-link" href="pricing.html">Pricing</a></li>
+        <li><a class="nav-link" id="nav-signin" href="signin.html">Sign in</a></li>
+        <li><a class="nav-cta" href="signup.html">Start monitoring — free</a></li>
+      </ul>
+    </div>
+  </nav>
+
+  <!-- Hero -->
+  <header class="hero">
+    <div class="hero-inner">
+      <div>
+        <div class="hero-badge">Series A — backed by Sequence Ventures</div>
+        <h1 class="hero-title">Know your APIs are down <span class="accent">before your customers do</span></h1>
+        <p class="hero-sub">Relay watches every endpoint you ship, builds the incident timeline while you sleep, and pages the one engineer who can actually fix it.</p>
+        <div class="hero-actions">
+          <a class="btn btn-primary btn-lg" href="signup.html">Start monitoring — free</a>
+          <a class="btn btn-ghost btn-lg" href="docs.html">Read the docs</a>
+        </div>
+        <p class="hero-claim">Free forever. No credit card required.</p>
+      </div>
+
+      <!-- Mock monitoring panel -->
+      <div class="hero-visual" aria-hidden="true">
+        <div class="panel">
+          <div class="panel-head">
+            <span class="mono">checkout-api &middot; production</span>
+            <span class="status-pill ok">Operational</span>
+          </div>
+          <div class="panel-body">
+            <svg class="spark" viewBox="0 0 320 72" preserveAspectRatio="none">
+              <polygon fill="rgba(124,92,255,0.14)" points="0,50 20,46 40,48 60,40 80,44 100,38 120,42 140,30 160,36 180,26 200,34 220,22 240,30 260,18 280,26 300,20 320,24 320,72 0,72"/>
+              <polyline fill="none" stroke="#7c5cff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+                points="0,50 20,46 40,48 60,40 80,44 100,38 120,42 140,30 160,36 180,26 200,34 220,22 240,30 260,18 280,26 300,20 320,24"/>
+            </svg>
+            <div class="uptime-row">
+              <span class="uptime-name">GET /v2/orders</span>
+              <div class="uptime-bars">
+                <span class="ub h75"></span><span class="ub h85"></span><span class="ub h65"></span><span class="ub h100"></span><span class="ub h85"></span><span class="ub h75"></span><span class="ub h85"></span><span class="ub h100"></span><span class="ub h65"></span><span class="ub h85"></span><span class="ub h75"></span><span class="ub h100"></span>
+              </div>
+              <span class="uptime-pct">99.99%</span>
+            </div>
+            <div class="uptime-row">
+              <span class="uptime-name">POST /v2/payments</span>
+              <div class="uptime-bars">
+                <span class="ub h85"></span><span class="ub h100"></span><span class="ub h75"></span><span class="ub h85"></span><span class="ub warn h55"></span><span class="ub h85"></span><span class="ub h100"></span><span class="ub h75"></span><span class="ub h85"></span><span class="ub h100"></span><span class="ub h85"></span><span class="ub h75"></span>
+              </div>
+              <span class="uptime-pct">99.97%</span>
+            </div>
+            <div class="uptime-row">
+              <span class="uptime-name">GET /v2/inventory</span>
+              <div class="uptime-bars">
+                <span class="ub h65"></span><span class="ub h85"></span><span class="ub h100"></span><span class="ub h75"></span><span class="ub h85"></span><span class="ub down h40"></span><span class="ub h75"></span><span class="ub h85"></span><span class="ub h100"></span><span class="ub h85"></span><span class="ub h75"></span><span class="ub h85"></span>
+              </div>
+              <span class="uptime-pct">99.82%</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- Customer logos -->
+  <section class="logos">
+    <p class="logos-label">Trusted by engineering teams at</p>
+    <div class="logos-row">
+      <span class="logo-word">
+        <svg viewBox="0 0 18 18" fill="none"><circle cx="9" cy="9" r="7" stroke="currentColor" stroke-width="2.4"/><circle cx="9" cy="9" r="2.4" fill="currentColor"/></svg>
+        Coreloop
+      </span>
+      <span class="logo-word serif">Nexfield</span>
+      <span class="logo-word mono-style">stackhaus_</span>
+      <span class="logo-word wide">Veloz</span>
+      <span class="logo-word">
+        <svg viewBox="0 0 18 18" fill="none"><path d="M9 1.8 16 6v6l-7 4.2L2 12V6l7-4.2Z" stroke="currentColor" stroke-width="2"/></svg>
+        Osmium
+      </span>
+      <span class="logo-word serif">Brightpath&nbsp;Health</span>
+    </div>
+  </section>
+
+  <!-- How it works -->
+  <section class="section" id="how">
+    <div class="container">
+      <p class="section-kicker">How it works</p>
+      <h2 class="section-title">From zero to paged in under five minutes</h2>
+      <p class="section-sub">No agents, no sidecars, no YAML archaeology. Drop the SDK into your service and Relay starts learning what "normal" looks like.</p>
+      <div class="steps">
+        <div class="step">
+          <div class="step-num">01</div>
+          <h3>Install the SDK</h3>
+          <p>One package, zero config files. Works with Node.js today; Python and Go SDKs are in beta.</p>
+          <code>$ npm install @relay/sdk</code>
+        </div>
+        <div class="step">
+          <div class="step-num">02</div>
+          <h3>Wire up your services</h3>
+          <p>Initialize once per service. Relay auto-discovers your routes and starts tracking latency, error rates, and throughput per endpoint.</p>
+          <code>Relay.init({ token: process.env.RELAY_TOKEN })</code>
+        </div>
+        <div class="step">
+          <div class="step-num">03</div>
+          <h3>Get paged when it matters</h3>
+          <p>Anomaly detection tuned per endpoint — not one global threshold. Alerts route to Slack, PagerDuty, or plain webhooks.</p>
+          <code>✓ alert → #incidents · @on-call</code>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Features -->
+  <section class="section section-alt" id="features">
+    <div class="container">
+      <p class="section-kicker">Platform</p>
+      <h2 class="section-title">Everything between "it's down" and "it's fixed"</h2>
+      <p class="section-sub">Relay isn't another wall of dashboards. It's the shortest path from symptom to root cause, built for the engineer on call.</p>
+      <div class="features">
+        <div class="feature">
+          <div class="feature-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+          </div>
+          <h3>Uptime monitoring</h3>
+          <p>Synthetic checks from 12 global regions, down to 30-second intervals. Catch regional brownouts before your status page does.</p>
+        </div>
+        <div class="feature">
+          <div class="feature-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
+          </div>
+          <h3>Incident timelines</h3>
+          <p>Every deploy, alert, config change, and Slack thread stitched into one timeline. Your postmortem writes its own first draft.</p>
+        </div>
+        <div class="feature">
+          <div class="feature-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+          </div>
+          <h3>Smart alerting</h3>
+          <p>Per-endpoint anomaly baselines, alert dedup, and escalation policies. The goal: zero pages that end with "known issue, ignore".</p>
+        </div>
+        <div class="feature">
+          <div class="feature-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 15l4-6 4 3 5-8"/></svg>
+          </div>
+          <h3>Latency percentiles</h3>
+          <p>p50, p95, and p99 per route, per region, per deploy. Averages lie; Relay doesn't.</p>
+        </div>
+        <div class="feature">
+          <div class="feature-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 18l6-6-6-6"/><path d="M8 6l-6 6 6 6"/></svg>
+          </div>
+          <h3>Deploy markers</h3>
+          <p>Every release annotated on every chart automatically. When p99 doubles at 14:32, you'll know exactly which commit shipped at 14:31.</p>
+        </div>
+        <div class="feature">
+          <div class="feature-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+          </div>
+          <h3>Built for teams</h3>
+          <p>Shared views, on-call schedules, and per-service ownership. Blame the service, page the owner, fix it once.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Stats -->
+  <section class="section">
+    <div class="container">
+      <div class="stats">
+        <div>
+          <div class="stat-value">4.2<span class="u">B</span></div>
+          <div class="stat-label">events processed monthly</div>
+        </div>
+        <div>
+          <div class="stat-value">38<span class="u">s</span></div>
+          <div class="stat-label">median time-to-alert</div>
+        </div>
+        <div>
+          <div class="stat-value">2,400<span class="u">+</span></div>
+          <div class="stat-label">engineering teams</div>
+        </div>
+        <div>
+          <div class="stat-value">12</div>
+          <div class="stat-label">global probe regions</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- CTA -->
+  <section class="cta-band section-alt">
+    <div class="container">
+      <h2>Your next incident is already brewing.</h2>
+      <p>Set up Relay now, so the timeline starts before the outage does.</p>
+      <a class="btn btn-primary btn-lg" href="signup.html">Start monitoring — free</a>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <div class="container">
+      <div class="footer-grid">
+        <div class="footer-brand">
+          <a class="brand" href="index.html">
+            <svg class="brand-mark" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+              <rect width="28" height="28" rx="7" fill="url(#lg-foot)"/>
+              <path d="M5 15.5h4.2l2.3-6.5 3.6 10 2.4-6.5H23" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+              <defs>
+                <linearGradient id="lg-foot" x1="0" y1="0" x2="28" y2="28" gradientUnits="userSpaceOnUse">
+                  <stop stop-color="#8b6bff"/><stop offset="1" stop-color="#5b3fd6"/>
+                </linearGradient>
+              </defs>
+            </svg>
+            Relay
+          </a>
+          <p>API monitoring with incident timelines built in. Made in Brooklyn &amp; Berlin.</p>
+        </div>
+        <div class="footer-col">
+          <h4>Product</h4>
+          <ul>
+            <li><a href="index.html#features">Features</a></li>
+            <li><a href="index.html#how">How it works</a></li>
+            <li><a href="pricing.html">Pricing</a></li>
+            <li><a href="docs.html">Docs</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <h4>Resources</h4>
+          <ul>
+            <li><a href="docs.html#install">Quickstart</a></li>
+            <li><a href="docs.html#guide-alerting">Alerting guide</a></li>
+            <li><a href="security.html">Security</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <h4>Legal</h4>
+          <ul>
+            <li><a href="security.html#terms">Terms of Service</a></li>
+            <li><a href="security.html#privacy">Privacy Policy</a></li>
+          </ul>
+        </div>
+      </div>
+      <div class="footer-bottom">
+        <span>&copy; <span id="year">2026</span> Relay Systems, Inc.</span>
+        <span class="footer-status">All systems operational</span>
+      </div>
+    </div>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>

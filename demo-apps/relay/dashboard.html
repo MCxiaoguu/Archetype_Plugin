@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Events — Relay</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <div class="app-shell" id="app-shell">
+    <!-- Sidebar -->
+    <aside class="app-sidebar">
+      <a class="brand" href="dashboard.html">
+        <svg class="brand-mark" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <rect width="28" height="28" rx="7" fill="url(#lg-app)"/>
+          <path d="M5 15.5h4.2l2.3-6.5 3.6 10 2.4-6.5H23" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          <defs>
+            <linearGradient id="lg-app" x1="0" y1="0" x2="28" y2="28" gradientUnits="userSpaceOnUse">
+              <stop stop-color="#8b6bff"/><stop offset="1" stop-color="#5b3fd6"/>
+            </linearGradient>
+          </defs>
+        </svg>
+        Relay
+      </a>
+
+      <nav class="side-nav">
+        <button class="side-link active" type="button" data-section="events">
+          <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+          Events
+        </button>
+        <button class="side-link" type="button" data-section="incidents">
+          <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
+          Incidents
+        </button>
+        <button class="side-link" type="button" data-section="alerts">
+          <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+          Alerts
+        </button>
+        <button class="side-link" type="button" data-section="settings">
+          <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          Settings
+        </button>
+      </nav>
+
+      <div class="side-footer">
+        <div class="side-user">
+          <span class="side-avatar" id="dash-avatar">U</span>
+          <div class="side-user-meta">
+            <div class="n" id="dash-user-name">User</div>
+            <div class="e" id="dash-user-email">user@example.com</div>
+            <div class="p hidden" id="dash-user-plan"></div>
+          </div>
+        </div>
+        <button class="signout-btn" id="signout-btn" type="button">Sign out</button>
+      </div>
+    </aside>
+
+    <!-- Main -->
+    <main class="app-main">
+      <div class="app-header">
+        <h1 id="app-title">Events</h1>
+        <span class="plan-tag hidden" id="dash-plan-tag"></span>
+        <span class="env-tag">production</span>
+      </div>
+
+      <!-- Events -->
+      <section class="app-section" id="section-events">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Timestamp</th>
+              <th>Event</th>
+              <th>Service</th>
+              <th>Region</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="empty-cell" colspan="5">No events yet.</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <!-- Incidents -->
+      <section class="app-section hidden" id="section-incidents">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Opened</th>
+              <th>Incident</th>
+              <th>Service</th>
+              <th>Duration</th>
+              <th>State</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="empty-cell" colspan="5">No incidents.</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="incident-detail hidden" id="incident-detail">
+          <div class="incident-detail-head">
+            <h3 id="incident-detail-title">—</h3>
+            <span class="status-pill down">Open</span>
+          </div>
+          <ol class="incident-timeline" id="incident-timeline"></ol>
+        </div>
+      </section>
+
+      <!-- Alerts -->
+      <section class="app-section hidden" id="section-alerts">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Rule</th>
+              <th>Condition</th>
+              <th>Channel</th>
+              <th>Last fired</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="empty-cell" colspan="4">No alert rules.</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="rules-panel hidden" id="alert-rules-panel">
+          <h3>Alert Rules</h3>
+          <p class="rules-sub">Create a rule to get notified when an endpoint misbehaves.</p>
+          <div class="form-group">
+            <label class="form-label" for="rule-endpoint">Endpoint</label>
+            <select class="form-input" id="rule-endpoint"></select>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="rule-threshold">Threshold</label>
+            <input class="form-input mono" id="rule-threshold" type="text" />
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="rule-channel">Notification channel</label>
+            <select class="form-input" id="rule-channel">
+              <option value="Email">Email</option>
+            </select>
+          </div>
+          <button class="btn btn-primary" id="rule-save-btn" type="button">Save rule</button>
+        </div>
+
+        <div class="rules-panel hidden" id="notification-log-panel">
+          <h3>Notification log</h3>
+          <ol class="incident-timeline" id="notification-log-list"></ol>
+        </div>
+      </section>
+
+      <!-- Settings -->
+      <section class="app-section hidden" id="section-settings">
+        <div class="settings-block">
+          <h3>Profile</h3>
+          <div class="settings-row"><span class="k">Name</span><span class="v" id="setting-name">—</span></div>
+          <div class="settings-row"><span class="k">Email</span><span class="v" id="setting-email">—</span></div>
+          <div class="settings-row"><span class="k">Plan</span><span class="v" id="setting-plan">Free</span></div>
+        </div>
+        <div class="settings-block">
+          <h3>Workspace</h3>
+          <div class="settings-row"><span class="k">Region</span><span class="v">us-east-1</span></div>
+          <div class="settings-row"><span class="k">Retention</span><span class="v">24 hours</span></div>
+          <div class="settings-row"><span class="k">Seats</span><span class="v">1 of 1</span></div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

@@ -66,11 +66,17 @@ deltas:
   guess) and pass the confirmed id as `pool_id`. Warn at kickoff that
   spinning off a fresh tester from the pool adds up to ~a minute before the
   browser session starts.
+- Preconditions in `$ARGUMENTS` work here too — context the tester BEARS on
+  arrival (provisioned accounts/credentials, "your own X" phrasing, prior
+  knowledge or state), split from the goal per the `validation` skill's
+  goal-vs-preconditions guidance. Pass them to `start_run` verbatim as
+  `preconditions` (a list of strings); the persona elaborates unspecified
+  specifics in character — never asked back, never skipped.
 - Everything else is the same as the `validation` skill: the run executes in
   a freshly launched `feature-validator` agent (dispatch prompt carries only
-  goal/url/`feature_id`/`pool_id` + the pool's display name — no dev
-  context), and you relay its report (scenario verdict table, findings by
-  severity, persona quote, run id, and the
+  goal/url/`feature_id`/`pool_id` + the pool's display name +
+  `preconditions` — no dev context), and you relay its report (scenario
+  verdict table, findings by severity, persona quote, run id, and the
   `/archetype:check-run-status <run_id>` follow-up).
 
 ## Boundaries

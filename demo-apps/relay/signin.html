@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Sign in — Relay</title>
+  <meta name="description" content="Sign in to your Relay workspace and pick up your incident timeline where you left off." />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <!-- Top navigation -->
+  <nav class="nav">
+    <div class="nav-inner">
+      <a class="brand" href="index.html">
+        <svg class="brand-mark" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <rect width="28" height="28" rx="7" fill="url(#lg-nav)"/>
+          <path d="M5 15.5h4.2l2.3-6.5 3.6 10 2.4-6.5H23" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          <defs>
+            <linearGradient id="lg-nav" x1="0" y1="0" x2="28" y2="28" gradientUnits="userSpaceOnUse">
+              <stop stop-color="#8b6bff"/><stop offset="1" stop-color="#5b3fd6"/>
+            </linearGradient>
+          </defs>
+        </svg>
+        Relay
+      </a>
+      <ul class="nav-links">
+        <li><a class="nav-link" href="docs.html">Docs</a></li>
+        <li><a class="nav-link" href="pricing.html">Pricing</a></li>
+      </ul>
+    </div>
+  </nav>
+
+  <main class="form-page">
+    <div class="form-card">
+      <h1>Welcome back</h1>
+      <p class="form-sub">Sign in to your Relay workspace and pick up where you left off.</p>
+
+      <form id="signin-form" novalidate>
+        <div class="form-group">
+          <label class="form-label" for="si-email">Work email</label>
+          <input class="form-input" id="si-email" type="email" placeholder="ada@company.com" autocomplete="email" />
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="si-password">Password</label>
+          <input class="form-input" id="si-password" type="password" placeholder="Your password" autocomplete="current-password" />
+        </div>
+
+        <p class="field-error" id="si-form-error" style="margin-bottom:14px;"></p>
+
+        <button class="btn btn-primary btn-lg btn-block" type="submit">Sign in</button>
+      </form>
+
+      <p class="form-foot">New to Relay? <a href="signup.html">Create an account</a>.</p>
+    </div>
+  </main>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <div class="container">
+      <div class="footer-bottom" style="border-top:none;padding-top:0;">
+        <span>&copy; <span id="year">2026</span> Relay Systems, Inc.</span>
+        <span><a href="security.html" style="color:var(--text-faint);">Security</a> &nbsp;·&nbsp; <a href="security.html#terms" style="color:var(--text-faint);">Terms</a> &nbsp;·&nbsp; <a href="security.html#privacy" style="color:var(--text-faint);">Privacy</a></span>
+      </div>
+    </div>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>

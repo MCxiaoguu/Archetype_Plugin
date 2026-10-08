@@ -54,7 +54,7 @@ Source: `skills/validation/SKILL.md`. Branches on `$ARGUMENTS`:
 
 **Intake (step 1).** `$ARGUMENTS` is natural language, not a token grammar — the model is the parser
 ("parse like one intelligent reader, not a regex"). The output of intake is a **list of run
-objects**, each `{ "goal": "...", "url": "...", "pool": "<intent or null>", "feature": "<name or null>" }`:
+objects**, each `{ "goal": "...", "url": "...", "pool": "<intent or null>", "feature": "<name or null>", "preconditions": [...] }`:
 
 | field | semantics |
 | :-- | :-- |
@@ -62,6 +62,7 @@ objects**, each `{ "goal": "...", "url": "...", "pool": "<intent or null>", "fea
 | `url` | a `url=<...>` token or any URL in the text |
 | `pool` | ANY tester/persona intent: `pool=<...>` token, a pool's name ("as Veda", "with Marcus"), or a description ("as cautious non-technical first-timers") |
 | `feature` | a named saved feature (prefer `validate-feature` when feature-first) |
+| `preconditions` | context the tester BEARS on arrival, split from the goal: provisioned accounts/credentials ("staging login: X/Y"), "your own X" phrasing, prior knowledge/state. Canonical example: "test Relay with your own suite of endpoints" → goal = evaluating Relay; precondition = the tester owns endpoints (which they know, even unnamed). Passed to `start_run` verbatim as a list; the persona invents implied specifics in character, never asks, never skips. Comparison runs share preconditions unless per-pool ones are given. |
 
 **Multi-run fan-out.** One command can mean several runs. Comparison/fan-out phrasing produces one
 object per combination the user actually means: "as Veda and as Marcus" / "compare Veda vs Marcus" →
@@ -97,8 +98,8 @@ adds up to ~a minute before the browser session starts.
 **Multi-run execution (step 2a).** Ensure the session is connected FIRST (intake's `list_pools`
 self-heals auth in the main session; subagents cannot render the login modal). Then dispatch the
 `feature-validator` agent once per run object with its resolved fields verbatim (goal, url,
-`feature_id`, `pool_id` + the pool's display name for sanity-checking), run **sequentially** — the
-agents share one Chrome, parallel dispatch makes them fight over the browser. If a run returns the
+`feature_id`, `pool_id` + the pool's display name for sanity-checking, `preconditions`), run
+**sequentially** — the agents share one Chrome, parallel dispatch makes them fight over the browser. If a run returns the
 "backend did not honor the pool" error (see [Pool guard](#pool-guard-in-start_run)), stop
 remaining pool-selected runs and surface it once. Afterwards render a **comparison report**, not
 N stacked reports: header row per run (tester + the pool they were spun from · verdict · run id),
@@ -106,7 +107,9 @@ scenario outcomes side by side, findings split into "hit by all testers" vs "onl
 each tester's reaction quote, and a `/archetype:check-run-status <run_id>` line per run.
 
 **Single-run execution (steps 2–7).** Call `start_run` with `goal` (omit if running purely by
-`feature_id`), `url` (required), optional `feature_id`, optional `pool_id`. The tool guards
+`feature_id`), `url` (required), optional `feature_id`, optional `pool_id`, optional
+`preconditions` (verbatim list; rendered back in the briefing under `You arrive with:`, which the
+agent embodies, implied specifics invented in character, never asked, never skipped). The tool guards
 pool selection: if the backend does not honor the requested pool, it returns an error instead
 of a briefing — relay and stop. The result text is authoritative (mission brief, the "running as
 <member>, spun from pool <name>" line for pool runs, first-person
@@ -301,7 +304,7 @@ The hook always exits `0`. Tests: `python3 scripts/test_session_hook.py`.
 The server is a stdlib-only Python stdio MCP server at `scripts/core-server.py`, registered in
 `.claude-plugin/plugin.json` under `mcpServers.core`
 (`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/core-server.py`). It reports itself as `archetype-core`
-v`0.4.0` (protocol `2025-06-18`) and is the data plane between the actor LLM and the Archetype
+v`0.5.1` (protocol `2025-06-18`) and is the data plane between the actor LLM and the Archetype
 backend — Claude never touches tokens or raw HTTP. Configuration comes from environment variables
 (see [Environment variables](#environment-variables)).
 
@@ -353,6 +356,10 @@ Auth0 device flow.
 - **Errors:** `isError` if `CLAUDE_PLUGIN_DATA` is unset, if the device-code request fails, if the
   user cancels the elicitation (`Login cancelled. Re-run /archetype:setup to try again.`), or if
   polling ends in a terminal error / times out (`expired_token`).
+- **Browser:** the default browser is auto-opened once per device code, when the code is minted.
+  A re-prompt for a code that is still pending never opens another tab, and
+  `ARCHETYPE_NO_BROWSER=1` (or a `BROWSER` whose basename is `true`) suppresses the auto-open
+  entirely; the modal then says to open the URL by hand.
 
 #### `start_run`
 
@@ -367,13 +374,23 @@ follows verbatim.
   - `pool_id` (string, optional) — `poolId` from `list_pools`, to run AS a fresh member spun off
     from that pool's distribution instead of the replay-derived persona (spin-off adds up to ~a
     minute before the run starts).
+  - `preconditions` (array of strings, optional; added v0.4.1, released in 0.5.1): context the
+    persona BEARS on arrival, distinct from the goal: their own project/stack ("you run your own
+    suite of production endpoints"), a provisioned account ("staging login: X/Y"), or prior
+    knowledge/state. Specifics a precondition implies but doesn't state are invented by the
+    persona in character, never asked, never skipped. A lone string is treated as a one-item
+    list; blank entries are dropped.
 - **Backend:** `POST /api/plugin/runs` (timeout **180 s**), body keys camelCased (`goal`,
-  `featureId`, `url`, `poolId`; `None` values dropped), via `authed_call`.
+  `featureId`, `url`, `poolId`; `None` values dropped), via `authed_call`. Non-empty
+  `preconditions` are sent as a list under their own name. No backend reads them yet, so the
+  plugin renders them into the briefing itself.
 - **Result text:** the rendered briefing — backend `brief`, for pool runs a
   `Running as {member name}, spun from pool {pool name}.` line (from the response's `pool` +
   `persona` blocks; when the backend reports `pool.spunOff: false` the line says the tester was
   chosen from the pool as the member whose need fits the goal best), the persona section with the persona card, a `WHY YOU ARE HERE` section
-  with the need this run gives the persona (left out when there is none), the scenarios section (with
+  with the need this run gives the persona (left out when there is none), a `You arrive with:`
+  section listing each precondition plus the reminder that implied specifics are the persona's to
+  invent in character (left out when there are none), the scenarios section (with
   `(goal: … · target: …)` when present), each scenario numbered as `[id] title` with `- step`
   lines and an `Expected:` line, `— CONDUCT RULES —`, `runId`/`sessionId`, and the full
   `report_result` contract (see
@@ -598,8 +615,10 @@ The device flow never depends on the modal being readable:
   given in the browser is honored with no new modal and no new code. `logout` deletes it.
 - **One browser per code.** Auth0 binds a user code to the first browser session that opens it; a
   second browser then sees "Invalid or expired user code". The plugin auto-opens the default
-  browser, so finish there. Opening the URL by hand is for when nothing opened (set `BROWSER=true`
-  to suppress the auto-open, as the test harness does).
+  browser once, when the code is minted, so finish there; a re-prompt for the same code never
+  opens another tab. Opening the URL by hand is for when nothing opened (set
+  `ARCHETYPE_NO_BROWSER=1`, or `BROWSER=true` as the test harness does, to suppress the
+  auto-open).
 - **Every wait is bounded.** The modal waits `ARCHETYPE_ELICIT_TIMEOUT` (600 s) at most; after
   Accept, token polling runs for `ARCHETYPE_APPROVAL_POLL_WINDOW` (120 s) at most.
 
@@ -650,7 +669,9 @@ persona, and warns: `Do NOT act on this run; a stray run doc ({runId}) may exist
 2. `POST /api/oauth/device/code` (empty body, 15 s) → `device_code`, `user_code`, verification URL
    (`verification_uri_complete`, falling back to `verification_uri`), `interval` (default 5),
    `expires_in` (default 900). Missing URL or non-200 is a failure.
-3. Best-effort `webbrowser.open(verify_url)` (silently tolerated on headless boxes), then a
+3. Best-effort `webbrowser.open(verify_url)` (silently tolerated on headless boxes), only for a
+   code minted by this call (a resumed pending code was opened when it was minted) and never when
+   `ARCHETYPE_NO_BROWSER=1` or `BROWSER` names `true`. Then a
    server-initiated JSON-RPC `elicitation/create` modal showing the URL and the user code (for
    cross-check) with a single required boolean field `approved` ("I've approved the request in my
    browser"). The flow proceeds only when the user clicks **Accept** with the box ticked; anything
@@ -680,7 +701,7 @@ never issues raw HTTP — it calls MCP tools, and the server maps them to these 
   `/` stripped).
 - Auth: single `Authorization: Bearer <access_token>` scheme; the token is an Auth0 RS256 JWT cached
   at `${CLAUDE_PLUGIN_DATA}/auth.json` (mode `0600`).
-- `User-Agent`: `archetype-claude-plugin/0.5.0` (override via `ARCHETYPE_PLUGIN_USER_AGENT`).
+- `User-Agent`: `archetype-claude-plugin/0.5.1` (override via `ARCHETYPE_PLUGIN_USER_AGENT`).
   Required — the Cloudflare WAF in front of the API returns HTTP 403 (error 1010) for the default
   Python-urllib UA.
 - Timeouts: as listed under [MCP tools](#mcp-tools-server-core) — 15 s default, 180 s for
@@ -696,7 +717,7 @@ never issues raw HTTP — it calls MCP tools, and the server maps them to these 
 | POST | `/api/oauth/device/code` | none | `login` / self-healing path | `{}` | 200 — Auth0 device-code response verbatim: `device_code`, `user_code`, `verification_uri`, `verification_uri_complete`, `expires_in`, `interval` (URIs may be rewritten to a branded `DEVICE_AUTH_PUBLIC_BASE` domain) |
 | POST | `/api/oauth/device/token` | none | `login` / self-healing path (polled) | `{"device_code": "<...>"}` | 200 — `access_token`, `token_type`, `expires_in`, `scope`, `refresh_token?`, `id_token?`. While pending, Auth0's 403 with `error: "authorization_pending"` (keep polling) or `"slow_down"` (plugin adds 2 s to the poll interval) |
 | POST | `/api/oauth/validate-token` | Bearer | `login`, `status` | `{}` (token in header) | 200 — `{"valid": true, "user_id", "audience", "issuer", "expires_at", "issued_at", "scope", "payload"}`; invalid token → 401 `{"valid": false, "error": "invalid_token", "reason"}`; no token → 400 `{"valid": false, "error": "missing_token"}` |
-| POST | `/api/plugin/runs` | Bearer | `start_run` | `{"goal", "featureId", "url", "poolId"}`: plugin maps `feature_id`→`featureId`, `pool_id`→`poolId`; `None` fields dropped; tool-side, either `url` or `feature_id` is required (a feature with a saved url needs no url; the backend then opens its start page). Legacy `personaId` payloads (pre-0.4.0 plugins) get 400 `plugin_outdated` ("update your plugin") from a pool-aware backend | 201: run body: `runId`, `sessionId`, `brief`, `persona{personaId, personaCard, ...}` (for pool runs, the freshly spun-off member appended to the pool), `pool{poolId, name}` when a pool was targeted, `instructions{goal, targetUrl, scenarios[{id, title, steps[], expectedResult}], conduct[]}`. `persona.personaNeed` is the need fitted to this run's goal, with `needSource` (`persona`, `rewritten` or `fallback`) and `alignmentScore`; `start_run` prints it as the WHY YOU ARE HERE section |
+| POST | `/api/plugin/runs` | Bearer | `start_run` | `{"goal", "featureId", "url", "poolId", "preconditions"?}`: plugin maps `feature_id`→`featureId`, `pool_id`→`poolId`; `None` fields dropped; `preconditions` is a list of strings, sent only when non-empty and not read by any backend yet (the plugin renders it into the briefing); tool-side, either `url` or `feature_id` is required (a feature with a saved url needs no url; the backend then opens its start page). Legacy `personaId` payloads (pre-0.4.0 plugins) get 400 `plugin_outdated` ("update your plugin") from a pool-aware backend | 201: run body: `runId`, `sessionId`, `brief`, `persona{personaId, personaCard, ...}` (for pool runs, the freshly spun-off member appended to the pool), `pool{poolId, name}` when a pool was targeted, `instructions{goal, targetUrl, scenarios[{id, title, steps[], expectedResult}], conduct[]}`. `persona.personaNeed` is the need fitted to this run's goal, with `needSource` (`persona`, `rewritten` or `fallback`) and `alignmentScore`; `start_run` prints it as the WHY YOU ARE HERE section |
 | POST | `/api/plugin/runs/<run_id>/results` | Bearer | `report_result` | See full contract below | 200 — `{"message": "<confirmation>", "summary": {"steps": n, "findings": n, "verdict": "..."}}` |
 | GET | `/api/plugin/runs/<run_id>/report` | Bearer | `get_run` | none | 200: `{"runId", "sessionId", "status", "goal", "url", "feature"?: {"id", "name", "successMilestone"}, "persona"?: {"name", "need", "needSource", "alignmentScore"}, "verdict", "summary", "personaReaction", "scenarios": [{"id", "title", "steps", "expectedResult", "status", "actualResult"}], "findings": [{"scenarioId", "category", "severity", "description", "evidenceStepSeq", "evidence", "screenshotStepSeq"}], "steps": [...], "screenshots": {"kept", "dropped"}, "counts", "analyticsReady"}`. 404 `run_not_found`, or `not_a_plugin_run` for hosted runs |
 | GET | `/api/plugin/runs/<run_id>` | Bearer | `get_run` (fallback for older backends) | none | 200: `{"runId", "status", "progress", "analyticsReady", "screenshots"?, "feedback"?: {"verdict", "summary", ...}}` |
@@ -719,8 +740,9 @@ The backend also exposes `POST /api/plugin/replay/sessions` (body
 The MCP tool surface is snake_case (actor-facing); the wire format is camelCase (backend). The
 server performs the mapping:
 
-- **`start_run` top level:** `feature_id`→`featureId`, `pool_id`→`poolId` (`goal`, `url`
-  unchanged).
+- **`start_run` top level:** `feature_id`→`featureId`, `pool_id`→`poolId` (`goal`, `url`,
+  `preconditions` unchanged; `preconditions` is normalized to a list of strings and only sent
+  when non-empty).
 - **`report_result` top level:** `session_id`→`sessionId`, `duration_seconds`→`durationSeconds`
   (only included when provided); `status`, `steps`, `feedback` keys unchanged.
 - **`report_result` per-step** (`_STEP_KEY_MAP`): `action_text`→`actionText`,
@@ -814,12 +836,13 @@ inherits the environment of the Claude Code CLI, so export these **before** laun
 | :--- | :--- | :--- |
 | `ARCHETYPE_BACKEND_URL` | `https://api.syntheticarchetype.com` | Base URL for every backend call (device-flow OAuth, `/api/plugin/*`, `/api/features`, `/api/persona/*`). Trailing slashes are stripped. Set to `http://localhost:5001` for local backend development. |
 | `ARCHETYPE_PORTAL_URL` | `https://www.syntheticarchetype.com` | Portal link rendered in the `/archetype:status` dashboard. Trailing slashes are stripped. |
-| `ARCHETYPE_PLUGIN_USER_AGENT` | `archetype-claude-plugin/<server version>` (currently `archetype-claude-plugin/0.5.0`, from the `SERVER_VERSION` constant in `core-server.py`) | HTTP `User-Agent` sent on every backend request. The Cloudflare WAF in front of `api.syntheticarchetype.com` returns HTTP 403 (error 1010) for the default Python-urllib UA; any real, identifiable UA passes. If you override this and hit a 1010, switch back to the default. |
+| `ARCHETYPE_PLUGIN_USER_AGENT` | `archetype-claude-plugin/<server version>` (currently `archetype-claude-plugin/0.5.1`, from the `SERVER_VERSION` constant in `core-server.py`) | HTTP `User-Agent` sent on every backend request. The Cloudflare WAF in front of `api.syntheticarchetype.com` returns HTTP 403 (error 1010) for the default Python-urllib UA; any real, identifiable UA passes. If you override this and hit a 1010, switch back to the default. |
 | `ARCHETYPE_HTTP_TIMEOUT` | `15` | Wall-clock deadline in seconds for ordinary backend calls. |
 | `ARCHETYPE_RUN_TIMEOUT` | `180` | Deadline for `POST /api/plugin/runs` (run assembly plus pool spin-off). |
 | `ARCHETYPE_RESULT_TIMEOUT` | `60` | Deadline for results ingestion. |
 | `ARCHETYPE_PERSONA_TIMEOUT` | `180` | Deadline for the persona preview/custom/pool-create calls. |
 | `ARCHETYPE_ELICIT_TIMEOUT` | `600` | Longest the login modal is waited on, in seconds. |
+| `ARCHETYPE_NO_BROWSER` | *(unset)* | Set to `1` to stop login from opening a browser tab by itself (the modal still shows the URL to open by hand). A `BROWSER` whose basename is `true` (e.g. `/usr/bin/true`) has the same effect. |
 | `ARCHETYPE_APPROVAL_POLL_WINDOW` | `120` | Longest token polling continues after the user accepts the modal. |
 | `ARCHETYPE_PROGRESS_INTERVAL` | `5` | Seconds between `notifications/progress` ticks while a tool call is in flight (sent only when the client supplied a `progressToken`). |
 | `CLAUDE_PLUGIN_DATA` | *(set by Claude Code)* | Directory holding `auth.json` (credentials) and `runs.json` (run log); see below. |
@@ -885,7 +908,7 @@ hooks, and agents live at the plugin root):
 | :--- | :--- |
 | `name` | `archetype` |
 | `description` | `Plugin for Run Feature Validation Testing through Synthetic Archetype` |
-| `version` | `0.4.0` |
+| `version` | `0.5.1` |
 | `author.name` | `Synthetic Archetype` |
 | `mcpServers.core` | `{"type": "stdio", "command": "python3", "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/core-server.py"]}` — the MCP server is declared inline, no separate `.mcp.json` |
 
@@ -909,5 +932,7 @@ history (`runs.json`) is preserved. No arguments; never triggers a login;
 friendly no-op when not connected. Surfaced as `/archetype:logout` (added
 v0.3.9).
 
-Verified against plugin version 0.4.0 (`.claude-plugin/plugin.json`, server `archetype-core` 0.4.0;
-pool-first persona semantics per `2026-08-27-persona-pool-semantics-design.md`) on 2026-08-27.
+Verified against plugin version 0.5.1 (`.claude-plugin/plugin.json`, server `archetype-core` 0.5.1;
+pool-first persona semantics per `2026-08-27-persona-pool-semantics-design.md`; 0.5.1 adds
+`start_run` preconditions and the once-per-code browser auto-open with `ARCHETYPE_NO_BROWSER`) on
+2026-10-07.

@@ -56,7 +56,7 @@ from typing import Any, Callable
 
 PROTOCOL_VERSION = "2025-06-18"
 SERVER_NAME = "archetype-core"
-SERVER_VERSION = "0.5.0"
+SERVER_VERSION = "0.5.1"
 
 
 
@@ -401,37 +401,57 @@ def existing_token_is_valid(
     return False, token, body
 
 
-def _login_prompt(verify_url: str, user_code: str) -> str:
+def _login_prompt(verify_url: str, user_code: str, browser_opened: bool) -> str:
     """The modal text. Clients truncate long messages to their first lines,
     so the two things the user cannot do without (URL, code) come first and
     each stays on a line of its own."""
+    where = (
+        "Your browser should already be on that page."
+        if browser_opened
+        else "Open that page in your browser (reuse the tab if it is already open)."
+    )
     return (
         f"Archetype login code: {user_code}\n"
         f"{verify_url}\n"
-        "Your browser should already be on that page. Confirm the code matches, "
-        "approve, then tick the box and Accept."
+        f"{where} Confirm the code matches, approve, then tick the box and Accept."
     )
 
 
-def request_user_approval(verify_url: str, user_code: str, timeout: float) -> str:
+def _browser_suppressed() -> bool:
+    """True when login must never open a browser tab by itself:
+    ARCHETYPE_NO_BROWSER=1, or BROWSER set to the no-op ``true`` command."""
+    if os.environ.get("ARCHETYPE_NO_BROWSER") == "1":
+        return True
+    return Path(os.environ.get("BROWSER", "")).name == "true"
+
+
+def request_user_approval(
+    verify_url: str, user_code: str, timeout: float, open_browser: bool = True
+) -> str:
     """Render the elicitation modal; return "accepted", "declined" or "unavailable".
 
     Best-effort opens the URL in the user's default browser before the modal
-    renders. "unavailable" means the modal could not be shown or was never
-    answered (headless client, subagent, timeout), which is different from the
-    user saying no: the login can still be finished in a browser and resumed.
+    renders, but only when ``open_browser`` is set (the first prompt for a
+    device code) and auto-open is not suppressed. Re-prompting for a code
+    that is still pending never opens another tab: a tab per prompt leaves
+    stale approval pages around for the user to approve by mistake.
+    "unavailable" means the modal could not be shown or was never answered
+    (headless client, subagent, timeout), which is different from the user
+    saying no: the login can still be finished in a browser and resumed.
     """
-    try:
-        opened = webbrowser.open(verify_url, new=2, autoraise=True)
-        log(f"webbrowser.open returned {opened}")
-    except Exception as exc:
-        log(f"webbrowser.open failed: {exc!r}")
+    opened = False
+    if open_browser and not _browser_suppressed():
+        try:
+            opened = bool(webbrowser.open(verify_url, new=2, autoraise=True))
+            log(f"webbrowser.open returned {opened}")
+        except Exception as exc:
+            log(f"webbrowser.open failed: {exc!r}")
 
     try:
         resp = server_request(
             "elicitation/create",
             {
-                "message": _login_prompt(verify_url, user_code),
+                "message": _login_prompt(verify_url, user_code, opened),
                 "requestedSchema": {
                     "type": "object",
                     "properties": {
@@ -625,6 +645,9 @@ def _device_login_locked() -> tuple[str | None, str]:
             clear_pending_login()
             pending = None
 
+    # Only a code minted by this call opens the browser; a resumed one was
+    # opened when it was minted.
+    fresh_code = not pending
     if not pending:
         status, code_body = backend_post("/api/oauth/device/code", {})
         if status != 200 or "device_code" not in code_body:
@@ -653,7 +676,10 @@ def _device_login_locked() -> tuple[str | None, str]:
 
     remaining = float(pending["expires_at"]) - time.time()
     answer = request_user_approval(
-        pending["verify_url"], pending["user_code"], min(ELICIT_TIMEOUT, remaining)
+        pending["verify_url"],
+        pending["user_code"],
+        min(ELICIT_TIMEOUT, remaining),
+        open_browser=fresh_code,
     )
 
     if answer == "declined":
@@ -868,7 +894,17 @@ def run_web_url(run_id: str) -> str:
 # ---------- tool: start_run ----------
 
 
-def _render_run(body: dict[str, Any]) -> str:
+def _as_precondition_list(value: Any) -> list[str]:
+    """The preconditions argument as a list of non-blank strings."""
+    if value is None:
+        return []
+    items = [value] if isinstance(value, str) else value
+    if not isinstance(items, list):
+        items = [items]
+    return [str(item).strip() for item in items if str(item).strip()]
+
+
+def _render_run(body: dict[str, Any], preconditions: list[str] | None = None) -> str:
     """Assemble the natural-language briefing the actor LLM reads and acts on."""
     persona = body.get("persona") or {}
     instructions = body.get("instructions") or {}
@@ -911,6 +947,17 @@ def _render_run(body: dict[str, Any]) -> str:
             "This is your reason for visiting. Let it decide what you look at "
             "first, what matters to you, and when you would give up. Work "
             "through the scenarios in that frame of mind."
+        )
+
+    # What the tester brings with them (their own project, an account, prior
+    # knowledge). Rendered here from the caller's list: the backend does not
+    # read preconditions yet.
+    if preconditions:
+        parts.append(
+            "You arrive with:\n"
+            + "\n".join(f"- {p}" for p in preconditions)
+            + "\n(Specifics these imply but don't state are YOURS to invent, "
+            "in character. Never ask, never skip.)"
         )
 
     goal = instructions.get("goal")
@@ -964,6 +1011,7 @@ def handle_start_run(arguments: dict[str, Any]) -> dict[str, Any]:
             "never guess one.",
             is_error=True,
         )
+    preconditions = _as_precondition_list(arguments.get("preconditions"))
     body = {
         "goal": arguments.get("goal"),
         "featureId": arguments.get("feature_id"),
@@ -971,6 +1019,8 @@ def handle_start_run(arguments: dict[str, Any]) -> dict[str, Any]:
         "poolId": arguments.get("pool_id"),
     }
     body = {k: v for k, v in body.items() if v is not None}
+    if preconditions:
+        body["preconditions"] = preconditions
 
     result = authed_call(
         lambda token: backend_post(
@@ -1019,7 +1069,7 @@ def handle_start_run(arguments: dict[str, Any]) -> dict[str, Any]:
         )
 
     record_run_start(resp, arguments)
-    return tool_text(_render_run(resp))
+    return tool_text(_render_run(resp, preconditions))
 
 
 # ---------- tool: report_result ----------
@@ -1946,6 +1996,24 @@ TOOLS: dict[str, dict[str, Any]] = {
                         "member spun off from that pool's distribution, "
                         "instead of the replay-derived persona. Spinning off "
                         "adds up to ~a minute before the run starts."
+                    ),
+                },
+                "preconditions": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "Optional context the persona BEARS on arrival, not "
+                        "the goal. Each entry is something the tester brings "
+                        "with them: their own project or stack ('you run your "
+                        "own suite of production endpoints'), a provisioned "
+                        "account ('staging login: X/Y'), or prior knowledge "
+                        "or state. Specifics a precondition implies but "
+                        "doesn't state are invented by the persona in "
+                        "character, never asked, never skipped. Example: "
+                        "'test Relay with your own suite of endpoints': the "
+                        "goal is evaluating Relay; the precondition is that "
+                        "the tester owns endpoints, which THEY know even "
+                        "though the prompt doesn't say what they are."
                     ),
                 },
             },
