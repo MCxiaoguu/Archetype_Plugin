@@ -18,7 +18,16 @@ All notable changes to the Archetype plugin. Versions follow
   archetypes, recommendations and an honesty line.
 - Study tools in the `core` server: `create_study`, `generate_factors`,
   `update_factors`, `generate_archetypes`, `create_study_runs`,
-  `next_study_wave`, `study_status`, `get_study_report`, `dispatch_study`.
+  `next_study_wave`, `study_status`, `get_study_report`, `dispatch_study`,
+  and `get_study`, which resumes a study by id (`/archetype:study
+  study=<id>`) at whatever stage it reached.
+- `unattended` studies for `claude -p` and CI: no questions and no
+  confirmations, the swarm runner, and `study_status` `wait_seconds` to
+  follow the study without a sleep tool.
+- The plugin browsers use Google Chrome when it is installed, else
+  Playwright's bundled Chromium; with neither, the first browser call says
+  to run `npx playwright install chromium`. The recorded browser config
+  names the engine that ran.
 - Protocol v2 for the actor: `log_step` after every browser action, with
   `client_ts` and `elapsed_s`, a 15 second budget, a local buffer and a
   local state when the backend is slow. The answer carries the step
@@ -64,8 +73,8 @@ All notable changes to the Archetype plugin. Versions follow
 - Backends without `protocol_version` keep the 0.5.1 behavior: no live
   steps, the persona's traits rendered as words, `abandoned` recorded as
   `failed`, no new fields in results.
-- The browsers need Node 18 or newer and Google Chrome (or
-  `npx -y @playwright/mcp@0.0.84 install-browser chrome`).
+- The browsers need Node 18 or newer and Google Chrome or Playwright's
+  bundled Chromium (`npx playwright install chromium`).
 
 ## 0.5.1
 

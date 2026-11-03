@@ -32,7 +32,12 @@ Source: `skills/study/SKILL.md`. Intake is natural language, as in
 `validation`: `"<goal>" url=<...> icp="<who>" success="<criterion>"
 [feature=] [pool=] [archetypes=4..8] [repeats=confirm|explore|decide]
 [mode=ofat_stress|ofat|factorial|half_fraction|composites] [parallel=N]
-[watch=live] [browser=chrome] [unattended] [questions="...;..."]`. A
+[watch=live] [browser=chrome] [unattended] [model=M] [factors=a,b,c] [questions="...;..."]`,
+or `/archetype:study study=<id>` to resume a study (`get_study`: the stage
+it reached and the next call). `unattended` asks nothing and confirms
+nothing (the command line is the consent): it accepts a suggested check,
+applies `factors=` or the backend's selection, dispatches the swarm runner
+with `confirm: true` and waits with `study_status` `wait_seconds: 300`. A
 missing ICP or success criterion is asked once, with suggestions from the
 feature target or the pool.
 
@@ -220,9 +225,13 @@ npx -y @playwright/mcp@0.0.84 [--headless] --isolated --no-webmcp \
   project), and without one Playwright keeps videos in a temporary folder
   it deletes. The proxy writes a per server config with
   `dir: ${CLAUDE_PLUGIN_DATA}/browser/<server>/videos`.
-- The browser channel is Playwright's default, the installed Google Chrome
-  (no extra download). Without Chrome: `npx -y @playwright/mcp@0.0.84
-  install-browser chrome`.
+- The browser (`scripts/browser_engine.py`, checked at every launch):
+  the installed Google Chrome (`--browser chrome`), else the newest
+  Playwright Chromium in the ms-playwright cache (`--browser chromium
+  --executable-path <binary>`), else the tool call fails with "install one
+  with `npx playwright install chromium`". `ARCHETYPE_CHROME_PATHS` and
+  `PLAYWRIGHT_BROWSERS_PATH` override the locations. The run's browser
+  config version says `chrome channel` or `bundled chromium <revision>`.
 - `--no-webmcp`: a site under test cannot register tools for the actor.
 - Lazy start: Claude Code starts every plugin server with the session, and
   six idle Playwright servers measured about 548 MB (npm exec about 53 MB
@@ -1003,12 +1012,13 @@ never issues raw HTTP — it calls MCP tools, and the server maps them to these 
 | POST | `/api/plugin/runs/<run_id>/steps` | Bearer | `log_step`, `report_result` (flush) | `{"session_id", "step"}` (snake_case step record) | 200: `{"ok", "state": {"seq", "maxSteps", "unproductive", "maxUnproductiveSteps", "progress", "sentimentTrend", "reviewGiveUp", "ended", "endedReason"}, "recall": [{"text", "source"}], "activeRules": [str], "note"}`; 409 when the run takes no more steps |
 | POST | `/api/studies` | Bearer | `create_study` | camelCase study (see `docs/studies-api.md` in the backend) | 201: the study |
 | PATCH | `/api/studies/<id>` | Bearer | `create_study` with `study_id` | the changed fields | 200: the study |
-| GET | `/api/studies/<id>/runs` | Bearer | `dispatch_study` | none | 200: `{currentWave, status, runs: [{runId, archetypeId, archetypeName, status, wave, outcome, metrics, browser}]}` |
+| GET | `/api/studies/<id>` | Bearer | `get_study` | none | 200: the study (factorSpec, archetypes, run refs, `runsDoneReason`) |
+| GET | `/api/studies/<id>/runs` | Bearer | `dispatch_study`, `get_study` | none | 200: `{currentWave, status, runs: [{runId, archetypeId, archetypeName, status, wave, outcome, metrics, browser}]}` |
 | POST, PATCH | `/api/studies/<id>/factors` | Bearer | `generate_factors`, `update_factors` | `{force?}`; `{factors: [{key, selected?, label?, riskPole?, icpTypicalLevel?, whyItMattersHere?}], order?}` | 200: `{factorSpec, status, generated?}` |
 | POST | `/api/studies/<id>/archetypes` | Bearer | `generate_archetypes` | `{force?}` | 200: `{archetypes: [{archetypeId, name, role, variedFactors, factorVector, summaryOneLine, behaviorPolicy}], status}` |
 | POST | `/api/studies/<id>/runs` | Bearer | `create_study_runs` | `{}` | 201: `{wave: 1, runs: [{runId, archetypeId, archetypeName, repeatIndex}]}` |
 | POST | `/api/studies/<id>/runs/next` | Bearer | `next_study_wave`, the swarm runner | `{}` | 200: `{wave, runs}` or `{done: true, reason}`; 409 while the wave runs |
-| GET | `/api/studies/<id>/status` | Bearer | `study_status` | none | 200: `{status, archetypeCount, factorSpecReady, runs: {total, terminal, allTerminal, byStatus}}` |
+| GET | `/api/studies/<id>/status` | Bearer | `study_status` (polled every 10 s while `wait_seconds` lasts) | none | 200: `{status, archetypeCount, factorSpecReady, runs: {total, terminal, allTerminal, byStatus}}` |
 | GET | `/api/studies/<id>/report` | Bearer | `get_study_report` | none | 200: plan 6.2 plus addendum section 2 |
 | GET | `/api/plugin/runs/<run_id>/report` | Bearer | `get_run` | none | 200: `{"runId", "sessionId", "status", "goal", "url", "feature"?: {"id", "name", "successMilestone"}, "persona"?: {"name", "need", "needSource", "alignmentScore"}, "verdict", "summary", "personaReaction", "scenarios": [{"id", "title", "steps", "expectedResult", "status", "actualResult"}], "findings": [{"scenarioId", "category", "severity", "description", "evidenceStepSeq", "evidence", "screenshotStepSeq"}], "steps": [...], "screenshots": {"kept", "dropped"}, "counts", "analyticsReady"}`. 404 `run_not_found`, or `not_a_plugin_run` for hosted runs |
 | GET | `/api/plugin/runs/<run_id>` | Bearer | `get_run` (fallback for older backends) | none | 200: `{"runId", "status", "progress", "analyticsReady", "screenshots"?, "feedback"?: {"verdict", "summary", ...}}` |

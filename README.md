@@ -116,8 +116,9 @@ The full wiring (every tool, endpoint, file and variable) is in
 ## Requirements
 
 - Claude Code 2.1.275 or later, Python 3.10 or later.
-- For the isolated browsers: Node 18 or later and Google Chrome (or
-  `npx -y @playwright/mcp@0.0.84 install-browser chrome`). The first
+- For the isolated browsers: Node 18 or later and Google Chrome, or
+  Playwright's bundled Chromium (`npx playwright install chromium`), used
+  when Chrome is missing. The first
   browser call of a session downloads the pinned server through `npx`.
 - For Chrome runs: Chrome with the Claude extension, `claude --chrome`, an
   unlocked screen.
