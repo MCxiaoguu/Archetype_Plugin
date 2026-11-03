@@ -1,7 +1,7 @@
 {
   "name": "archetype",
-  "description": "Plugin for Run Feature Validation Testing through Synthetic Archetype",
-  "version": "0.5.1",
+  "description": "Test your product as your customers would: persona runs and behavioral studies that find which kinds of users give up, where and why, in isolated browsers",
+  "version": "0.6.0",
   "author": {
     "name": "Synthetic Archetype"
   },
@@ -9,7 +9,19 @@
     "core": {
       "type": "stdio",
       "command": "python3",
-      "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/core-server.py"]
+      "args": [
+        "${CLAUDE_PLUGIN_ROOT}/scripts/core-server.py"
+      ]
     }
-  }
+  },
+  "keywords": [
+    "testing",
+    "personas",
+    "user-testing",
+    "behavioral-studies",
+    "validation",
+    "ux",
+    "browser-automation",
+    "playwright"
+  ]
 }
