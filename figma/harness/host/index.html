@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Archetype for Figma, harness</title>
+    <link rel="stylesheet" href="/host/host.css" />
+  </head>
+  <body>
+    <header class="bar">
+      <strong>Archetype for Figma</strong>
+      <span class="tag" id="mode">mock</span>
+      <span class="sub" id="page-name"></span>
+      <span class="spacer"></span>
+      <label>Theme
+        <select id="theme"><option value="light">Light</option><option value="dark">Dark</option></select>
+      </label>
+      <button id="reset" type="button" title="Forget the stored token, studies and drafts">Reset storage</button>
+    </header>
+    <main class="stage">
+      <section class="canvas" id="canvas" aria-label="Fake canvas: click a frame to select it">
+        <svg id="edges" class="edges"></svg>
+        <div id="frames"></div>
+      </section>
+      <aside class="plugin" id="plugin">
+        <div class="plugin-title"><span>Archetype</span><span class="x">×</span></div>
+        <iframe id="plugin-frame" title="Archetype plugin" sandbox="allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox"></iframe>
+      </aside>
+    </main>
+    <section class="log" aria-label="Main thread log"><ol id="log"></ol></section>
+    <script type="module" src="/host/host.js"></script>
+  </body>
+</html>
