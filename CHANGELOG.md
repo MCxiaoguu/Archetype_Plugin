@@ -42,7 +42,7 @@ All notable changes to the Archetype plugin. Versions follow
   one `claude -p` worker per run, each on its own browser, logs per run,
   next waves until done. `docs/examples/study-ci.yml` shows a GitHub
   Actions job.
-- Tests: protocol v2 and study cases in the stdio harness (91 cases),
+- Tests: protocol v2 and study cases in the stdio harness (92 cases),
   `test_action_hook.py`, `test_browsers.py`; the agent sync test checks the
   protocol v2 wiring. CI runs them all plus `claude plugin validate
   --strict`.

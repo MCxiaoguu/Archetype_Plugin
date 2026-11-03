@@ -43,7 +43,7 @@ feature target or the pool.
 | 3 | `generate_archetypes` | `POST /api/studies/<id>/archetypes` | name, role, varied factor and pole, story, patience budget, trust gates |
 | 4 | `create_study_runs` | `POST /api/studies/<id>/runs` | wave 1 matrix in dispatch order, time and token estimate, likely wave 2 size |
 | 5 | actors, or `dispatch_study` | `POST /api/plugin/runs/<id>/claim`, `/steps`, `/results` | a progress table |
-| 6 | `next_study_wave` | `POST /api/studies/<id>/runs/next` | wave 2 (confirmation runs) or done |
+| 6 | `next_study_wave` | `POST /api/studies/<id>/runs/next` | wave 2 (confirmation runs, with why each archetype runs again) or done |
 | 7 | `get_study_report` | `GET /api/studies/<id>/report` | the terminal report and the portal link |
 
 Defaults (addendum D1 and D2): design `ofat_stress` (baseline, one variant
@@ -72,9 +72,10 @@ aggregates only runs whose config matches the study's first scored run
 
 `start_run(run_id=..., browser=...)` claims a run the study created:
 `POST /api/plugin/runs/<run_id>/claim` with `{browser: {engine, version,
-headless, user_agent, viewport, profile, server}}`. The answer is the same
-briefing as an ad hoc run. A 409 means another actor owns the run or it
-already ran: the tool tells the actor not to act on or report it. A 404
+headless, user_agent, viewport, profile, server}}` (unknown values are left
+out, not sent as null). The answer is the same
+briefing as an ad hoc run. A 409 (`already_claimed`) means another actor owns
+the run or it already ran: the tool tells the actor not to act on or report it. A 404
 other than `run_not_found` means the backend has no claim route (it
 predates studies). The actor never retries a claim.
 
@@ -93,8 +94,13 @@ with user agents or versions.
   the scenario steps. With no behavior block (an older backend), the
   persona's `traits` are put into words by `_traits_to_phrases` ("high
   impatience, moderate skepticism"); traits were never shown before.
+- **WHO YOU ARE TODAY**: for a study run, the archetype's `whatIsDifferent`,
+  `seedBeliefs` and `factorStatements` from `instructions.archetype`. Its
+  name, role and varied factors are deliberately not shown: an actor told
+  it is "the impatient variant" plays a caricature.
 - **Done when**: the success criterion and each check in words, under the
-  scenarios header.
+  scenarios header. A claimed run's `instructions.preconditions` are
+  rendered under "You arrive with:".
 - **PROTOCOL 2**: call `log_step` after every browser action; the report
   contract adds `abandoned` and `feedback.outcome`.
 
@@ -160,7 +166,10 @@ under `protocolV2`. The body adds:
 - `status: "abandoned"` (on an older backend it becomes `failed`, with the
   outcome kept in feedback),
 - `feedback.outcome {completed, in_their_words, quit_reason?,
-  abandoned_at_step?}` (quit fields are dropped from a completed outcome),
+  abandoned_at_step?}` with the backend's quit reasons (`price_barrier`,
+  `confusion`, `feature_not_found`, `goal_completed`, `frustration`,
+  `technical_error`, `distraction`, `other`); quit fields are dropped from
+  a completed outcome,
 - `rawActions`: `runs/<run_id>.actions.jsonl` (at most 1000),
 - `browser`: the config of the browser the recorded actions drove, else the
   one named at claim,
@@ -251,8 +260,9 @@ denied.
 ### Swarm runner (`scripts/study_runner.py`, `dispatch_study`)
 
 `dispatch_study {study_id, parallel?, model?, timeout_minutes?, confirm?}`
-reads the study's queued runs (`GET /api/studies/<id>`, else the last wave
-seen locally), shows the count and an estimate (8 to 15 minutes and 30k to
+reads the study's queued runs (`GET /api/studies/<id>/runs`, whose runs
+carry their live status; the study object's own run refs do not), else the
+last wave seen locally, shows the count and an estimate (8 to 15 minutes and 30k to
 200k actor tokens per run), and starts the runner only with `confirm:
 true`. The runner:
 
@@ -993,7 +1003,7 @@ never issues raw HTTP — it calls MCP tools, and the server maps them to these 
 | POST | `/api/plugin/runs/<run_id>/steps` | Bearer | `log_step`, `report_result` (flush) | `{"session_id", "step"}` (snake_case step record) | 200: `{"ok", "state": {"seq", "maxSteps", "unproductive", "maxUnproductiveSteps", "progress", "sentimentTrend", "reviewGiveUp", "ended", "endedReason"}, "recall": [{"text", "source"}], "activeRules": [str], "note"}`; 409 when the run takes no more steps |
 | POST | `/api/studies` | Bearer | `create_study` | camelCase study (see `docs/studies-api.md` in the backend) | 201: the study |
 | PATCH | `/api/studies/<id>` | Bearer | `create_study` with `study_id` | the changed fields | 200: the study |
-| GET | `/api/studies/<id>` | Bearer | `dispatch_study` | none | 200: the study, `runs[]` with `runId` and `status` |
+| GET | `/api/studies/<id>/runs` | Bearer | `dispatch_study` | none | 200: `{currentWave, status, runs: [{runId, archetypeId, archetypeName, status, wave, outcome, metrics, browser}]}` |
 | POST, PATCH | `/api/studies/<id>/factors` | Bearer | `generate_factors`, `update_factors` | `{force?}`; `{factors: [{key, selected?, label?, riskPole?, icpTypicalLevel?, whyItMattersHere?}], order?}` | 200: `{factorSpec, status, generated?}` |
 | POST | `/api/studies/<id>/archetypes` | Bearer | `generate_archetypes` | `{force?}` | 200: `{archetypes: [{archetypeId, name, role, variedFactors, factorVector, summaryOneLine, behaviorPolicy}], status}` |
 | POST | `/api/studies/<id>/runs` | Bearer | `create_study_runs` | `{}` | 201: `{wave: 1, runs: [{runId, archetypeId, archetypeName, repeatIndex}]}` |
