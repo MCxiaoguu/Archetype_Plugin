@@ -17,7 +17,9 @@ Branch on `$ARGUMENTS`:
 - **Empty `$ARGUMENTS`** → run the **Login wizard** (below) and stop. (The
   canonical onboarding command is `/archetype:setup`; this branch is kept so
   a bare `/archetype:validation` still connects.)
-- **Non-empty `$ARGUMENTS`** → run the **Validation run flow** (below).
+- **`$ARGUMENTS` carries `--run <run_id>`** → run the **Claim a study run**
+  flow (below): the run already exists, so there is no intake.
+- **Other non-empty `$ARGUMENTS`** → run the **Validation run flow** (below).
 
 Never simulate the backend, invent run/persona data, or fabricate steps and
 results. Everything you report must come from what you actually observed in the
@@ -46,6 +48,29 @@ Steps for you (Claude):
 Do not ask the user to paste anything in chat. Do not try to shortcut or
 simulate the device flow. The MCP elicitation modal + browser approval is the
 only authorized path.
+
+---
+
+## Claim a study run
+
+`/archetype:validation --run <run_id> [browser=<name>]` executes one run
+that a study created in advance (`/archetype:study`, or the swarm runner).
+The persona, scenarios, behavior rules and success criterion all come with
+the run when the actor claims it, so there is nothing to parse or confirm.
+
+1. Make sure the session is connected (call `status`; if it reports a
+   missing or expired token, run `login` here). In an unattended session
+   with no way to log in, report that and stop.
+2. Pick the actor from `browser=`: `chrome` → `feature-validator` (with the
+   Chrome preflight of step 2 below); any other value, or none →
+   `feature-validator-headless`. One run, one actor.
+3. Dispatch it with ONLY the run id and the browser name, for example:
+   "Claim and execute Archetype run `<run_id>`. Your browser is
+   `<name>`." Nothing about the product, the study or other runs: the actor
+   learns who it is from `start_run`.
+4. Relay its report (step 3 below, single run). If the actor says the run
+   could not be claimed, say so in one line and stop: another actor owns it
+   or it already ran. Never retry a claim on your own.
 
 ---
 
