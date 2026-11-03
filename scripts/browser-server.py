@@ -16,6 +16,7 @@ The real server runs as (addendum D3):
         --viewport-size 1280x900 --user-agent "<pinned desktop Chrome>"
         --config <data>/browser/<name>/config.json
         --output-dir <data>/browser/<name>
+        --init-script browser/figma-proto-init.js
 
 The config is browser/playwright.config.json with recordVideo.dir set to
 <data>/browser/<name>/videos: an absolute path is required, because a
@@ -50,6 +51,8 @@ import browser_engine  # noqa: E402  (stdlib sibling: Chrome, else bundled Chrom
 PINNED = json.loads((ROOT / "browser" / "pinned.json").read_text())
 TOOLS_FILE = ROOT / "browser" / "tools.json"
 CONFIG_TEMPLATE = ROOT / "browser" / "playwright.config.json"
+# Makes Figma prototypes readable and clickable; a no-op on every other site.
+INIT_SCRIPT = ROOT / "browser" / "figma-proto-init.js"
 HANDSHAKE_ID = "archetype-browser-init"
 START_TIMEOUT = float(os.environ.get("ARCHETYPE_BROWSER_START_TIMEOUT", "180"))
 IDLE_STOP = float(os.environ.get("ARCHETYPE_BROWSER_IDLE_MINUTES", PINNED.get("idle_stop_minutes", 15))) * 60
@@ -90,6 +93,7 @@ def child_command(name: str, headed: bool, engine: dict[str, Any] | None = None)
         "--user-agent", PINNED["user_agent"],
         "--config", str(config_path),
         "--output-dir", str(out),
+        "--init-script", str(INIT_SCRIPT),
     ]
     return prefix + args
 

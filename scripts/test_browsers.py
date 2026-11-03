@@ -160,6 +160,8 @@ def case_proxy_starts_on_first_call(tmp: Path) -> None:
         config = json.loads(Path(argv[argv.index("--config") + 1]).read_text())
         video_dir = config["browser"]["contextOptions"]["recordVideo"]["dir"]
         expect(video_dir == str(out_dir / "videos") and Path(video_dir).is_dir(), f"absolute video folder: {video_dir}")
+        init = Path(argv[argv.index("--init-script") + 1])
+        expect(init.is_absolute() and init.name == "figma-proto-init.js" and init.exists(), f"prototype init script: {init}")
         second = proxy.rpc("tools/call", {"name": "browser_click", "arguments": {}})
         expect(second["result"]["content"][0]["text"] == "did browser_click", "second call reuses the server")
         expect(sum(1 for e in proxy.child_events() if "argv" in e) == 1, "one browser server per proxy")
