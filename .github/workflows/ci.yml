@@ -46,10 +46,19 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
-      - name: plugin.json and hooks.json are valid JSON
+      - name: plugin.json, .mcp.json, hooks.json and browser files are valid JSON
         run: |
-          python3 -m json.tool .claude-plugin/plugin.json > /dev/null
-          python3 -m json.tool hooks/hooks.json > /dev/null
+          for f in .claude-plugin/plugin.json .claude-plugin/marketplace.json .mcp.json hooks/hooks.json browser/*.json; do
+            python3 -m json.tool "$f" > /dev/null || { echo "invalid JSON: $f"; exit 1; }
+          done
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: claude plugin validate --strict
+        run: |
+          npm install -g @anthropic-ai/claude-code
+          claude --version
+          claude plugin validate --strict .
       - name: Every skill and agent has frontmatter with a name
         run: |
           status=0

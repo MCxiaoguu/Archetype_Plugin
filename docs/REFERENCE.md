@@ -11,10 +11,309 @@ HTTP.
 
 Contents:
 
-1. [Commands and agents](#commands-and-agents)
-2. [MCP tools (server: `core`)](#mcp-tools-server-core)
-3. [Backend HTTP contract](#backend-http-contract)
-4. [Configuration, data, and distribution](#configuration-data-and-distribution)
+1. [Studies, protocol v2 and browsers (0.6.0)](#studies-protocol-v2-and-browsers-060)
+2. [Commands and agents](#commands-and-agents)
+3. [MCP tools (server: `core`)](#mcp-tools-server-core)
+4. [Backend HTTP contract](#backend-http-contract)
+5. [Configuration, data, and distribution](#configuration-data-and-distribution)
+
+---
+
+## Studies, protocol v2 and browsers (0.6.0)
+
+0.6.0 adds behavioral studies on top of the single run actor. Everything
+here works against a backend that speaks protocol v2 (studies API, run
+claim, live steps); against an older backend the single run path behaves
+exactly as in 0.5.1 (see [Old backends](#old-backends)).
+
+### `/archetype:study`
+
+Source: `skills/study/SKILL.md`. Intake is natural language, as in
+`validation`: `"<goal>" url=<...> icp="<who>" success="<criterion>"
+[feature=] [pool=] [archetypes=4..8] [repeats=confirm|explore|decide]
+[mode=ofat_stress|ofat|factorial|half_fraction|composites] [parallel=N]
+[watch=live] [browser=chrome] [unattended] [model=M] [factors=a,b,c] [questions="...;..."]`,
+or `/archetype:study study=<id>` to resume a study (`get_study`: the stage
+it reached and the next call). `unattended` asks nothing and confirms
+nothing (the command line is the consent): it accepts a suggested check,
+applies `factors=` or the backend's selection, dispatches the swarm runner
+with `confirm: true` and waits with `study_status` `wait_seconds: 300`.
+`max_runs=N` caps the actor runs (`dispatch_study` `max_runs`, the runner's
+`--max-runs`): a next wave larger than what is left runs the archetypes whose
+outcome disagreed with the baseline first, then frustration, then steps, and
+the rest are reported as aborted with "not run: the run budget of N was
+spent". The runner also aborts, with the reason, a run whose worker exited
+or timed out without reporting and one whose worker logged no step for
+`--stall-min` (20) minutes after the claim. A
+missing ICP or success criterion is asked once, with suggestions from the
+feature target or the pool.
+
+| Step | Tool | Backend | What the user sees |
+| :-- | :-- | :-- | :-- |
+| 1 | `create_study` | `POST /api/studies` | the normalized study as a table; a suggested success check to confirm |
+| 2 | `generate_factors`, `update_factors` | `POST`, `PATCH /api/studies/<id>/factors` | factors with why they matter here, risk pole and typical level; "use these, or edit?" |
+| 3 | `generate_archetypes` | `POST /api/studies/<id>/archetypes` | name, role, varied factor and pole, story, patience budget, trust gates |
+| 4 | `create_study_runs` | `POST /api/studies/<id>/runs` | wave 1 matrix in dispatch order, time and token estimate, likely wave 2 size |
+| 5 | actors, or `dispatch_study` | `POST /api/plugin/runs/<id>/claim`, `/steps`, `/results` | a progress table |
+| 6 | `next_study_wave` | `POST /api/studies/<id>/runs/next` | wave 2 (confirmation runs, with why each archetype runs again) or done |
+| 7 | `get_study_report` | `GET /api/studies/<id>/report` | the terminal report and the portal link |
+
+Defaults (addendum D1 and D2): design `ofat_stress` (baseline, one variant
+per factor at its risk pole, one stress archetype with every factor at
+risk), repeats `confirm` (baseline 3 runs, others 1, then 2 more for any
+archetype that disagrees with the baseline, at most 2 waves). The backend
+owns the waves; the plugin only asks for the next one when every run of the
+current wave has reported.
+
+### Execution modes
+
+| Mode | When | Browser | Parallel | Actor |
+| :-- | :-- | :-- | :-- | :-- |
+| Headless, in session (default) | every study | `archetype-browser-1` to `-4`, headless, isolated | up to 4 background subagents | `feature-validator-headless` |
+| Watch live | `watch=live` | `archetype-watch-1` and `-2`, headed, isolated | up to 2 | `feature-validator-headless` |
+| Swarm, unattended | `unattended`, CI | `archetype-browser-<k>` inside each worker session | `parallel` workers (default 2, at most 4) | `claude -p` running `/archetype:validation --run <id>` |
+| Chrome | `browser=chrome` only | the user's real Chrome profile | 1, the whole study | `feature-validator` |
+
+Claude in Chrome stays the default only for ad hoc `/archetype:validation`
+runs, with a one line warning that it uses the real profile. A study never
+mixes browsers: every run records its browser config and the report
+aggregates only runs whose config matches the study's first scored run
+(the others are listed as excluded with the reason).
+
+### Run claim
+
+`start_run(run_id=..., browser=...)` claims a run the study created:
+`POST /api/plugin/runs/<run_id>/claim` with `{browser: {engine, version,
+headless, user_agent, viewport, profile, server}}` (unknown values are left
+out, not sent as null). The answer is the same
+briefing as an ad hoc run. A 409 (`already_claimed`) means another actor owns
+the run or it already ran: the tool tells the actor not to act on or report it. A 404
+other than `run_not_found` means the backend has no claim route (it
+predates studies). The actor never retries a claim.
+
+`browser` is a name, not a config: `archetype-browser-N`,
+`archetype-watch-N`, `chrome` or `playwright`. The server turns it into the
+config (`BROWSER_PROFILES` and `browser/pinned.json`), so actors never deal
+with user agents or versions.
+
+### The briefing in protocol v2
+
+`_render_run` adds, when the backend sends them:
+
+- **HOW YOU BEHAVE**: `instructions.behavior.rules`, one per line, then the
+  patience budget in words (`at most N steps in a row that get you
+  nowhere, and M steps in all`) and the statement that the rules override
+  the scenario steps. With no behavior block (an older backend), the
+  persona's `traits` are put into words by `_traits_to_phrases` ("high
+  impatience, moderate skepticism"); traits were never shown before.
+- **WHO YOU ARE TODAY**: for a study run, the archetype's `whatIsDifferent`,
+  `seedBeliefs` and `factorStatements` from `instructions.archetype`. Its
+  name, role and varied factors are deliberately not shown: an actor told
+  it is "the impatient variant" plays a caricature.
+- **Done when**: the success criterion and each check in words, under the
+  scenarios header. A claimed run's `instructions.preconditions` are
+  rendered under "You arrive with:".
+- **PROTOCOL 2**: call `log_step` after every browser action; the report
+  contract adds `abandoned` and `feedback.outcome`.
+
+Both spellings are read for every new key (`patience_budget` and
+`patienceBudget`, `protocol_version` and `protocolVersion`), because the
+contract names the behavior block in snake_case while the REST edge is
+camelCase.
+
+### `log_step`
+
+Input: `run_id`, optional `session_id`, and `step`, the record of plan 5.3:
+`seq`, `scenario_id?`, `observe {page_type, summary, stood_out,
+visible_text_excerpt, url, title}`, `recall {applied}`, `decide {monologue,
+intent, action_text, confidence, rule_applied?}`, `act {target?, result
+ok|failed|no_change, error_message?}`, `after {friction {level, type?,
+note?}, sentiment, progress, hesitation, trust_request?, remember?}`,
+`screenshot_path?`.
+
+What the server does:
+
+1. Stamps `client_ts` (ISO, UTC, milliseconds) and `elapsed_s` (since
+   `start_run` returned), fills a missing `seq`, and turns a
+   `screenshot_path` into `screenshot_b64` (images only, 1 MB, 6 per run).
+2. Sends any steps still buffered for this run, oldest first, then this
+   one, to `POST /api/plugin/runs/<run_id>/steps` with body
+   `{session_id, step}` (snake_case, as plan 5.3). The whole call, flush
+   included, finishes inside `ARCHETYPE_STEP_TIMEOUT` (15 s).
+3. Timeout, network error, 5xx, a missing route or no token: the step is
+   appended to `runs/<run_id>.steps.jsonl` and goes out with the next step
+   or with `report_result`. The actor is told the step was saved and keeps
+   going. A 400 (or 404 `run_not_found`) is the actor's to fix: returned as
+   an error, nothing kept. A 409 means the backend stopped taking steps:
+   the NOTE says the run has ended.
+4. Answers with the backend's `state`, `activeRules`, `recall` and `note`,
+   or, when the backend did not answer in time, with local state computed
+   from the same rules (unproductive grows on a failed action, major or
+   blocked friction, no progress or a refused trust request, and resets
+   when progress rises by 10 or more; the review fires on the budget, the
+   step cap or a repeated error; a second exhausted budget ends the run).
+
+The answer is a fenced STATE line plus at most 120 words:
+
+```
+STATE step 7 of max 22 | unproductive 2 of 5 | progress 40 | sentiment trend: falling
+```
+```
+ACTIVE RULES:
+- ...
+RECALL:
+- I once abandoned a signup that asked for my phone first (seed belief)
+NOTE: Your patience budget is exhausted: decide now. Continue only if the last step made real progress toward "<criterion>"; otherwise call report_result with status "abandoned" and a quit_reason.
+```
+
+Rules and recall are clipped and dropped (recall first) until the text fits.
+
+### `report_result` in protocol v2
+
+Before posting, the server flushes the step buffer. Steps the backend never
+acknowledged ride along in `steps` in the v1 shape (`actionText`,
+`narration`, `url`, `observationPageType`, `success`) with the full record
+under `protocolV2`. The body adds:
+
+- `status: "abandoned"` (on an older backend it becomes `failed`, with the
+  outcome kept in feedback),
+- `feedback.outcome {completed, in_their_words, quit_reason?,
+  abandoned_at_step?}` with the backend's quit reasons (`price_barrier`,
+  `trust_refused`, `confusion`, `feature_not_found`, `goal_completed`,
+  `frustration`, `technical_error`, `distraction`, `other`; `trust_refused`
+  when the person leaves out of distrust, such as a broken promise, an
+  unexplained card request or a data request they are not comfortable with,
+  `price_barrier` only for the price itself); quit fields are dropped from
+  a completed outcome,
+- `rawActions`: `runs/<run_id>.actions.jsonl` (at most 1000),
+- `browser`: the config of the browser the recorded actions drove, else the
+  one named at claim,
+- `artifacts.video_path`: the largest `.webm` in
+  `${CLAUDE_PLUGIN_DATA}/browser/<server>/videos/` written since the run
+  started (the actor closes the browser first, which writes the file),
+- `durationSeconds` from the start time when the actor gives none.
+
+After a stored report the run's local files are removed.
+
+### Raw actions (`scripts/action-hook.py`)
+
+`PostToolUse` and `PostToolUseFailure` hooks on
+`mcp__playwright__.*`, `mcp__claude-in-chrome__.*` and
+`mcp__plugin_archetype_archetype-(browser|watch)-[0-9]+__.*` (async), plus
+a synchronous one on `mcp__plugin_archetype_core__(start_run|report_result)`.
+MCP tool calls carry no agent id but hook input does, so the hook learns
+which run an agent is on from `start_run`'s answer (`runId: ...`) and keeps
+it in `runs/active-<agent_id>.json` (`main-<session_id>` outside
+subagents); `report_result` clears it. Each browser call is appended to
+`runs/<run_id>.actions.jsonl` as `{ts, agent_id, tool_name, tool_input,
+result_ok, error, tool_use_id, duration_ms}`. Typed text, values, uploads
+and passwords are replaced by their length; code is cut to 120 characters.
+Calls before the claim (the preflight) are not filed. The hook always
+exits 0.
+
+### Browsers (`.mcp.json`, `scripts/browser-server.py`)
+
+Six plugin servers: `archetype-browser-1` to `-4` (headless) and
+`archetype-watch-1`, `-2` (headed). Each runs the real server as
+
+```
+npx -y @playwright/mcp@0.0.84 [--headless] --isolated --no-webmcp \
+  --viewport-size 1280x900 --user-agent "<pinned desktop Chrome UA>" \
+  --config ${CLAUDE_PLUGIN_DATA}/browser/<server>/config.json \
+  --output-dir ${CLAUDE_PLUGIN_DATA}/browser/<server>
+```
+
+- The pinned values live in `browser/pinned.json` (package, Playwright
+  version, user agent `Mozilla/5.0 (Windows NT 10.0; Win64; x64)
+  AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36`,
+  viewport, idle stop). Every flag was checked against `npx -y
+  @playwright/mcp@0.0.84 --help`; `--save-video` no longer exists.
+- Video: `browser/playwright.config.json` sets
+  `browser.contextOptions.recordVideo` (Playwright's `BrowserContextOptions`,
+  passed through by the MCP server). Its `dir` must be absolute: a relative
+  one resolves against the session's working directory (the user's
+  project), and without one Playwright keeps videos in a temporary folder
+  it deletes. The proxy writes a per server config with
+  `dir: ${CLAUDE_PLUGIN_DATA}/browser/<server>/videos`.
+- The browser (`scripts/browser_engine.py`, checked at every launch):
+  the installed Google Chrome (`--browser chrome`), else the newest
+  Playwright Chromium in the ms-playwright cache (`--browser chromium
+  --executable-path <binary>`), else the tool call fails with "install one
+  with `npx playwright install chromium`". `ARCHETYPE_CHROME_PATHS` and
+  `PLAYWRIGHT_BROWSERS_PATH` override the locations. The run's browser
+  config version says `chrome channel` or `bundled chromium <revision>`.
+- `--no-webmcp`: a site under test cannot register tools for the actor.
+- Lazy start: Claude Code starts every plugin server with the session, and
+  six idle Playwright servers measured about 548 MB (npm exec about 53 MB
+  plus node about 40 MB each; about 208 MB each when run alone). The proxy
+  answers `server/discover` and other non tool requests with `-32601`, the
+  handshake and `tools/list` from `browser/tools.json` (the pinned tool
+  list, refreshed with `browser-server.py <name> --capture-tools`), and
+  starts the real server on the first `tools/call`. Measured idle cost in a
+  live session: six proxies, 51.1 MB in total, no Playwright process. After
+  15 idle minutes the real server is stopped again (which also writes any
+  open video).
+
+Tools allowlisted for `feature-validator-headless`:
+`mcp__plugin_archetype_<server>__*` for the six servers, with
+`browser_run_code_unsafe`, `browser_evaluate`, `browser_file_upload`,
+`browser_network_requests`, `browser_network_request` and `browser_drop`
+in `disallowedTools` (the persona sees the page, not its internals). The
+old `mcp__playwright__*` list stays for self-registered servers.
+
+### Permissions (`scripts/permission-hook.py`)
+
+A plugin's `settings.json` takes effect only for `agent` and
+`subagentStatusLine`, so permission rules cannot ship with the plugin, and
+background subagents surface every prompt in the main session. A
+`PreToolUse` hook on `mcp__plugin_archetype_.*` answers `allow` only when
+the caller's `agent_type` is `feature-validator` or
+`feature-validator-headless` and the tool is a plugin browser tool (minus
+the six above) or one of `start_run`, `log_step`, `report_result`,
+`get_run`, `list_features`. Anything else gets no answer and goes through
+the normal flow; the user's deny and ask rules still win. Verified live in
+a print mode session without permission bypass: the actor's three browser
+calls ran with no denial, while the same call from the main session was
+denied.
+
+### Swarm runner (`scripts/study_runner.py`, `dispatch_study`)
+
+`dispatch_study {study_id, parallel?, model?, timeout_minutes?, confirm?}`
+reads the study's queued runs (`GET /api/studies/<id>/runs`, whose runs
+carry their live status; the study object's own run refs do not), else the
+last wave seen locally, shows the count and an estimate (8 to 15 minutes and 30k to
+200k actor tokens per run), and starts the runner only with `confirm:
+true`. The runner:
+
+- copies the plugin into `studies/<id>/plugin` with every server and hook
+  command wrapped in `env CLAUDE_PLUGIN_DATA=<real data dir>` (a
+  `--plugin-dir` load would otherwise get its own data folder without the
+  login),
+- starts one worker per run, up to `parallel`: `claude -p
+  "/archetype:validation --run <run_id> browser=archetype-browser-<k>
+  (headless, unattended)" --plugin-dir <shadow>
+  --dangerously-skip-permissions --output-format stream-json --verbose
+  --no-chrome --no-session-persistence [--model M]`, with `CLAUDECODE`,
+  `CLAUDE_CODE_*` and the plugin path variables removed from its
+  environment; worker k drives `archetype-browser-k`,
+- writes `studies/<id>/<run_id>/stream.jsonl` and `stderr.log` per worker
+  and `studies/<id>/runner.json` (read by `study_status`),
+- asks for the next wave when the queue is empty, until the backend says
+  done; a `stop` file in the study folder stops new workers.
+
+`docs/examples/study-ci.yml` is a documented GitHub Actions job (not
+enabled here) that runs a study against a preview URL and comments the
+summary on the pull request.
+
+### Old backends
+
+A briefing without `instructions.protocol_version` is protocol 1: no HOW
+YOU BEHAVE rules (traits as words instead), the 0.5.1 report contract, and
+the line "PROTOCOL 1: ... do not call log_step". If an actor calls
+`log_step` anyway, steps are kept locally and sent with `report_result` in
+the v1 shape when the actor sends none. `abandoned` becomes `failed`.
+`rawActions`, `browser` and `artifacts` are not sent. Study tools on a
+backend without the studies API say it predates behavioral studies.
 
 ---
 
@@ -258,21 +557,16 @@ dead after the cart count re-rendered.)
 
 ### `feature-validator-headless`
 
-Source: `agents/feature-validator-headless.md`. The same actor loop on a headless Playwright
-browser, for when Claude in Chrome is not available: locked screen, SSH, CI, no extension. Its
-browser tools are `mcp__playwright__browser_*` (navigate, snapshot, click, type, fill_form,
-select_option, press_key, hover, wait_for, take_screenshot, tabs, handle_dialog,
-console_messages), so the Playwright MCP server must be registered under the name `playwright`:
-
-```
-claude mcp add playwright -- npx -y @playwright/mcp@latest --headless --isolated
-```
-
-The plugin does not bundle that server: it needs Node and downloads a browser, which should be the
-user's choice. The validation skill picks the actor during its browser preflight (Chrome when
-connected, else Playwright when registered, else it stops and explains both). The two agent files
-may differ only in the browser preflight and in how the site is opened;
-`python3 scripts/test_agents_in_sync.py` (in CI) fails on any other drift.
+Source: `agents/feature-validator-headless.md`. The same actor loop on an isolated Playwright
+browser. It is the actor for every study run, on the plugin browser its dispatch prompt names
+(`archetype-browser-1` to `-4`, or `archetype-watch-1` and `-2` for `watch=live`), and for ad hoc
+runs when Claude in Chrome is not available (locked screen, SSH, CI, no extension). See
+[Browsers](#browsers-mcpjson-scriptsbrowser-serverpy) for the servers and its allowlist. A Playwright
+server the user registered as `playwright` still works (`mcp__playwright__browser_*`). The two agent
+files may differ only in the browser preflight and in how the site is opened;
+`python3 scripts/test_agents_in_sync.py` (in CI) fails on any other drift, and also checks that both
+carry `log_step`, `maxTurns: 120` and the per-step protocol, and that the headless actor allowlists
+all six plugin browsers without the code running tools.
 
 ### SessionStart hook
 
@@ -304,8 +598,8 @@ The hook always exits `0`. Tests: `python3 scripts/test_session_hook.py`.
 The server is a stdlib-only Python stdio MCP server at `scripts/core-server.py`, registered in
 `.claude-plugin/plugin.json` under `mcpServers.core`
 (`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/core-server.py`). It reports itself as `archetype-core`
-v`0.5.1` (protocol `2025-06-18`) and is the data plane between the actor LLM and the Archetype
-backend — Claude never touches tokens or raw HTTP. Configuration comes from environment variables
+v`0.6.0` (protocol `2025-06-18`) and is the data plane between the actor LLM and the Archetype
+backend: Claude never touches tokens or raw HTTP. Configuration comes from environment variables
 (see [Environment variables](#environment-variables)).
 
 **Deadlines:** every value here bounds the WHOLE HTTP exchange on the wall clock, not a single
@@ -338,7 +632,12 @@ server-initiated requests (the login elicitation) are routed to their waiter by 
 When the client sends `_meta.progressToken`, the server emits `notifications/progress` every
 `ARCHETYPE_PROGRESS_INTERVAL` seconds while the call is in flight.
 
-### The ten tools
+### The tools
+
+Twenty tools. The ten below are unchanged from 0.5.1 apart from `start_run` (claim mode, `browser`)
+and `report_result` (`abandoned`, outcome, raw actions, browser, video). `log_step`, the eight
+study tools and `dispatch_study` are described in
+[Studies, protocol v2 and browsers](#studies-protocol-v2-and-browsers-060).
 
 #### `login`
 
@@ -701,8 +1000,8 @@ never issues raw HTTP — it calls MCP tools, and the server maps them to these 
   `/` stripped).
 - Auth: single `Authorization: Bearer <access_token>` scheme; the token is an Auth0 RS256 JWT cached
   at `${CLAUDE_PLUGIN_DATA}/auth.json` (mode `0600`).
-- `User-Agent`: `archetype-claude-plugin/0.5.1` (override via `ARCHETYPE_PLUGIN_USER_AGENT`).
-  Required — the Cloudflare WAF in front of the API returns HTTP 403 (error 1010) for the default
+- `User-Agent`: `archetype-claude-plugin/0.6.0` (override via `ARCHETYPE_PLUGIN_USER_AGENT`).
+  Required: the Cloudflare WAF in front of the API returns HTTP 403 (error 1010) for the default
   Python-urllib UA.
 - Timeouts: as listed under [MCP tools](#mcp-tools-server-core) — 15 s default, 180 s for
   `POST /api/plugin/runs`, `POST /api/persona/vibe`, `POST /api/persona/custom`, and
@@ -719,6 +1018,18 @@ never issues raw HTTP — it calls MCP tools, and the server maps them to these 
 | POST | `/api/oauth/validate-token` | Bearer | `login`, `status` | `{}` (token in header) | 200 — `{"valid": true, "user_id", "audience", "issuer", "expires_at", "issued_at", "scope", "payload"}`; invalid token → 401 `{"valid": false, "error": "invalid_token", "reason"}`; no token → 400 `{"valid": false, "error": "missing_token"}` |
 | POST | `/api/plugin/runs` | Bearer | `start_run` | `{"goal", "featureId", "url", "poolId", "preconditions"?}`: plugin maps `feature_id`→`featureId`, `pool_id`→`poolId`; `None` fields dropped; `preconditions` is a list of strings, sent only when non-empty and not read by any backend yet (the plugin renders it into the briefing); tool-side, either `url` or `feature_id` is required (a feature with a saved url needs no url; the backend then opens its start page). Legacy `personaId` payloads (pre-0.4.0 plugins) get 400 `plugin_outdated` ("update your plugin") from a pool-aware backend | 201: run body: `runId`, `sessionId`, `brief`, `persona{personaId, personaCard, ...}` (for pool runs, the freshly spun-off member appended to the pool), `pool{poolId, name}` when a pool was targeted, `instructions{goal, targetUrl, scenarios[{id, title, steps[], expectedResult}], conduct[]}`. `persona.personaNeed` is the need fitted to this run's goal, with `needSource` (`persona`, `rewritten` or `fallback`) and `alignmentScore`; `start_run` prints it as the WHY YOU ARE HERE section |
 | POST | `/api/plugin/runs/<run_id>/results` | Bearer | `report_result` | See full contract below | 200 — `{"message": "<confirmation>", "summary": {"steps": n, "findings": n, "verdict": "..."}}` |
+| POST | `/api/plugin/runs/<run_id>/claim` | Bearer | `start_run` (claim mode) | `{"browser": {...}}` (or `{}`) | 200: the same briefing as `POST /api/plugin/runs`; 409 when the run is not `queued` |
+| POST | `/api/plugin/runs/<run_id>/steps` | Bearer | `log_step`, `report_result` (flush) | `{"session_id", "step"}` (snake_case step record) | 200: `{"ok", "state": {"seq", "maxSteps", "unproductive", "maxUnproductiveSteps", "progress", "sentimentTrend", "reviewGiveUp", "ended", "endedReason"}, "recall": [{"text", "source"}], "activeRules": [str], "note"}`; 409 when the run takes no more steps |
+| POST | `/api/studies` | Bearer | `create_study` | camelCase study (see `docs/studies-api.md` in the backend) | 201: the study |
+| PATCH | `/api/studies/<id>` | Bearer | `create_study` with `study_id` | the changed fields | 200: the study |
+| GET | `/api/studies/<id>` | Bearer | `get_study` | none | 200: the study (factorSpec, archetypes, run refs, `runsDoneReason`) |
+| GET | `/api/studies/<id>/runs` | Bearer | `dispatch_study`, `get_study` | none | 200: `{currentWave, status, runs: [{runId, archetypeId, archetypeName, status, wave, outcome, metrics, browser}]}` |
+| POST, PATCH | `/api/studies/<id>/factors` | Bearer | `generate_factors`, `update_factors` | `{force?}`; `{factors: [{key, selected?, label?, riskPole?, icpTypicalLevel?, whyItMattersHere?}], order?}` | 200: `{factorSpec, status, generated?}` |
+| POST | `/api/studies/<id>/archetypes` | Bearer | `generate_archetypes` | `{force?}` | 200: `{archetypes: [{archetypeId, name, role, variedFactors, factorVector, summaryOneLine, behaviorPolicy}], status}` |
+| POST | `/api/studies/<id>/runs` | Bearer | `create_study_runs` | `{}` | 201: `{wave: 1, runs: [{runId, archetypeId, archetypeName, repeatIndex}]}` |
+| POST | `/api/studies/<id>/runs/next` | Bearer | `next_study_wave`, the swarm runner | `{}` | 200: `{wave, runs}` or `{done: true, reason}`; 409 while the wave runs |
+| GET | `/api/studies/<id>/status` | Bearer | `study_status` (polled every 10 s while `wait_seconds` lasts) | none | 200: `{status, archetypeCount, factorSpecReady, runs: {total, terminal, allTerminal, byStatus}}` |
+| GET | `/api/studies/<id>/report` | Bearer | `get_study_report` | none | 200: plan 6.2 plus addendum section 2 |
 | GET | `/api/plugin/runs/<run_id>/report` | Bearer | `get_run` | none | 200: `{"runId", "sessionId", "status", "goal", "url", "feature"?: {"id", "name", "successMilestone"}, "persona"?: {"name", "need", "needSource", "alignmentScore"}, "verdict", "summary", "personaReaction", "scenarios": [{"id", "title", "steps", "expectedResult", "status", "actualResult"}], "findings": [{"scenarioId", "category", "severity", "description", "evidenceStepSeq", "evidence", "screenshotStepSeq"}], "steps": [...], "screenshots": {"kept", "dropped"}, "counts", "analyticsReady"}`. 404 `run_not_found`, or `not_a_plugin_run` for hosted runs |
 | GET | `/api/plugin/runs/<run_id>` | Bearer | `get_run` (fallback for older backends) | none | 200: `{"runId", "status", "progress", "analyticsReady", "screenshots"?, "feedback"?: {"verdict", "summary", ...}}` |
 | GET | `/api/features` | Bearer | `list_features`, `status` (feature count) | — | 200 — `{"ok": true, "features": [{"_id", "title", "updatedAt", ...}]}`; a feature's `_id` is the `feature_id` for `start_run`. (The `query` title filter on `list_features` is applied client-side, not a query param.) |
@@ -836,7 +1147,7 @@ inherits the environment of the Claude Code CLI, so export these **before** laun
 | :--- | :--- | :--- |
 | `ARCHETYPE_BACKEND_URL` | `https://api.syntheticarchetype.com` | Base URL for every backend call (device-flow OAuth, `/api/plugin/*`, `/api/features`, `/api/persona/*`). Trailing slashes are stripped. Set to `http://localhost:5001` for local backend development. |
 | `ARCHETYPE_PORTAL_URL` | `https://www.syntheticarchetype.com` | Portal link rendered in the `/archetype:status` dashboard. Trailing slashes are stripped. |
-| `ARCHETYPE_PLUGIN_USER_AGENT` | `archetype-claude-plugin/<server version>` (currently `archetype-claude-plugin/0.5.1`, from the `SERVER_VERSION` constant in `core-server.py`) | HTTP `User-Agent` sent on every backend request. The Cloudflare WAF in front of `api.syntheticarchetype.com` returns HTTP 403 (error 1010) for the default Python-urllib UA; any real, identifiable UA passes. If you override this and hit a 1010, switch back to the default. |
+| `ARCHETYPE_PLUGIN_USER_AGENT` | `archetype-claude-plugin/<server version>` (currently `archetype-claude-plugin/0.6.0`, from the `SERVER_VERSION` constant in `core-server.py`) | HTTP `User-Agent` sent on every backend request. The Cloudflare WAF in front of `api.syntheticarchetype.com` returns HTTP 403 (error 1010) for the default Python-urllib UA; any real, identifiable UA passes. If you override this and hit a 1010, switch back to the default. |
 | `ARCHETYPE_HTTP_TIMEOUT` | `15` | Wall-clock deadline in seconds for ordinary backend calls. |
 | `ARCHETYPE_RUN_TIMEOUT` | `180` | Deadline for `POST /api/plugin/runs` (run assembly plus pool spin-off). |
 | `ARCHETYPE_RESULT_TIMEOUT` | `60` | Deadline for results ingestion. |
@@ -845,7 +1156,14 @@ inherits the environment of the Claude Code CLI, so export these **before** laun
 | `ARCHETYPE_NO_BROWSER` | *(unset)* | Set to `1` to stop login from opening a browser tab by itself (the modal still shows the URL to open by hand). A `BROWSER` whose basename is `true` (e.g. `/usr/bin/true`) has the same effect. |
 | `ARCHETYPE_APPROVAL_POLL_WINDOW` | `120` | Longest token polling continues after the user accepts the modal. |
 | `ARCHETYPE_PROGRESS_INTERVAL` | `5` | Seconds between `notifications/progress` ticks while a tool call is in flight (sent only when the client supplied a `progressToken`). |
-| `CLAUDE_PLUGIN_DATA` | *(set by Claude Code)* | Directory holding `auth.json` (credentials) and `runs.json` (run log); see below. |
+| `ARCHETYPE_STEP_TIMEOUT` | `15` | Budget for a whole `log_step` call, flush included; past it the step is buffered. |
+| `ARCHETYPE_STUDY_TIMEOUT` | `180` | Deadline for the study calls that run models (factors, archetypes, runs). |
+| `ARCHETYPE_BROWSER_IDLE_MINUTES` | `15` | Idle minutes before a plugin browser's real server is stopped (`browser-server.py`). |
+| `ARCHETYPE_BROWSER_START_TIMEOUT` | `180` | How long the proxy waits for the real browser server's handshake (first `npx` run downloads it). |
+| `ARCHETYPE_BROWSER_TRACE` | *(unset)* | A file the browser proxy appends every MCP method to, for debugging startup. |
+| `ARCHETYPE_CLAUDE_BIN` | `claude` | The CLI the swarm runner starts workers with. |
+| `ARCHETYPE_RUNNER_WAVE_WAIT` | `30` | Seconds the runner waits between next wave attempts while the backend answers 409. |
+| `CLAUDE_PLUGIN_DATA` | *(set by Claude Code)* | Directory holding `auth.json` (credentials), `runs.json` (run log), `runs/`, `browser/` and `studies/`; see below. |
 
 ### Plugin data files (`${CLAUDE_PLUGIN_DATA}`)
 
@@ -863,6 +1181,14 @@ was launched from inside the plugin folder), the server refuses to store credent
   history lives in the portal). Capped to the last **20** entries (`RUN_LOG_LIMIT`); the dashboard
   shows the most recent **5** (`RUN_LOG_SHOWN`). Write timing and per-entry fields are described
   under [Local run log](#local-run-log). Write failures are logged and never fatal.
+
+- **`runs/`**: per run state while a run is active (`<run_id>.state.json`, `.journal.jsonl`,
+  `.steps.jsonl` buffer, `.actions.jsonl` raw actions, `active-<agent>.json`), removed after a
+  stored report.
+- **`browser/<server>/`**: each plugin browser's `config.json`, Playwright output files and
+  `videos/*.webm`.
+- **`studies/<study_id>/`**: `waves.json` (waves seen), and for the swarm runner `runner.json`,
+  `runner.log`, the shadow plugin and `<run_id>/stream.jsonl` per worker.
 
 ### Install, update, and dev loop
 
@@ -889,6 +1215,13 @@ was launched from inside the plugin folder), the server refuses to store credent
   stdlib `http.server` stub that records every backend request (method, path, headers, parsed JSON
   body) and replays canned responses. Stdlib-only (no pytest, no pip deps); exits non-zero on the
   first failing assertion and prints per-case PASS/FAIL plus a final `ALL PASS` line.
+- **Action hook:** `python3 scripts/test_action_hook.py` (writes, redacts, never fails, maps tool
+  names, keeps parallel agents apart).
+- **Browsers:** `python3 scripts/test_browsers.py` (the lazy proxy against a fake MCP child, the
+  permission hook decisions, the runner's shadow plugin and worker command).
+- **Agents:** `python3 scripts/test_agents_in_sync.py`; **session hook:**
+  `python3 scripts/test_session_hook.py`.
+- **Manifest:** `claude plugin validate --strict .` (CI runs it).
 - **Live E2E:** the operator runbook is `e2e/RUNBOOK.md`. An outer orchestrator session drives an
   inner Claude Code session in tmux (session name `archetype-e2e`, helpers in `e2e/tmux.sh`,
   override via `E2E_SESSION`) through the real Auth0 device flow, a Chrome-driven validation of the
@@ -907,10 +1240,10 @@ hooks, and agents live at the plugin root):
 | Field | Value |
 | :--- | :--- |
 | `name` | `archetype` |
-| `description` | `Plugin for Run Feature Validation Testing through Synthetic Archetype` |
-| `version` | `0.5.1` |
+| `description` | `Persona and behavioral study testing for your product through Synthetic Archetype` |
+| `version` | `0.6.0` |
 | `author.name` | `Synthetic Archetype` |
-| `mcpServers.core` | `{"type": "stdio", "command": "python3", "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/core-server.py"]}` — the MCP server is declared inline, no separate `.mcp.json` |
+| `mcpServers.core` | `{"type": "stdio", "command": "python3", "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/core-server.py"]}`; the six browser servers are in `.mcp.json` at the plugin root |
 
 **`.claude-plugin/marketplace.json`** (makes the repo double as its own single-plugin marketplace):
 
@@ -932,7 +1265,5 @@ history (`runs.json`) is preserved. No arguments; never triggers a login;
 friendly no-op when not connected. Surfaced as `/archetype:logout` (added
 v0.3.9).
 
-Verified against plugin version 0.5.1 (`.claude-plugin/plugin.json`, server `archetype-core` 0.5.1;
-pool-first persona semantics per `2026-08-27-persona-pool-semantics-design.md`; 0.5.1 adds
-`start_run` preconditions and the once-per-code browser auto-open with `ARCHETYPE_NO_BROWSER`) on
-2026-10-07.
+Verified against plugin version 0.6.0 (`.claude-plugin/plugin.json`, server `archetype-core` 0.6.0,
+`@playwright/mcp@0.0.84`) on 2026-11-03.

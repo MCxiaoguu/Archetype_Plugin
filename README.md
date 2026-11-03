@@ -1,296 +1,202 @@
 # archetype
 
-Claude Code plugin that turns your session into the **actor** in the Synthetic
-Archetype pipeline: it fetches a persona-enriched instruction set from the
-Archetype backend, drives Chrome (via Claude-in-Chrome) through your product
-*as that persona*, and posts structured results back — so you get faithful,
-customer-like feedback on your work without leaving your editor or terminal.
+**Find out which of your users give up, where, and why, before they do.**
 
-## What it gives you
+A Claude Code plugin that turns your session into the actor of the Synthetic
+Archetype pipeline. It becomes a persona from your Archetype workspace,
+drives a real browser through your product the way that person would, and
+reports back. One persona for a quick check, or a whole behavioral study:
+the impatient one, the one who will not hand over a card before seeing the
+refund terms, the one who has never used anything like it, each in its own
+isolated browser, all at once.
 
-| Component | Path | Purpose |
-| :--- | :--- | :--- |
-| Skill | `skills/validation/` | Main entrypoint — login wizard (no args) or the full actor run loop (with args) |
-| Skill | `skills/validate-feature/` | Feature-first entry: resolve a saved feature, then run the actor loop |
-| Skill | `skills/list-features/` | Browse the saved features available for validation |
-| Skill | `skills/check-run-status/` | Look up the status / results of a run |
-| Agent | `agents/feature-validator.md` | The actor: one full validation cycle on Claude in Chrome, in a fresh context |
-| Agent | `agents/feature-validator-headless.md` | The same actor on a headless Playwright browser, for locked screens, SSH and CI |
-| MCP   | `core` (stdio): `scripts/core-server.py` | The data plane: 10 tools between Claude and the backend, declared inline in `plugin.json` |
-| Hook  | `hooks/hooks.json` | Session-start sanity check for the auth state |
-
-### MCP tools (`core`)
-
-The plugin never handles tokens or raw HTTP. Claude calls these tools and
-reads their natural-language results. The run path is below; the full list of
-ten (adding `status`, `logout`, `list_pools`, `create_pool`, `create_feature`)
-is in [docs/REFERENCE.md](docs/REFERENCE.md#mcp-tools-server-core).
-
-| Tool | Input | Backend | Purpose |
-| :--- | :--- | :--- | :--- |
-| `login` | `{}` | `/api/oauth/device/*` | Auth0 device-flow login (elicitation modal); caches the token |
-| `start_run` | `{goal?, feature_id?, url, pool_id?}` | `POST /api/plugin/runs` | Assemble a run; renders brief, persona card, scenarios, conduct rules, reporting contract |
-| `report_result` | `{run_id, session_id, status, duration_seconds?, steps, feedback}` | `POST /api/plugin/runs/<id>/results` | Ingest the actor's structured results; returns a confirmation summary |
-| `get_run` | `{run_id}` | `GET /api/plugin/runs/<id>` | Status / progress / feedback readback |
-| `list_features` | `{query?}` | `GET /api/features` | List the user's saved features (`_id` → `feature_id`) |
-
-## Quick start
-
-In Claude Code, type:
+`claude-code-plugin` · `synthetic-users` · `behavioral-studies` ·
+`ux-research` · `playwright` · `persona-testing` · `v0.6.0`
 
 ```
-/archetype:validation
+/plugin install archetype --marketplace MCxiaoguu/Archetype_Plugin
 ```
 
-With no argument, it runs the **login wizard** (Auth0 device flow — your
-browser pops open to the Archetype approval page; you approve; the
-plugin polls the backend and saves the access token locally). With
-arguments, it runs a full validation: it starts a run, becomes the assigned
-persona, drives Chrome through each scenario, and reports results back.
+## What you can ask
 
 ```
-/archetype:validation "test the signup flow" url=http://localhost:8321
-/archetype:validate-feature signup            # feature-first entry
-/archetype:list-features                        # browse saved features
-/archetype:check-run-status <run_id>            # check a run later
+/archetype:setup                                    # log in (once)
+/archetype:validation "sign up and invite a teammate" url=http://localhost:8321
+/archetype:study "connect a bank account" url=https://staging.example.com \
+    icp="founders of 2 to 10 person SaaS teams who do their own books" \
+    success="the bank shows as connected in billing settings"
 ```
 
-Free text is the **goal**; a `url=<...>` token sets the target URL (required —
-you'll be asked for it if omitted).
+A **validation** is one persona, one run, in Claude in Chrome when it is
+connected (so you can watch), with a verdict, findings with evidence and the
+persona's own words.
 
-The actor sees the target URL, query string included. If you tag runs with a
-query parameter (for attribution in a test site or harness), keep its value
-opaque, such as `?twin_label=r7f3`: a value like `chaos-slow-backend` tells the
-persona what the test expects and changes how it behaves.
-
-### Running without Chrome (headless)
-
-Claude in Chrome needs a signed-in extension and an unlocked computer. For
-unattended runs, register the Playwright MCP server once:
-
-```
-claude mcp add playwright -- npx -y @playwright/mcp@latest --headless --isolated
-```
-
-`/archetype:validation` checks the browser before it creates a run. With
-Chrome connected it uses Chrome; otherwise, if `playwright` is registered, it
-runs the same persona loop headless and tells you so; with neither, it stops
-and explains what to fix instead of creating a run nobody can execute.
-
-For a fully unattended run in print mode, pass the plugin and the Playwright
-server together:
+A **study** answers a sharper question: for this group of people and this
+task, which behavioral factors change whether they finish? The backend picks
+the factors that matter here (patience, trust, familiarity, reading, price
+sensitivity, plus task specific ones), builds a baseline archetype, one
+variant per factor at its risk pole and a stress archetype with every factor
+at risk. The plugin runs them in parallel headless browsers, adds
+confirmation runs wherever an archetype disagrees with the baseline, and
+prints:
 
 ```
-claude -p '/archetype:validation <goal> url=<url>' \
-  --plugin-dir /path/to/Archetype_Plugin --mcp-config playwright.json
+| Archetype         | Role     | Varied factor  | Completed | Completion (90% interval) | Abandoned at  |
+| Baseline founder  | baseline | none           | 3 of 3    | 80% (47% to 98%)          | never         |
+| Low-trust founder | variant  | trust low      | 0 of 3    | 20% (2% to 53%)           | step 7 (form) |
+
+| trust_willingness_to_share | low | -100 points | supported: 97% likely lower completion |
+Stress check: the stress archetype failed far more often than the single factors predict,
+so the factors likely compound.
 ```
 
-Do not add `--strict-mcp-config` here. It limits the session to the servers in
-`--mcp-config` and silently drops the plugin's own `core` server, so
-`start_run` and `report_result` are missing and no run can start. Print mode
-also cannot show the login modal, so log in once in an interactive session
-first.
+plus the findings every archetype hit, the ones only some hit, the top
+recommendations with their evidence, and an honesty line. Synthetic
+archetypes rank factors more reliably than they estimate absolute completion
+rates, and the report says so.
 
-## Dev quickstart — for handoff
+## How a study runs
 
-Five steps from `git clone` to a working interactive wizard.
+| Mode | Ask for it with | Browser | At once |
+| :-- | :-- | :-- | :-- |
+| Headless, in your session | (default) | `archetype-browser-1` to `-4`, isolated | 4 |
+| Watch live | `watch=live` | `archetype-watch-1`, `-2`, headed, isolated | 2 |
+| Unattended swarm, CI | `unattended` | one `claude -p` worker per run | 2 (up to 4) |
+| Your real Chrome | `browser=chrome` | Claude in Chrome, your profile | 1 |
 
-### 1. Prereqs
+A study never mixes browsers: every run records its browser config and the
+report only compares runs that match. Chrome is there for flows a script
+cannot log into; it brings your cookies, logins and extensions, so the
+tester is you, not a new visitor, and the report says "real browser
+profile".
 
-- macOS or Linux
-- Python 3.10+ (`python3 --version`) — runs the wizard MCP server, stdlib only
-- [Claude Code](https://claude.com/claude-code) CLI installed
-- Git
+Every isolated run records a video (`.webm`) and keeps a raw log of every
+browser call beside the persona's own step log, so a step the persona
+narrated but never did is flagged.
 
-### 2. Clone
+## Architecture
+
+```
+ you ──► /archetype:study ──► core MCP server ──► Archetype backend
+                                 (stdlib)          studies, factors, archetypes,
+                                    ▲              runs in waves, report
+                                    │ start_run(run_id) · log_step · report_result
+          ┌─────────────────────────┼─────────────────────────┐
+     actor subagent           actor subagent           actor subagent
+   (feature-validator-     (one per run, fresh,       (or a claude -p worker
+    headless, fresh)        no dev context)            from study_runner.py)
+          │                         │                         │
+  archetype-browser-1       archetype-browser-2        archetype-browser-k
+  lazy proxy ─► @playwright/mcp@0.0.84, headless, isolated, pinned UA, video
+          │
+  hooks: PostToolUse ─► raw actions per run · PreToolUse ─► allow actor tools
+```
+
+- **`core`** (`scripts/core-server.py`, Python stdlib): every backend call,
+  with wall clock deadlines and self healing login. Twenty tools: login,
+  runs, `log_step`, features, pools, the nine study tools, status.
+- **Actors** (`agents/`): `feature-validator` on Claude in Chrome and
+  `feature-validator-headless` on Playwright, the same per-step protocol
+  (observe, recall, decide, act, record), kept in sync by a test.
+- **Browsers** (`.mcp.json`, `scripts/browser-server.py`): six plugin
+  declared Playwright servers behind a lazy proxy. Six idle servers cost
+  about 51 MB; the real server starts on the first tool call.
+- **Hooks** (`hooks/hooks.json`): a session start login check, raw action
+  capture, and a permission hook that lets the plugin's actors use their
+  own browser and run tools without dozens of prompts (plugins cannot ship
+  permission rules in `settings.json`).
+- **Swarm runner** (`scripts/study_runner.py`): unattended studies, one
+  worker per run, logs per run, next waves until done. See
+  `docs/examples/study-ci.yml` for a GitHub Actions job.
+
+The full wiring (every tool, endpoint, file and variable) is in
+[docs/REFERENCE.md](docs/REFERENCE.md); what changed is in
+[CHANGELOG.md](CHANGELOG.md).
+
+## Requirements
+
+- Claude Code 2.1.275 or later, Python 3.10 or later.
+- For the isolated browsers: Node 18 or later and Google Chrome, or
+  Playwright's bundled Chromium (`npx playwright install chromium`), used
+  when Chrome is missing. The first
+  browser call of a session downloads the pinned server through `npx`.
+- For Chrome runs: Chrome with the Claude extension, `claude --chrome`, an
+  unlocked screen.
+- An Archetype account (`/archetype:setup`).
+
+## Commands
+
+| Command | What it does |
+| :-- | :-- |
+| `/archetype:setup` | Log in (device flow) and show the dashboard |
+| `/archetype:validation "<goal>" url=<...> [pool=<name>]` | One persona run; "as A and as B" fans out into a comparison |
+| `/archetype:validation --run <run_id> [browser=<name>]` | Claim and execute a run a study created |
+| `/archetype:validate-feature <name>` | A run for a saved feature |
+| `/archetype:study "<goal>" url=<...> icp="<who>" success="<done when>"` | A behavioral study |
+| `/archetype:persona` | Persona pools: list, or create one from a short questionnaire |
+| `/archetype:list-features`, `/archetype:check-run-status <run_id>`, `/archetype:status`, `/archetype:logout` | The rest |
+
+Study options: `archetypes=4..8`, `repeats=confirm|explore|decide`,
+`mode=ofat_stress|ofat|factorial|half_fraction|composites`, `parallel=N`,
+`watch=live`, `browser=chrome`, `unattended`, `questions="...;..."`.
+
+The actor sees the target URL, query string included: keep run labels
+opaque (`?twin_label=r7f3`, not `?twin_label=chaos-slow-backend`), or the
+persona learns what the test expects.
+
+## Dev quickstart
 
 ```bash
-git clone <repo-url> ~/dev/Archetype_Plugins
+git clone https://github.com/MCxiaoguu/Archetype_Plugin.git ~/dev/Archetype_Plugin
+cd ~                                      # launch from OUTSIDE the plugin folder
+claude --plugin-dir ~/dev/Archetype_Plugin --debug
 ```
 
-### 3. Launch Claude Code with the plugin loaded
-
-**Launch from a directory OUTSIDE the plugin folder.** Otherwise Claude
-Code reads the plugin files as a project-level config and the
-plugin-only variables (`${CLAUDE_PLUGIN_ROOT}`, `${CLAUDE_PLUGIN_DATA}`)
-won't resolve — `/doctor` will show "Missing environment variables".
-
-```bash
-cd ~
-claude --plugin-dir ~/dev/Archetype_Plugins --debug
-```
-
-`--debug` streams plugin load + MCP-server startup logs to stderr.
-Keep it on for the first few runs.
-
-### 4. Verify it loaded
-
-Inside the session:
-
-```text
-/plugin    # `archetype` should be listed as enabled
-/mcp       # `core` should be `running`
-/help      # skills appear under the `archetype:` namespace
-```
-
-### 5. Run the wizard
-
-```text
-/archetype:validation
-```
-
-Expected:
-1. Your default browser auto-opens to the Auth0 approval page.
-2. An in-terminal **elicitation modal** also renders, showing the same
-   URL, a verification code, and a single "I've approved" checkbox.
-3. Approve in the browser → tick the box → click **Accept**.
-4. The wizard polls the backend, then reports
-   `Connected to Archetype. Access token saved to <path>`.
-
-The token lives at `~/.claude/plugins/data/archetype-<scope>/auth.json`
-(mode `0600`).
-
-### Iterating
+Launching from inside the plugin folder makes Claude Code read the plugin
+files as project config, and `${CLAUDE_PLUGIN_ROOT}` and
+`${CLAUDE_PLUGIN_DATA}` do not resolve. In the session, `/plugin` lists
+`archetype`, `/mcp` shows `core` and the six `archetype-*` browsers, and
+`/archetype:setup` logs in. `/reload-plugins` picks up edits.
 
 | Task | How |
-| :--- | :--- |
-| Edit a skill / Python server / hook | Save the file. |
-| Pick up your changes in-session | `/reload-plugins` (no relaunch needed) |
-| Force the wizard to re-run from scratch | `rm ~/.claude/plugins/data/archetype-*/auth.json`, then `/archetype:validation` |
-| Watch MCP server logs | Already on stderr if you launched with `--debug` — lines prefixed `[archetype-core]` |
-| Point at a local backend | `export ARCHETYPE_BACKEND_URL=http://localhost:5001` before launching (the MCP server inherits the CLI's environment) |
-| Tune backend deadlines | `ARCHETYPE_HTTP_TIMEOUT`, `ARCHETYPE_RUN_TIMEOUT`, `ARCHETYPE_RESULT_TIMEOUT`, `ARCHETYPE_PERSONA_TIMEOUT` (seconds; defaults 15 / 180 / 60 / 180) |
-| Override the HTTP User-Agent | `export ARCHETYPE_PLUGIN_USER_AGENT="custom/1.0"` (default: `archetype-claude-plugin/<version>`) |
+| :-- | :-- |
+| Local backend | `export ARCHETYPE_BACKEND_URL=http://localhost:5001` before `claude` |
+| Fresh login | delete `~/.claude/plugins/data/archetype-*/auth.json` |
+| Deadlines | `ARCHETYPE_HTTP_TIMEOUT`, `_RUN_TIMEOUT`, `_RESULT_TIMEOUT`, `_PERSONA_TIMEOUT`, `_STEP_TIMEOUT`, `_STUDY_TIMEOUT` |
+| See what a browser proxy receives | `ARCHETYPE_BROWSER_TRACE=/tmp/trace.log` |
+| Unattended run by hand | `python3 scripts/study_runner.py --study <id> --runs <a,b> --parallel 2` |
 
-## Configuration
+Print mode cannot show the login modal: log in once interactively first.
+Never pass `--strict-mcp-config` with `--plugin-dir`: it drops the plugin's
+own servers.
 
-All MCP tools speak to the Archetype backend at
-`https://api.syntheticarchetype.com` (override with the
-`ARCHETYPE_BACKEND_URL` env var — set it to `http://localhost:5001` for local
-backend development). Auth is the single device-flow Bearer scheme: the `login`
-tool caches the token at `${CLAUDE_PLUGIN_DATA}/auth.json`, and every other
-tool reads it from there and sends `Authorization: Bearer <token>`. There is no
-separate portal URL, API key, or `.mcp.json` config — device-flow Bearer is the
-single auth scheme.
-
-What the wizard does:
-
-1. **Cached-token check.** If `${CLAUDE_PLUGIN_DATA}/auth.json` exists,
-   the wizard validates the saved access token via
-   `POST /api/oauth/validate-token`. If still valid, it reports
-   "already connected as `<user_id>`" and exits.
-2. **Auth0 device-authorization flow** (only when needed):
-   - `POST /api/oauth/device/code` mints a one-time verification URL +
-     `user_code`.
-   - `webbrowser.open()` launches the user's default browser to that
-     URL automatically.
-   - An **MCP elicitation modal** also renders in the terminal with the
-     same URL + code and a single "I've approved" tick box.
-   - User approves in browser, ticks the box, hits Accept.
-   - The wizard polls `POST /api/oauth/device/token` at the
-     backend-given interval until approval completes, then writes the
-     access token to `${CLAUDE_PLUGIN_DATA}/auth.json` (mode `0600`).
-
-The token is sent as `Authorization: Bearer <token>` to every protected
-backend endpoint (`/api/plugin/runs`, `/api/features`, etc.).
-
-### How it works under the hood
-
-The `core` stdio MCP server (Python 3, stdlib only,
-`scripts/core-server.py`) is the data plane between Claude and the backend,
-declared inline in `plugin.json` under `mcpServers`. It exposes ten tools
-(the run path is in the table above). Each tool call runs on its own thread
-and every backend call has a wall-clock deadline, so a stalled backend
-surfaces as a clear tool error instead of a frozen session. The `login` tool sequences the cached-token check, the
-device-code request, the browser launch, the elicitation, the polling, and the
-on-disk save — all in one tool call. The four run tools carry the Bearer token,
-POST/GET the `/api/plugin` endpoints, and render each response's
-natural-language fields (brief, persona card, scenarios, confirmations) as tool
-text for the actor to follow.
-
-## Local development reference
-
-The Dev Quickstart above covers the happy path. Below are long-form
-notes for less-common cases.
-
-### --plugin-dir variants
-
-Parent directory:
+### Tests
 
 ```bash
-claude --plugin-dir ./Archetype_Plugins
+python3 scripts/test_core_server.py     # stdio harness, stub backend, 92 cases
+python3 scripts/test_action_hook.py     # raw action capture
+python3 scripts/test_browsers.py        # lazy proxy, permission hook, swarm runner
+python3 scripts/test_agents_in_sync.py  # the two actors share one procedure
+python3 scripts/test_session_hook.py
+claude plugin validate --strict .
 ```
 
-Absolute path (works from anywhere):
-
-```bash
-claude --plugin-dir /absolute/path/to/Archetype_Plugins
-```
-
-Stack multiple `--plugin-dir` flags:
-
-```bash
-claude --plugin-dir ./Archetype_Plugins --plugin-dir ../OtherPlugin
-```
-
-If a plugin with the same `name` is installed from a marketplace, the
-local `--plugin-dir` copy takes precedence for that session.
-
-### Debugging tips
-
-- **Skill not appearing?** Check the YAML frontmatter parses (no tabs,
-  no stray colons) and that the file is named exactly `SKILL.md`.
-- **Hook not firing?** Run `claude --debug` and watch for `SessionStart`
-  hook output.
-- **MCP server failing?** `/mcp` shows the connection state and the
-  last error. `core` should be `running`; if it shows
-  `failed`, check that `python3` resolves on your PATH and re-run with
-  `claude --debug` to see the launcher error.
-- **Wizard didn't open a modal?** Verify Claude Code lists the `login`
-  tool from `core` in `/mcp`. If the server failed to start,
-  the skill can't elicit.
-- **Cloudflare 1010 on the backend?** The default
-  `archetype-claude-plugin/<version>` User-Agent passes; if you've
-  overridden `ARCHETYPE_PLUGIN_USER_AGENT` and hit a 1010, switch back
-  to the default.
-- **Browser didn't pop?** `webbrowser.open()` is best-effort. On
-  headless boxes it silently no-ops; the modal still shows the URL so
-  the user can copy/paste manually.
-- **Wrong directory layout?** Plugin MCP/hook/skill configs all live
-  at the **plugin root** — never inside `.claude-plugin/`. Only
-  `plugin.json` belongs there.
-
-### Packaging for distribution
-
-When the plugin is ready to share, two options:
-
-1. **Marketplace (recommended for teams):** publish a marketplace repo
-   that lists this plugin. See
-   <https://code.claude.com/docs/en/plugin-marketplaces>.
-2. **Zip + URL:** zip the plugin directory and host it; users load it
-   with `claude --plugin-url https://example.com/archetype.zip`.
-
-Bump `version` in `.claude-plugin/plugin.json` for every released
-change so update prompts fire cleanly on installed copies.
+CI (`.github/workflows/ci.yml`) runs all of them on Python 3.10, 3.12 and
+3.14. The live end to end runbook is `e2e/RUNBOOK.md`.
 
 ## Layout
 
 ```
-Archetype_Plugins/
-├── .claude-plugin/
-│   └── plugin.json            # manifest (declares the MCP server inline)
-├── agents/
-│   ├── feature-validator.md
-│   └── feature-validator-headless.md
-├── hooks/
-│   └── hooks.json
-├── scripts/
-│   ├── core-server.py         # stdio MCP server (login, runs, pools, features)
-│   └── test_core_server.py    # stdio + stub-backend test harness
-├── skills/
-│   ├── validation/SKILL.md
-│   ├── validate-feature/SKILL.md
-│   ├── list-features/SKILL.md
-│   └── check-run-status/SKILL.md
-└── README.md
+.claude-plugin/        plugin.json (core server), marketplace.json
+.mcp.json              the six browser servers
+agents/                feature-validator.md, feature-validator-headless.md
+browser/               pinned.json, playwright.config.json, tools.json
+hooks/hooks.json       SessionStart, PreToolUse, PostToolUse, PostToolUseFailure
+scripts/               core-server.py, browser-server.py, study_runner.py,
+                       action-hook.py, permission-hook.py, session-hook.py, tests
+skills/                setup, validation, validate-feature, study, persona,
+                       list-features, check-run-status, status, logout
+docs/                  REFERENCE.md, examples/study-ci.yml, design notes
+demo-apps/             Relay and Lumina Notes, with planted defects
+e2e/                   the live runbook and helpers
 ```

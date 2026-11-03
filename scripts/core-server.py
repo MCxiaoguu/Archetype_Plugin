@@ -64,7 +64,7 @@ from typing import Any, Callable
 
 PROTOCOL_VERSION = "2025-06-18"
 SERVER_NAME = "archetype-core"
-SERVER_VERSION = "0.5.1"
+SERVER_VERSION = "0.6.0"
 
 
 
