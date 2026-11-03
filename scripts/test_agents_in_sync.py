@@ -87,6 +87,18 @@ def main() -> int:
             print(f"FAIL  {name}: " + "; ".join(problems))
             return 1
     print("PASS  both actors carry log_step, maxTurns 120 and the per-step protocol")
+    meta = frontmatter(AGENTS / "feature-validator-headless.md")
+    tools = [t.strip() for t in meta.get("tools", "").split(",")]
+    denied = meta.get("disallowedTools", "")
+    servers = [f"archetype-browser-{i}" for i in range(1, 5)] + [f"archetype-watch-{i}" for i in range(1, 3)]
+    for server in servers:
+        if f"mcp__plugin_archetype_{server}__*" not in tools:
+            print(f"FAIL  feature-validator-headless: tools: does not allowlist {server}")
+            return 1
+        if f"mcp__plugin_archetype_{server}__browser_run_code_unsafe" not in denied:
+            print(f"FAIL  feature-validator-headless: {server} may run arbitrary code")
+            return 1
+    print("PASS  the headless actor can drive each plugin browser, minus the code running tools")
     chrome = shared_procedure(AGENTS / "feature-validator.md")
     headless = shared_procedure(AGENTS / "feature-validator-headless.md")
     if chrome == headless:
