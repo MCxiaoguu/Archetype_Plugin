@@ -68,12 +68,13 @@ def expect(cond: bool, msg: str) -> None:
 
 
 class Proxy:
-    def __init__(self, tmp: Path, name: str = "archetype-browser-2", headed: bool = False) -> None:
+    def __init__(self, tmp: Path, name: str = "archetype-browser-2", headed: bool = False,
+                 env_extra: dict | None = None) -> None:
         self.log = tmp / "child.log"
         fake = tmp / "fake_child.py"
         fake.write_text(FAKE_CHILD)
         env = dict(os.environ, CLAUDE_PLUGIN_DATA=str(tmp / "data"), FAKE_LOG=str(self.log),
-                   ARCHETYPE_BROWSER_COMMAND=json.dumps([sys.executable, str(fake)]))
+                   ARCHETYPE_BROWSER_COMMAND=json.dumps([sys.executable, str(fake)]), **(env_extra or {}))
         args = [sys.executable, str(PROXY), name] + (["--headed"] if headed else [])
         self.proc = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                      stderr=subprocess.DEVNULL, text=True, bufsize=1, env=env, cwd=tmp)
@@ -301,6 +302,85 @@ def case_runner_shadow_and_command(tmp: Path) -> None:
     expect("--strict-mcp-config" not in args, "never strict MCP config (it drops the plugin servers)")
 
 
+def fake_browsers(tmp: Path, chrome: bool, revisions: tuple[int, ...]) -> dict:
+    """Environment pointing browser_engine at a fake Chrome and a fake cache."""
+    chrome_path = tmp / "Google Chrome"
+    if chrome:
+        chrome_path.write_text("")
+    cache = tmp / "ms-playwright"
+    for rev in revisions:
+        binary = cache / f"chromium-{rev}" / "chrome-linux64" / "chrome"
+        binary.parent.mkdir(parents=True)
+        binary.write_text("#!/bin/sh\n")
+        binary.chmod(0o755)
+    (cache / "chromium_headless_shell-9999").mkdir(parents=True, exist_ok=True)  # not a full Chromium
+    return {"ARCHETYPE_CHROME_PATHS": str(chrome_path), "PLAYWRIGHT_BROWSERS_PATH": str(cache)}
+
+
+def pick_with(env: dict) -> dict:
+    saved = {k: os.environ.get(k) for k in env}
+    os.environ.update(env)
+    try:
+        sys.path.insert(0, str(ROOT / "scripts"))
+        import browser_engine
+        return browser_engine.pick()
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+
+def case_engine_order(tmp: Path) -> None:
+    (tmp / "a").mkdir(); (tmp / "b").mkdir(); (tmp / "c").mkdir()
+    chrome = pick_with(fake_browsers(tmp / "a", chrome=True, revisions=(1200,)))
+    expect(chrome["engine"] == "chrome" and chrome["args"] == ["--browser", "chrome"], f"Chrome first: {chrome}")
+    bundled = pick_with(fake_browsers(tmp / "b", chrome=False, revisions=(1200, 1300)))
+    expect(bundled["engine"] == "chromium" and bundled["label"] == "bundled chromium 1300", f"newest Chromium: {bundled}")
+    expect(bundled["args"][:3] == ["--browser", "chromium", "--executable-path"]
+           and bundled["args"][3].endswith("chromium-1300/chrome-linux64/chrome"), f"its binary: {bundled}")
+    none = pick_with(fake_browsers(tmp / "c", chrome=False, revisions=()))
+    expect("npx playwright install chromium" in none.get("error", ""), f"install hint: {none}")
+
+
+def case_proxy_falls_back_to_bundled_chromium(tmp: Path) -> None:
+    proxy = Proxy(tmp, env_extra=fake_browsers(tmp, chrome=False, revisions=(1248,)))
+    try:
+        handshake(proxy)
+        answer = proxy.rpc("tools/call", {"name": "browser_navigate", "arguments": {"url": "https://example.com"}})
+        expect(answer["result"]["content"][0]["text"] == "did browser_navigate", f"forwarded: {answer}")
+        argv = proxy.child_events()[0]["argv"]
+        expect(argv[argv.index("--browser") + 1] == "chromium", f"chromium engine: {argv}")
+        expect(argv[argv.index("--executable-path") + 1].endswith("chromium-1248/chrome-linux64/chrome"), "bundled binary")
+    finally:
+        proxy.close()
+
+
+def case_proxy_without_a_browser_says_how_to_install(tmp: Path) -> None:
+    proxy = Proxy(tmp, env_extra=fake_browsers(tmp, chrome=False, revisions=()))
+    try:
+        handshake(proxy)
+        answer = proxy.rpc("tools/call", {"name": "browser_navigate", "arguments": {"url": "https://example.com"}})
+        message = answer.get("error", {}).get("message", "")
+        expect("archetype-browser-2: No browser" in message and "npx playwright install chromium" in message,
+               f"clear error: {answer}")
+        expect(proxy.child_events() == [], "no server started without a browser")
+    finally:
+        proxy.close()
+
+
+def case_recorded_config_names_the_engine(tmp: Path) -> None:
+    env = dict(os.environ, **fake_browsers(tmp, chrome=False, revisions=(1248,)))
+    code = ("import importlib.util,json,sys; s=importlib.util.spec_from_file_location('c', sys.argv[1]); "
+            "m=importlib.util.module_from_spec(s); s.loader.exec_module(m); "
+            "print(json.dumps(m.browser_config('archetype-browser-3')))")
+    out = subprocess.run([sys.executable, "-c", code, str(ROOT / "scripts" / "core-server.py")],
+                         capture_output=True, text=True, env=env, timeout=30)
+    config = json.loads(out.stdout.strip().splitlines()[-1])
+    expect("bundled chromium 1248" in config["version"] and config["engine"] == "playwright", f"version names it: {config}")
+
+
 CASES = [
     ("proxy answers the handshake and tools/list without starting a browser", case_proxy_is_lazy),
     ("proxy starts the pinned server on the first call, video folder absolute", case_proxy_starts_on_first_call),
@@ -310,6 +390,10 @@ CASES = [
     (".mcp.json declares the six servers on the proxy", case_mcp_json_declares_six_servers),
     ("permission hook allows only actor browser and run tools", case_permission_hook),
     ("runner shadow plugin, scrubbed env and worker command", case_runner_shadow_and_command),
+    ("engine: Chrome, else the newest bundled Chromium, else an install hint", case_engine_order),
+    ("proxy launches the bundled Chromium when Chrome is missing", case_proxy_falls_back_to_bundled_chromium),
+    ("proxy without any browser answers with the install command", case_proxy_without_a_browser_says_how_to_install),
+    ("the recorded browser config names the engine that runs", case_recorded_config_names_the_engine),
 ]
 
 

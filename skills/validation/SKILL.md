@@ -206,7 +206,7 @@ For the confirmed run list (one run or many):
    build), check for a Playwright server the user registered themselves
    (`select:mcp__playwright__browser_navigate`) and tell those actors "Your
    browser is `playwright`". If neither is available, stop as above: the
-   plugin browsers need Node 18 or newer and Google Chrome installed. Never
+   plugin browsers need Node 18 or newer and Google Chrome, or Playwright's bundled Chromium (`npx playwright install chromium`). Never
    install anything yourself and never switch browsers mid-list.
 3. Dispatch the chosen actor agent (`feature-validator`, or
    `feature-validator-headless` per the preflight) once per run object. The dispatch

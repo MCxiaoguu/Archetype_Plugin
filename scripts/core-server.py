@@ -1070,6 +1070,18 @@ def _browser_name_from_tool(tool_name: str) -> str | None:
     return None
 
 
+def _browser_engine_label() -> str:
+    """The engine the plugin's servers launch here (browser_engine.py):
+    "chrome channel", or "bundled chromium <revision>" without Chrome."""
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import browser_engine
+
+        return str(browser_engine.pick().get("label") or "no browser installed")
+    except Exception:
+        return "chrome channel"
+
+
 def browser_config(name: Any) -> dict[str, Any] | None:
     """The recorded browser config for a browser name, or None if unknown."""
     if isinstance(name, dict):
@@ -1088,7 +1100,7 @@ def browser_config(name: Any) -> dict[str, Any] | None:
         pinned = PINNED_BROWSER
         version = pinned.get("package")
         if version and pinned.get("playwright_version"):
-            version = f"{version} (playwright {pinned['playwright_version']}, chrome channel)"
+            version = f"{version} (playwright {pinned['playwright_version']}, {_browser_engine_label()})"
         profile = dict(
             BROWSER_PROFILES["playwright"], headless=match.group(1) == "browser",
             version=version, user_agent=pinned.get("user_agent"), viewport=pinned.get("viewport"),

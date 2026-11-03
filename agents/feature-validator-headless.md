@@ -64,8 +64,9 @@ your only window onto the product.
    the call fails, STOP here: do not call `start_run` (it would create or
    claim a run that can never be used), and tell the caller which browser
    failed and its error. For a plugin server the usual causes are Node 18 or
-   newer missing, no network access to npm, or Google Chrome not installed
-   (`npx -y @playwright/mcp@0.0.84 install-browser chrome` installs it). For a
+   newer missing, no network access to npm, or no browser at all (the server
+   uses Google Chrome, else Playwright's bundled Chromium; its error says so,
+   and `npx playwright install chromium` installs one). For a
    self-registered one: `claude mcp add playwright -- npx -y @playwright/mcp@0.0.84 --headless --isolated`
    and a session restart. There is no run yet, so there is nothing to report.
 3. **Start the run.** Claim mode (a `run_id` was given): call `start_run`

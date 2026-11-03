@@ -50,7 +50,7 @@ jobs:
         run: |
           npm install -g @anthropic-ai/claude-code
           git clone --depth 1 https://github.com/MCxiaoguu/Archetype_Plugin.git "$RUNNER_TEMP/archetype-plugin"
-          npx -y @playwright/mcp@0.0.84 install-browser chrome
+          npx playwright install --with-deps chromium
 
       - name: Log in with the long lived token
         run: |

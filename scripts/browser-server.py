@@ -45,6 +45,8 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import browser_engine  # noqa: E402  (stdlib sibling: Chrome, else bundled Chromium)
 PINNED = json.loads((ROOT / "browser" / "pinned.json").read_text())
 TOOLS_FILE = ROOT / "browser" / "tools.json"
 CONFIG_TEMPLATE = ROOT / "browser" / "playwright.config.json"
@@ -76,11 +78,12 @@ def prepare(name: str) -> tuple[Path, Path]:
     return out, config_path
 
 
-def child_command(name: str, headed: bool) -> list[str]:
+def child_command(name: str, headed: bool, engine: dict[str, Any] | None = None) -> list[str]:
     out, config_path = prepare(name)
     override = os.environ.get("ARCHETYPE_BROWSER_COMMAND")
     prefix = json.loads(override) if override else ["npx", "-y", PINNED["package"]]
     args = [] if headed else ["--headless"]
+    args += list((engine or {}).get("args") or [])
     args += [
         "--isolated", "--no-webmcp",
         "--viewport-size", PINNED["viewport"],
@@ -104,6 +107,7 @@ class Proxy:
         self.handshake: "queue.Queue[dict]" = queue.Queue()
         self.last_call = time.monotonic()
         self.server_hello: dict[str, Any] = {}
+        self.start_error: str | None = None
         cached = {}
         try:
             cached = json.loads(TOOLS_FILE.read_text())
@@ -166,8 +170,14 @@ class Proxy:
         with self.child_lock:
             if self.child is not None and self.child.poll() is None:
                 return True
-            cmd = child_command(self.name, self.headed)
-            log(f"starting {' '.join(cmd[:4])} ... for {self.name}")
+            engine = browser_engine.pick()
+            if engine.get("error"):
+                self.start_error = engine["error"]
+                log(engine["error"])
+                return False
+            self.start_error = None
+            cmd = child_command(self.name, self.headed, engine)
+            log(f"starting {' '.join(cmd[:4])} ... for {self.name} on {engine['label']}")
             try:
                 child = subprocess.Popen(
                     cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=sys.stderr,
@@ -231,8 +241,9 @@ class Proxy:
         msg_id = msg.get("id")
         if not self.ensure_child():
             if msg_id is not None:
-                self.error(msg_id, f"{self.name}: the Playwright browser could not start "
-                                   "(Node 18 or newer and network access to npm are needed)")
+                self.error(msg_id, f"{self.name}: {self.start_error}" if self.start_error else
+                           f"{self.name}: the Playwright browser could not start "
+                           "(Node 18 or newer and network access to npm are needed)")
             return
         if msg_id is not None and "method" in msg:
             self.pending.add(msg_id)
