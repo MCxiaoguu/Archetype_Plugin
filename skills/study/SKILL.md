@@ -12,7 +12,7 @@ the factors and builds the archetypes; you run the actors and relay the
 report.
 
 Load the study tools in one ToolSearch query:
-`select:mcp__plugin_archetype_core__create_study,mcp__plugin_archetype_core__generate_factors,mcp__plugin_archetype_core__update_factors,mcp__plugin_archetype_core__generate_archetypes,mcp__plugin_archetype_core__create_study_runs,mcp__plugin_archetype_core__next_study_wave,mcp__plugin_archetype_core__study_status,mcp__plugin_archetype_core__get_study_report,mcp__plugin_archetype_core__list_features,mcp__plugin_archetype_core__list_pools`.
+`select:mcp__plugin_archetype_core__create_study,mcp__plugin_archetype_core__generate_factors,mcp__plugin_archetype_core__update_factors,mcp__plugin_archetype_core__generate_archetypes,mcp__plugin_archetype_core__create_study_runs,mcp__plugin_archetype_core__next_study_wave,mcp__plugin_archetype_core__study_status,mcp__plugin_archetype_core__dispatch_study,mcp__plugin_archetype_core__get_study_report,mcp__plugin_archetype_core__list_features,mcp__plugin_archetype_core__list_pools`.
 Auth is self-healing in the main session; never pre-call `login`.
 
 ## 1. Intake
@@ -30,9 +30,10 @@ does, into:
 | `archetypes=4..8` | the backend's default for the mode |
 | `repeats=confirm\|explore\|decide` | `confirm` |
 | `mode=ofat_stress\|ofat\|factorial\|half_fraction\|composites` | `ofat_stress` |
-| `parallel=1..4` | 4 |
+| `parallel=1..4` | 4 in session, 2 unattended |
 | `watch=live` | off: headless |
 | `browser=chrome` | off: isolated Playwright |
+| `unattended` | off: actors run as subagents in this session |
 | `questions="...;..."` | none |
 | preconditions | context the testers bring, as in `validation` |
 
@@ -83,7 +84,8 @@ question about browsers or modes: the arguments decided them.
 
 ## 6. Dispatch
 
-Choose the mode from the arguments, in this order:
+Choose the mode from the arguments, in this order (a study never mixes
+browsers: the report compares only runs with the same browser config):
 
 1. **`browser=chrome`**: the whole study runs sequentially in Claude in
    Chrome. Warn once: it uses the user's real browser profile (their
@@ -93,12 +95,21 @@ Choose the mode from the arguments, in this order:
    the `validation` skill once, then dispatch `feature-validator` agents one
    at a time, each with the prompt "Claim and execute Archetype run
    `<run_id>`. Your browser is `chrome`."
-2. **`watch=live`**: headed Playwright, two at a time, on servers
+2. **`unattended`** (the user is going to walk away, or CI): call
+   `dispatch_study` with the study id and `parallel` (default 2, at most
+   4). It shows the run count and a time and quota estimate; ask the user,
+   then call it again with `confirm: true`. The swarm runner starts one
+   `claude -p` worker per run, each on its own headless browser, and runs
+   the next wave by itself when one finishes. Poll `study_status` every 60
+   seconds and report progress in one line each time; when it says the
+   runner finished and the backend has no more waves, go to step 8. Never
+   confirm on the user's behalf.
+3. **`watch=live`**: headed Playwright, two at a time, on servers
    `archetype-watch-1` and `archetype-watch-2`.
-3. **Default**: headless isolated Playwright, up to 4 at a time (or
+4. **Default**: headless isolated Playwright, up to 4 at a time (or
    `parallel=`), on servers `archetype-browser-1` to `archetype-browser-4`.
 
-For 2 and 3: dispatch one `feature-validator-headless` agent per run in the
+For 3 and 4: dispatch one `feature-validator-headless` agent per run in the
 wave's order, in the background, each with exactly this prompt and nothing
 else: "Claim and execute Archetype run `<run_id>`. Your browser is
 `<server>`: use only the `mcp__plugin_archetype_<server>__browser_*`
