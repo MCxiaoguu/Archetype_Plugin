@@ -29,8 +29,6 @@ export const RUN_SIZES: Record<RunSize, { mode: 'ofat_stress'; archetypeBudget: 
   thorough: { mode: 'ofat_stress', archetypeBudget: 6, repeatPolicy: 'confirm', label: 'Thorough', detail: 'About 8 to 12 tries, repeats where results disagree' },
 };
 
-export const PROTOTYPE_NOTE =
-  'This is a clickable Figma prototype, not a live product: only hotspots respond, fields may not accept typing, and nothing is saved.';
 
 export type FormField = 'start' | 'goal' | 'goalText' | 'who' | 'product' | 'link' | 'flow';
 export type FormErrors = Partial<Record<FormField, string>>;
@@ -97,9 +95,15 @@ export interface CreateStudyBody {
   };
 }
 
+/**
+ * The designer's product line, their words only. No note about the prototype
+ * medium: the backend and the actor already know a figma.com/proto target is a
+ * prototype, and such a note made factor identification pick factors about
+ * the prototype tool instead of people (live study, 2026-11-03).
+ */
 export function productDescription(productLine: string): string {
   const line = productLine.replace(/\s+/g, ' ').trim().replace(/[.!\s]+$/, '');
-  return line ? `${clip(line, 3000)}. ${PROTOTYPE_NOTE}` : PROTOTYPE_NOTE;
+  return line ? `${clip(line, 3000)}.` : '';
 }
 
 /** The POST /api/studies body for a Figma prototype study. Call validateForm first. */

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { runPreflight } from '../src/lib/preflight';
-import { EMPTY_FORM, PROTOTYPE_NOTE, buildStudyRequest, clip, icpLabel, productDescription, validateForm, type StudyForm } from '../src/lib/study';
+import { EMPTY_FORM, buildStudyRequest, clip, icpLabel, productDescription, validateForm, type StudyForm } from '../src/lib/study';
 import { fixtureDoc } from './helpers';
 
 const KEY = 'AbCdEfGh1234567890XyZ';
@@ -36,7 +36,7 @@ describe('study request', () => {
         checks: [{ type: 'frame_reached', value: '2:50', required: true, rationale: 'The prototype shows the goal frame' }],
       },
       context: {
-        productDescription: `Invoicing for small B2B teams. ${PROTOTYPE_NOTE}`,
+        productDescription: 'Invoicing for small B2B teams.',
         keyFeatures: ['Dashboard', 'Billing settings', 'Connect bank', 'Verify phone', 'Bank connected'],
       },
       design: { mode: 'ofat_stress', archetypeBudget: 5, repeatPolicy: 'explore' },
@@ -75,8 +75,10 @@ describe('study request', () => {
   });
 
   it('describes the prototype even without a product line', () => {
-    expect(productDescription('')).toBe(PROTOTYPE_NOTE);
-    expect(productDescription('Supplies for offices!!')).toBe(`Supplies for offices. ${PROTOTYPE_NOTE}`);
+    expect(productDescription('')).toBe('');
+    expect(productDescription('Supplies for offices!!')).toBe('Supplies for offices.');
+    // No note about the prototype medium: it skewed factor identification.
+    expect(productDescription('A quit smoking app')).not.toMatch(/prototype/i);
   });
 });
 
