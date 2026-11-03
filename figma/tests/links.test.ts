@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildProtoUrl, checkShareLink, globMatches, goalUrlGlob, parseFigmaLink, slugify } from '../src/lib/links';
+import { buildProtoUrl, checkShareLink, parseFigmaLink, slugify } from '../src/lib/links';
 
 const KEY = 'vKlEYIkcpOjpLLNpAIOY6F';
 
@@ -60,20 +60,4 @@ describe('prototype URL', () => {
     expect(slugify('a'.repeat(100))).toHaveLength(60);
   });
 
-  it('builds a goal glob that matches only the goal frame', () => {
-    const glob = goalUrlGlob('71:616');
-    expect(glob).toBe('*node-id=71-616&*');
-    const at = (dash: string) => `https://www.figma.com/proto/${KEY}/x?node-id=${dash}&starting-point-node-id=1%3A3&scaling=scale-down`;
-    expect(globMatches(glob, at('71-616'))).toBe(true);
-    expect(globMatches(glob, at('71-6160'))).toBe(false);
-    expect(globMatches(glob, at('171-616'))).toBe(false);
-    expect(globMatches(glob, at('1-3'))).toBe(false);
-  });
-
-  it('matches the backend glob rules', () => {
-    expect(globMatches('*/settings*', 'https://x.dev/settings/billing')).toBe(true);
-    expect(globMatches('SETTINGS', 'https://x.dev/settings')).toBe(true);
-    expect(globMatches('a?c', 'abc')).toBe(true);
-    expect(globMatches('a.c', 'abc')).toBe(false);
-  });
 });

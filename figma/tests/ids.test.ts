@@ -33,6 +33,9 @@ describe('node id conversions', () => {
   it('reads node-id from prototype URLs', () => {
     expect(nodeIdFromUrl('https://www.figma.com/proto/KEY/x?node-id=71-616&starting-point-node-id=1%3A3')).toBe('71:616');
     expect(nodeIdFromUrl('https://www.figma.com/proto/KEY/x?node-id=71%3A616')).toBe('71:616');
+    // The viewer sometimes ends the URL right after node-id (seen on real runs).
+    expect(nodeIdFromUrl('https://www.figma.com/proto/vKlEYIkcpOjpLLNpAIOY6F/HCI-first-prototype?node-id=82-192')).toBe('82:192');
+    expect(nodeIdFromUrl('https://www.figma.com/proto/vKlEYIkcpOjpLLNpAIOY6F/HCI-first-prototype')).toBeNull();
     expect(nodeIdFromUrl('https://www.figma.com/proto/KEY/x?starting-point-node-id=1%3A3')).toBeNull();
     expect(nodeIdFromUrl('https://www.figma.com/proto/KEY/x?node-id=nope')).toBeNull();
     expect(nodeIdFromUrl('not a url')).toBeNull();

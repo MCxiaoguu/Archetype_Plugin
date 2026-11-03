@@ -90,9 +90,9 @@ export function slugify(name: string): string {
 }
 
 /**
- * The prototype share link the runner opens. `node-id` comes first and
- * `starting-point-node-id` second, as Figma writes them, so the success
- * check glob `*node-id=<goal>&*` can anchor on the `&`.
+ * The prototype share link the runner opens, written the way Figma writes
+ * it: `node-id` (dash form) first, then `starting-point-node-id` (colon form,
+ * URL encoded), then `scaling`.
  */
 export function buildProtoUrl(fileKey: string, startNodeId: string, fileName: string): string {
   const dash = toDashId(startNodeId);
@@ -101,27 +101,4 @@ export function buildProtoUrl(fileKey: string, startNodeId: string, fileName: st
     `https://www.figma.com/proto/${fileKey}/${slugify(fileName)}` +
     `?node-id=${dash}&starting-point-node-id=${encodeURIComponent(colon)}&scaling=scale-down`
   );
-}
-
-/** The success check value for "the prototype shows the goal frame". */
-export function goalUrlGlob(goalNodeId: string): string {
-  return `*node-id=${toDashId(goalNodeId)}&*`;
-}
-
-/**
- * The same glob semantics as the backend's `url_matches` check (case
- * insensitive, `*` any run, `?` one character, full URL).
- */
-export function globMatches(pattern: string, url: string): boolean {
-  if (!/[*?]/.test(pattern)) return url.toLowerCase().includes(pattern.toLowerCase());
-  const re = new RegExp(
-    '^' +
-      pattern
-        .split('')
-        .map((ch) => (ch === '*' ? '.*' : ch === '?' ? '.' : ch.replace(/[.+^${}()|[\]\\]/g, '\\$&')))
-        .join('') +
-      '$',
-    'is',
-  );
-  return re.test(url);
 }

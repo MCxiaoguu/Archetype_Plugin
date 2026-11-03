@@ -33,7 +33,7 @@ describe('study request', () => {
       },
       success: {
         criterion: 'Reaches the "Bank connected" screen',
-        checks: [{ type: 'url_matches', value: '*node-id=2-50&*', required: true, rationale: 'The prototype shows the goal frame' }],
+        checks: [{ type: 'frame_reached', value: '2:50', required: true, rationale: 'The prototype shows the goal frame' }],
       },
       context: {
         productDescription: `Invoicing for small B2B teams. ${PROTOTYPE_NOTE}`,
@@ -64,6 +64,14 @@ describe('study request', () => {
   it('refuses to build without a valid link or frames', () => {
     expect(() => buildStudyRequest({ ...form, link: 'nope' }, { doc, preflight, pluginVersion: '0', knownFileKey: null })).toThrow();
     expect(() => buildStudyRequest({ ...form, goalId: null }, { doc, preflight, pluginVersion: '0', knownFileKey: null })).toThrow();
+  });
+
+  it('clips the Figma fields to the backend limits', () => {
+    const d = fixtureDoc();
+    d.flowStarts = [{ nodeId: '1:2', name: 'F'.repeat(150) }];
+    const body = buildStudyRequest(form, { doc: d, preflight, pluginVersion: '1.2.3-beta.4567890123456', knownFileKey: null });
+    expect(body.figma.flowName?.length).toBe(120);
+    expect(body.figma.pluginVersion.length).toBe(20);
   });
 
   it('describes the prototype even without a product line', () => {

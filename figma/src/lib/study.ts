@@ -1,4 +1,4 @@
-import { buildProtoUrl, checkShareLink, goalUrlGlob, LINK_PROBLEM_TEXT } from './links';
+import { buildProtoUrl, checkShareLink, LINK_PROBLEM_TEXT } from './links';
 import type { Preflight } from './preflight';
 import type { DocSnapshot } from './types';
 
@@ -82,7 +82,7 @@ export interface CreateStudyBody {
   task: { goal: string; url: string; preconditions: string[] };
   success: {
     criterion: string;
-    checks: { type: 'url_matches'; value: string; required: true; rationale: string }[];
+    checks: { type: 'frame_reached'; value: string; required: true; rationale: string }[];
   };
   context: { productDescription: string; keyFeatures: string[] };
   design: { mode: 'ofat_stress'; archetypeBudget: number; repeatPolicy: 'explore' | 'confirm' };
@@ -125,8 +125,11 @@ export function buildStudyRequest(form: StudyForm, ctx: StudyContext): CreateStu
       criterion: clip(`Reaches the "${goalName}" screen`, 500),
       checks: [
         {
-          type: 'url_matches',
-          value: goalUrlGlob(form.goalId),
+          // Met when a step URL's node-id names the goal frame exactly. A
+          // url_matches glob cannot do this: the viewer's URL sometimes ends
+          // right after node-id and sometimes carries more parameters.
+          type: 'frame_reached',
+          value: form.goalId,
           required: true,
           rationale: 'The prototype shows the goal frame',
         },
@@ -143,8 +146,8 @@ export function buildStudyRequest(form: StudyForm, ctx: StudyContext): CreateStu
       fileKey: link.link.fileKey,
       startNodeId: form.startId,
       targetNodeId: form.goalId,
-      flowName: flow ? flow.name : null,
-      pluginVersion: ctx.pluginVersion,
+      flowName: flow ? clip(flow.name, 120) : null,
+      pluginVersion: ctx.pluginVersion.slice(0, 20),
     },
   };
 }
