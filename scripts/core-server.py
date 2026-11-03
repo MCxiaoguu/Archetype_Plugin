@@ -3355,7 +3355,11 @@ def handle_dispatch_study(arguments: dict[str, Any]) -> dict[str, Any]:
             "No queued runs to dispatch. Create them with create_study_runs, or "
             "ask for the next wave with next_study_wave."
         )
-    estimate = _estimate(len(runs), parallel)
+    budget = _int_or(arguments.get("max_runs"), 0)
+    estimate = _estimate(min(len(runs), budget) if budget > 0 else len(runs), parallel)
+    if budget > 0:
+        estimate += (f"; at most {budget} actor run(s) in all, waves included (a larger next wave runs its "
+                     "highest priority runs and the rest are recorded as not run)")
     if not arguments.get("confirm"):
         return tool_text(
             f"Ready to run {len(runs)} queued run(s) unattended, {parallel} at a time.\n"
@@ -3377,6 +3381,10 @@ def handle_dispatch_study(arguments: dict[str, Any]) -> dict[str, Any]:
     ]
     if arguments.get("model"):
         cmd += ["--model", str(arguments["model"])]
+    if _int_or(arguments.get("max_runs"), 0) > 0:
+        cmd += ["--max-runs", str(_int_or(arguments.get("max_runs"), 0))]
+    if _int_or(arguments.get("stall_minutes"), 0) > 0:
+        cmd += ["--stall-min", str(_int_or(arguments.get("stall_minutes"), 0))]
     try:
         with (folder / "runner.log").open("a") as runner_log:
             proc = subprocess.Popen(cmd, stdout=runner_log, stderr=subprocess.STDOUT,
@@ -4405,6 +4413,11 @@ TOOLS: dict[str, dict[str, Any]] = {
             "parallel": {"type": "integer", "minimum": 1, "maximum": 4},
             "model": {"type": "string", "description": "Optional model for the workers."},
             "timeout_minutes": {"type": "integer", "description": "Per run limit, default 30."},
+            "max_runs": {"type": "integer", "minimum": 1,
+                         "description": "Start at most this many actor runs in all, next waves included; "
+                                        "the rest are recorded as not run (aborted with the budget reason)."},
+            "stall_minutes": {"type": "integer", "minimum": 1,
+                              "description": "Stop a worker that logged no step for this long after its claim (default 20)."},
             "confirm": {"type": "boolean", "description": "true only after the user agreed to the estimate."}},
             "required": ["study_id"]},
         "handler": handle_dispatch_study,

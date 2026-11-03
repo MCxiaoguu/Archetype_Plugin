@@ -26,8 +26,18 @@ When the queue is empty the runner asks the backend for the next wave
 done. A file named `stop` in the study folder stops new workers from
 starting. Stdlib only.
 
+Orphans never hold up a study: when a worker exits (or times out) while
+its run is still queued or running on the backend, and when a worker has
+logged no step for --stall-min minutes after claiming, the runner stops
+it and reports the run as aborted with the reason (the report lists it as
+excluded, the next wave proceeds). --max-runs caps how many workers this
+runner starts: a next wave larger than what is left runs its highest
+priority runs (archetypes whose outcome disagreed with the baseline
+first) and the rest are aborted with a budget reason.
+
 Usage: study_runner.py --study ID --data-dir DIR --backend URL [--runs a,b]
                        [--parallel 2] [--model M] [--timeout-min 30]
+                       [--stall-min 20] [--max-runs N]
                        [--no-next-wave] [--dry-run]
 """
 
@@ -53,6 +63,7 @@ SHADOW_PARTS = (".claude-plugin", "agents", "skills", "scripts", "hooks", "brows
 MAX_PARALLEL = 4  # one plugin browser server per worker: archetype-browser-1 to -4
 NEXT_WAVE_WAIT = float(os.environ.get("ARCHETYPE_RUNNER_WAVE_WAIT", "30"))
 NEXT_WAVE_TRIES = 20
+WATCH_EVERY = float(os.environ.get("ARCHETYPE_RUNNER_WATCH_S", "30"))
 _ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 
@@ -119,6 +130,41 @@ def claude_args(claude: str, prompt: str, plugin_dir: Path, model: str | None) -
     return args + (["--model", model] if model else [])
 
 
+def prioritized(wave: dict[str, Any]) -> list[str]:
+    """A next wave's run ids, highest priority first: archetypes whose
+    outcome disagreed with the baseline majority, then frustration, then
+    steps or abandonment; the backend's interleaved order within a rank."""
+    def rank(reason: str) -> int:
+        reason = reason or ""
+        if "complete" in reason:
+            return 0
+        if "frustration" in reason:
+            return 1
+        return 2
+    ranks = {str(r.get("archetypeId")): rank(str(r.get("reason"))) for r in wave.get("reasons") or []
+             if isinstance(r, dict)}
+    runs = [r for r in wave.get("runs") or [] if isinstance(r, dict) and r.get("runId")]
+    order = sorted(range(len(runs)), key=lambda i: (ranks.get(str(runs[i].get("archetypeId")), 3), i))
+    return [runs[i]["runId"] for i in order]
+
+
+def log_steps(stream: Path) -> int:
+    """How many log_step calls a worker's stream shows so far."""
+    try:
+        text = stream.read_text(errors="replace")
+    except OSError:
+        return 0
+    return len(re.findall(r'"name":\s*"mcp__plugin_archetype_core__log_step"', text))
+
+
+def claimed(stream: Path) -> bool:
+    try:
+        text = stream.read_text(errors="replace")
+    except OSError:
+        return False
+    return "mcp__plugin_archetype_core__start_run" in text
+
+
 class Runner:
     def __init__(self, opts: argparse.Namespace) -> None:
         self.opts = opts
@@ -135,6 +181,8 @@ class Runner:
             "parallel": len(self.free_slots), "started_at": time.time(), "waves": [], "workers": {},
         }
         self.shadow: Path | None = None
+        self.started = 0
+        self.stalled: set[str] = set()
 
     # ---- status ----
 
@@ -150,6 +198,50 @@ class Runner:
         self.save()
 
     # ---- backend ----
+
+    def get(self, path: str) -> tuple[int, dict[str, Any]]:
+        return self.request("GET", path, None)
+
+    def request(self, method: str, path: str, body: dict[str, Any] | None) -> tuple[int, dict[str, Any]]:
+        token = self.token()
+        req = urllib.request.Request(
+            f"{self.opts.backend.rstrip('/')}{path}", method=method,
+            data=json.dumps(body).encode() if body is not None else None,
+            headers={"Content-Type": "application/json", "Accept": "application/json",
+                     "User-Agent": "archetype-claude-plugin/study-runner",
+                     **({"Authorization": f"Bearer {token}"} if token else {})},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                return resp.status, json.loads(resp.read().decode() or "{}")
+        except urllib.error.HTTPError as exc:
+            try:
+                return exc.code, json.loads(exc.read().decode() or "{}")
+            except ValueError:
+                return exc.code, {}
+        except Exception as exc:
+            return 0, {"error": "network_error", "message": str(exc)}
+
+    def run_row(self, run_id: str) -> dict[str, Any] | None:
+        status, body = self.get(f"/api/studies/{self.opts.study}/runs")
+        if status != 200:
+            return None
+        return next((r for r in body.get("runs") or [] if isinstance(r, dict) and r.get("runId") == run_id), None)
+
+    def abort(self, run_id: str, reason: str) -> bool:
+        """Report a run the runner gave up on as aborted, with the reason, so
+        the wave can finish. Only runs still queued or running."""
+        row = self.run_row(run_id)
+        if not row or row.get("status") not in ("queued", "running") or not row.get("sessionId"):
+            return False
+        status, body = self.request("POST", f"/api/plugin/runs/{run_id}/results", {
+            "status": "aborted", "steps": [], "sessionId": row["sessionId"], "abortReason": reason,
+            "feedback": {"verdict": "fail", "summary": f"Aborted by the swarm runner: {reason}."},
+        })
+        ok = 200 <= status < 300
+        log(f"run {run_id} aborted ({reason}): {'ok' if ok else f'{status} ' + str(body.get('message'))}")
+        self.worker(run_id, aborted=reason if ok else None)
+        return ok
 
     def token(self) -> str | None:
         try:
@@ -190,7 +282,7 @@ class Runner:
             if body.get("done"):
                 log(f"no more waves: {body.get('reason') or 'done'}")
                 return None
-            runs = [r.get("runId") for r in body.get("runs") or [] if isinstance(r, dict)]
+            runs = prioritized(body)
             self.status["waves"].append({"wave": body.get("wave"), "runs": runs})
             return [r for r in runs if isinstance(r, str) and _ID.match(r)]
         return None
@@ -214,22 +306,51 @@ class Runner:
                                          stdin=subprocess.DEVNULL, start_new_session=True)
                 with self.lock:
                     self.children[run_id] = child
-                try:
-                    code = child.wait(timeout=self.opts.timeout_min * 60)
-                except subprocess.TimeoutExpired:
-                    timed_out = True
-                    self.kill(child)
-                    code = child.wait()
+                code = self.watch(run_id, child, run_dir / "stream.jsonl")
+                timed_out = code == "timeout"
+                if timed_out:
+                    code = child.returncode
         except OSError as exc:
             log(f"could not start claude for {run_id}: {exc}")
             code = None
         finally:
             with self.lock:
                 self.children.pop(run_id, None)
-        state = "timed_out" if timed_out else "finished" if code == 0 else "failed"
+        stalled = run_id in self.stalled
+        state = "stalled" if stalled else "timed_out" if timed_out else "finished" if code == 0 else "failed"
         self.worker(run_id, state=state, exit_code=code, finished_at=time.time(),
                     stream_events=self._count_lines(run_dir / "stream.jsonl"))
         log(f"run {run_id} {state} (exit {code})")
+        # A worker that is gone while its run is still open would hold the
+        # next wave forever: report the run as aborted, with why.
+        reason = (f"claimed but no step for {self.opts.stall_min:g} minutes" if stalled
+                  else f"worker timed out after {self.opts.timeout_min:g} minutes" if timed_out
+                  else "worker exited without reporting")
+        self.abort(run_id, reason)
+
+    def watch(self, run_id: str, child: subprocess.Popen, stream: Path) -> Any:
+        """Wait for a worker; stop it when it times out or stalls after its claim."""
+        started = time.monotonic()
+        last_steps, last_change = -1, time.monotonic()
+        while True:
+            try:
+                return child.wait(timeout=min(WATCH_EVERY, max(self.opts.timeout_min * 60 - (time.monotonic() - started), 0.1)))
+            except subprocess.TimeoutExpired:
+                pass
+            now = time.monotonic()
+            if now - started >= self.opts.timeout_min * 60:
+                self.kill(child)
+                child.wait()
+                return "timeout"
+            steps = log_steps(stream)
+            if steps != last_steps:
+                last_steps, last_change = steps, now
+            elif claimed(stream) and now - last_change >= self.opts.stall_min * 60:
+                log(f"run {run_id}: no step for {self.opts.stall_min:g} min after the claim; stopping its worker")
+                self.stalled.add(run_id)
+                self.kill(child)
+                child.wait()
+                return child.returncode
 
     @staticmethod
     def _count_lines(path: Path) -> int:
@@ -258,6 +379,11 @@ class Runner:
             stop = (self.folder / "stop").exists()
             while self.queue and self.free_slots and not stop:
                 run_id = self.queue.pop(0)
+                if self.opts.max_runs and self.started >= self.opts.max_runs:
+                    self.worker(run_id, state="not_started")
+                    self.abort(run_id, f"not run: the run budget of {self.opts.max_runs} was spent")
+                    continue
+                self.started += 1
                 slot = self.free_slots.pop(0)
 
                 def go(rid: str = run_id, s: int = slot) -> None:
@@ -323,7 +449,8 @@ class Runner:
         self.status["state"] = "finished"
         self.status["finished_at"] = time.time()
         self.status["summary"] = {s: sum(1 for w in workers if w.get("state") == s)
-                                  for s in ("finished", "failed", "timed_out", "not_started")}
+                                  for s in ("finished", "failed", "timed_out", "stalled", "not_started")}
+        self.status["summary"]["aborted"] = sum(1 for w in workers if w.get("aborted"))
         self.save()
         log(f"done: {self.status['summary']}")
         return 0
@@ -338,6 +465,9 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--parallel", type=int, default=2)
     parser.add_argument("--model")
     parser.add_argument("--timeout-min", type=float, default=30)
+    parser.add_argument("--stall-min", type=float, default=20,
+                        help="stop a worker that logged no step for this long after claiming its run")
+    parser.add_argument("--max-runs", type=int, default=0, help="start at most this many workers (0: no cap)")
     parser.add_argument("--claude", default=os.environ.get("ARCHETYPE_CLAUDE_BIN", "claude"))
     parser.add_argument("--no-next-wave", action="store_true")
     parser.add_argument("--dry-run", action="store_true")

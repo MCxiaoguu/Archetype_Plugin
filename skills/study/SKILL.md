@@ -48,6 +48,7 @@ does, into:
 | `watch=live` | off: headless |
 | `browser=chrome` | off: isolated Playwright |
 | `unattended` | off: actors run as subagents in this session. On: no questions and no confirmations (see "Unattended mode"), swarm runner |
+| `max_runs=N` | none. With `unattended`: passed to `dispatch_study` as `max_runs`, the most actor runs the study may start, waves included (a larger wave 2 runs its highest priority runs; the rest are recorded as not run) |
 | `model=` | none: the workers' default model. With `unattended`, passed to `dispatch_study` for the actor workers (for example `sonnet`) |
 | `questions="...;..."` | none |
 | `factors=key,key,...` | none: the backend's selection. When given, select exactly these factor keys in this order after `generate_factors` (one `update_factors` call) instead of asking |
@@ -82,8 +83,8 @@ whole study by typing it, so this mode asks nothing and confirms nothing.
   `study_id` and `confirm_checks: true`) unless `success_checks` were given.
 - Step 3: `factors=` is applied; otherwise the backend's selection stands.
 - Step 4: the archetypes stand. Steps 5 and 6: create the runs, then call
-  `dispatch_study` once with `confirm: true`, `parallel` (default 2) and
-  `model` when given.
+  `dispatch_study` once with `confirm: true`, `parallel` (default 2), and
+  `model` and `max_runs` when given.
 - Waiting: call `study_status` with `wait_seconds: 300` again and again (it
   returns early when a run finishes) and print one progress line each time,
   until it says the swarm runner finished and every run is terminal. Then
