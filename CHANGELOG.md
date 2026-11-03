@@ -28,6 +28,15 @@ All notable changes to the Archetype plugin. Versions follow
   Playwright's bundled Chromium; with neither, the first browser call says
   to run `npx playwright install chromium`. The recorded browser config
   names the engine that ran.
+- The swarm runner reports a run whose worker exited, timed out or logged no
+  step for 20 minutes after its claim as aborted with the reason, so the
+  next wave is never held up, and `max_runs` caps a study's actor runs (a
+  larger wave 2 runs its highest priority runs; the rest are recorded as
+  not run).
+- Quit reason `trust_refused` for a person who leaves out of distrust (a
+  broken promise, an unexplained card request); `price_barrier` stays for
+  the price itself. The report shows why each archetype left, the variance
+  of repeated runs and whether the archetypes were written by a model.
 - Protocol v2 for the actor: `log_step` after every browser action, with
   `client_ts` and `elapsed_s`, a 15 second budget, a local buffer and a
   local state when the backend is slow. The answer carries the step

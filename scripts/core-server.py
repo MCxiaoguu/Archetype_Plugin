@@ -1220,8 +1220,16 @@ _CHECK_WORDS = {
 # results protocol v2). A briefing that lists its own
 # (reporting.quitReasons) wins over this default.
 QUIT_REASONS = (
-    "price_barrier", "confusion", "feature_not_found", "goal_completed",
+    "price_barrier", "trust_refused", "confusion", "feature_not_found", "goal_completed",
     "frustration", "technical_error", "distraction", "other",
+)
+
+# When to choose which, for the actor (briefing and agent files agree).
+QUIT_REASON_GUIDE = (
+    "Choose trust_refused when you leave because you do not trust the site: "
+    "a broken promise (it said no card, then asked for one), an unexplained "
+    "card request, or a data request you are not comfortable with. Choose "
+    "price_barrier only when the price itself is the objection."
 )
 
 
@@ -1389,7 +1397,7 @@ def _render_run(body: dict[str, Any], preconditions: list[str] | None = None) ->
             "evidence?{url?,selector?,quote?}}], personaReaction}. status "
             "abandoned means you, as this person, gave up: set outcome.completed "
             "false, the quit_reason, the step you left at and why in your own "
-            "words. evidence is optional per finding: the page url, a selector "
+            f"words. {QUIT_REASON_GUIDE} evidence is optional per finding: the page url, a selector "
             "or role plus name for the element, and the exact on-screen text "
             "you are reporting (quote up to 1000 characters)."
         )
@@ -3347,7 +3355,11 @@ def handle_dispatch_study(arguments: dict[str, Any]) -> dict[str, Any]:
             "No queued runs to dispatch. Create them with create_study_runs, or "
             "ask for the next wave with next_study_wave."
         )
-    estimate = _estimate(len(runs), parallel)
+    budget = _int_or(arguments.get("max_runs"), 0)
+    estimate = _estimate(min(len(runs), budget) if budget > 0 else len(runs), parallel)
+    if budget > 0:
+        estimate += (f"; at most {budget} actor run(s) in all, waves included (a larger next wave runs its "
+                     "highest priority runs and the rest are recorded as not run)")
     if not arguments.get("confirm"):
         return tool_text(
             f"Ready to run {len(runs)} queued run(s) unattended, {parallel} at a time.\n"
@@ -3369,6 +3381,10 @@ def handle_dispatch_study(arguments: dict[str, Any]) -> dict[str, Any]:
     ]
     if arguments.get("model"):
         cmd += ["--model", str(arguments["model"])]
+    if _int_or(arguments.get("max_runs"), 0) > 0:
+        cmd += ["--max-runs", str(_int_or(arguments.get("max_runs"), 0))]
+    if _int_or(arguments.get("stall_minutes"), 0) > 0:
+        cmd += ["--stall-min", str(_int_or(arguments.get("stall_minutes"), 0))]
     try:
         with (folder / "runner.log").open("a") as runner_log:
             proc = subprocess.Popen(cmd, stdout=runner_log, stderr=subprocess.STDOUT,
@@ -3617,6 +3633,25 @@ def _render_study_report(report: dict[str, Any], study_id: str) -> str:
                 f"{frustration if frustration is not None else '?'} |"
             )
 
+    reasons = []
+    for a in archetypes:
+        q = a.get("quitReasons") if isinstance(a.get("quitReasons"), dict) else {}
+        if q:
+            reasons.append(f"{_clip(a.get('name'), 50)}: " + ", ".join(f"{_clip(k, 30)} {v}" for k, v in q.items()))
+    if reasons:
+        lines.append("\nWhy they left: " + "; ".join(reasons))
+    spread = []
+    for a in archetypes:
+        v = a.get("variance") if isinstance(a.get("variance"), dict) else {}
+        if v.get("varianceRuns"):
+            def rng(x: Any) -> str:
+                return f"{x.get('min')} to {x.get('max')}" if isinstance(x, dict) else "?"
+            spread.append(f"{_clip(a.get('name'), 50)}: {v.get('completed', '?')} of {v.get('n', '?')} completed "
+                          f"({v['varianceRuns']} variance run(s)), frustration {rng(v.get('frustrationScore'))}, "
+                          f"steps {rng(v.get('steps'))}")
+    if spread:
+        lines.append("Variance between repeats: " + "; ".join(spread))
+
     impacts = [f for f in (report.get("factorImpact") or []) if isinstance(f, dict)]
     if impacts:
         lines += ["", "Factor impact (risk pole against the baseline):", "",
@@ -3706,6 +3741,10 @@ def _render_study_report(report: dict[str, Any], study_id: str) -> str:
             bits.append(f"{browser['excludedRuns']} run(s) on another browser config excluded")
     elif isinstance(browser, str):
         bits.append(f"browser {browser}")
+    generator = honesty.get("generator")
+    if generator:
+        bits.append({"model": "archetypes written by a model", "template": "archetypes from templates (no model answered)",
+                     "mixed": "archetypes mix model and template generation"}.get(str(generator), f"archetypes: {generator}"))
     integrity = honesty.get("integrity") or {}
     share = integrity.get("unverifiedShare") if isinstance(integrity, dict) else None
     if isinstance(share, (int, float)) and not isinstance(share, bool):
@@ -4397,6 +4436,11 @@ TOOLS: dict[str, dict[str, Any]] = {
             "parallel": {"type": "integer", "minimum": 1, "maximum": 4},
             "model": {"type": "string", "description": "Optional model for the workers."},
             "timeout_minutes": {"type": "integer", "description": "Per run limit, default 30."},
+            "max_runs": {"type": "integer", "minimum": 1,
+                         "description": "Start at most this many actor runs in all, next waves included; "
+                                        "the rest are recorded as not run (aborted with the budget reason)."},
+            "stall_minutes": {"type": "integer", "minimum": 1,
+                              "description": "Stop a worker that logged no step for this long after its claim (default 20)."},
             "confirm": {"type": "boolean", "description": "true only after the user agreed to the estimate."}},
             "required": ["study_id"]},
         "handler": handle_dispatch_study,
