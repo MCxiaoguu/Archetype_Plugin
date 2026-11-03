@@ -82,8 +82,8 @@ Call `generate_factors`. Show the table (factor, why it matters here, risk
 pole, typical level) and ask once: "Use these N factors, or edit?" Edits go
 through `update_factors` (select or deselect by key, rename, flip the risk
 pole, set the typical level, reorder). With `factors=`, apply that
-selection with one `update_factors` call (select the named keys, deselect
-the others, `order` as given) and show the result instead of asking; a key
+selection with one `update_factors` call with `only: [keys]` (it selects
+those keys in that order and deselects every other factor) and show the result instead of asking; a key
 the backend did not offer is reported, not invented. A note that factors were chosen
 without a model means the backend used its default three: say so.
 

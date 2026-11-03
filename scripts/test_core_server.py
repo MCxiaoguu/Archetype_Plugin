@@ -2612,6 +2612,23 @@ def case_62_update_factors(srv: ServerProc, data_dir: Path) -> None:
     expect(empty.get("isError") is True, "nothing to update is refused")
 
 
+def case_62b_update_factors_only(srv: ServerProc, data_dir: Path) -> None:
+    write_auth(data_dir)
+    STATE.once_overrides[f"/api/studies/{STUDY_ID}"] = (200, dict(STUDY_RESPONSE, factorSpec=FACTORS_RESPONSE["factorSpec"]))
+    call_tool(srv, "update_factors", {"study_id": STUDY_ID, "only": ["patience", "technical_proficiency"]})
+    req = STATE.last_for("/factors")
+    expect(req["method"] == "PATCH", "one PATCH")
+    expect(req["body"]["factors"] == [{"key": "trust_willingness_to_share", "selected": False},
+                                      {"key": "patience", "selected": True},
+                                      {"key": "technical_proficiency", "selected": True}], f"every factor set: {req['body']}")
+    expect(req["body"]["order"] == ["patience", "technical_proficiency"], "order as given")
+    STATE.once_overrides[f"/api/studies/{STUDY_ID}"] = (200, dict(STUDY_RESPONSE, factorSpec=FACTORS_RESPONSE["factorSpec"]))
+    before = len(STATE.requests)
+    bad = call_tool(srv, "update_factors", {"study_id": STUDY_ID, "only": ["patience", "made_up"]})
+    expect(bad.get("isError") is True and "Not factors of this study: made_up" in result_text(bad), "unknown key refused")
+    expect(not any(r["method"] == "PATCH" for r in STATE.requests[before:]), "nothing patched")
+
+
 def case_63_generate_archetypes(srv: ServerProc, data_dir: Path) -> None:
     write_auth(data_dir)
     text = result_text(call_tool(srv, "generate_archetypes", {"study_id": STUDY_ID}))
@@ -2868,6 +2885,7 @@ CASES = [
     ("study report: labels in words, stress, excluded, fencing", case_67_study_report),
     ("study tools on an old backend and with bad ids", case_68_study_tools_on_an_old_backend),
     ("get_study resumes a study at every stage", case_69_get_study_resumes_at_every_stage),
+    ("update_factors only: exactly these factors in one PATCH", case_62b_update_factors_only),
 ]
 
 

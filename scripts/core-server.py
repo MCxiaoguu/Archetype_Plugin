@@ -3072,6 +3072,23 @@ def handle_update_factors(arguments: dict[str, Any]) -> dict[str, Any]:
     for item in arguments.get("factors") or []:
         if isinstance(item, dict) and item.get("key"):
             edits.append({names[k]: v for k, v in item.items() if k in names and v is not None})
+    only = arguments.get("only")
+    if isinstance(only, list) and only:
+        # Exactly these factors, in this order: one PATCH that selects them
+        # and deselects every other factor (factors=a,b,c in the skill).
+        only = [str(k) for k in only]
+        current = _study_call(lambda t: backend_get(f"/api/studies/{study_id}", auth_token=t))
+        if isinstance(current, dict):
+            return current
+        offered = [f.get("key") for f in ((current[1].get("factorSpec") or {}).get("factors") or [])
+                   if isinstance(f, dict) and f.get("key")]
+        unknown = [k for k in only if k not in offered]
+        if unknown:
+            return tool_text(f"Not factors of this study: {', '.join(unknown)}. Offered: {', '.join(offered) or 'none yet (generate_factors first)'}.",
+                             is_error=True)
+        by_key = {e["key"]: e for e in edits}
+        edits = [dict(by_key.get(k, {}), key=k, selected=k in only) for k in offered]
+        arguments = dict(arguments, order=only)
     body: dict[str, Any] = {"factors": edits}
     order = arguments.get("order")
     if isinstance(order, list) and order:
@@ -4181,7 +4198,9 @@ TOOLS: dict[str, dict[str, Any]] = {
                 "icp_typical_level": {"type": "integer", "minimum": 1, "maximum": 5},
                 "why_it_matters_here": {"type": "string"}}, "required": ["key"]}},
             "order": {"type": "array", "items": {"type": "string"},
-                      "description": "Keys moved to the front in this order."}},
+                      "description": "Keys moved to the front in this order."},
+            "only": {"type": "array", "items": {"type": "string"},
+                     "description": "Select exactly these factor keys, in this order, and deselect every other one."}},
             "required": ["study_id"]},
         "handler": handle_update_factors,
     },
