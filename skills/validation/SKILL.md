@@ -188,7 +188,11 @@ For the confirmed run list (one run or many):
    - The computer is unlocked. With the screen locked the extension
      disconnects, and computer use cannot stand in for it: it can watch a
      browser but not drive one.
-   Then offer to retry. One check covers the whole run list.
+   Then offer to retry. One check covers the whole run list. When Chrome
+   is connected, say once, in one line, that the run uses the user's real
+   Chrome profile (their logins, cookies and extensions), so the tester
+   arrives as them rather than as a new visitor; `/archetype:study` runs
+   isolated headless browsers instead.
 
    **Headless fallback.** Chrome is the default because the user can watch
    it. When it is not available, or the user asked for a headless or
