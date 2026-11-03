@@ -22,7 +22,7 @@ What it does:
 
 Usage:
   python3 e2e/relay_study.py --out /tmp/relay-study [--backend http://127.0.0.1:5011]
-        [--relay-port 8331] [--parallel 4] [--model sonnet] [--outer-model sonnet]
+        [--relay-port 8322] [--parallel 4] [--model sonnet] [--outer-model sonnet]
         [--factors patience,trust_willingness_to_share,reading_behavior]
         [--study ID] [--grade-only] [--max-runs 16] [--timeout-min 150]
 
