@@ -63,10 +63,11 @@ the persona's quitting words), noticed (narration only), reached, missed
 (opened the page), not reached. The 2026-08-27 Zwick and Faulkner runs
 above predate studies; regrade any run set to refresh this slide.
 
-Latest generated matrix, study `ed5786ef75884ddf9158becd0ecba690`
-(2026-11-03, `ofat_stress` on patience, trust and reading, repeats
-`confirm`, 7 runs on Sonnet, every run stopped at the card field, so no
-wave 2):
+Generated matrices (2026-11-03, `ofat_stress` on patience, trust and
+reading, repeats `confirm`, actors on Sonnet):
+
+Study `ed5786ef75884ddf9158becd0ecba690`, cold: 7 runs, every one stopped
+at the card field (D1), so no wave 2:
 
 | Planted defect | Pragmatic late-night evaluator | Low patience monitoring | Low trust monitoring | Low reading engagement | Stress: low trust skimmer |
 |---|---|---|---|---|---|
@@ -86,6 +87,50 @@ Defects found by at least one archetype: 2 of 9 (D1, D6).
 - Low trust monitoring: found 1 (D1)
 - Low reading engagement: found 1 (D1)
 - Stress: low trust skimmer: found 2 (D1, D6)
+
+Study `e446743968d545868d47969eef9d892c`, testers arrive with a company
+test card they may use for trials: 9 runs (wave 2 capped by a run budget
+of 9; 2 lower priority runs recorded as not run). The typical engineer now
+reaches the dashboard 3 of 3 times and finds D2, D3, D4 and D6; the low
+trust archetypes still refuse the card (`trust_refused`, 4 of 4). The
+actors also flagged the docs' `localhost:8322` curl example, an artifact
+of serving Relay on another port for this run (the harness now serves it
+on 8322):
+
+| Planted defect | Measured on-call engineer | Impatient senior backend engineer | Guarded senior backend engineer | Skimming night-shift engineer | Stress: wary rushed night-shift engineer |
+|---|---|---|---|---|---|
+| D1 Landing promises "Free forever. No credit card required." but signup r | **found** 3 of 3 | **found** 1 of 1 | **found** 2 of 2 | **found** 1 of 1 | **found** 2 of 2 |
+| D2 Docs quickstart initializes with Relay.init({ token: process.env.RELAY | **found** 3 of 3 | **found** 1 of 1 | not reached | **found** 1 of 1 | not reached |
+| D3 Package-name inconsistency | **found** 3 of 3 | **found** 1 of 1 | not reached | **found** 1 of 1 | not reached |
+| D4 Dashboard empty state is a dead end | **found** 1 of 3 | **found** 1 of 1 | noticed 1 of 2 | noticed 1 of 1 | not reached |
+| D5 Docs search is fake | reached, missed (3 of 3) | reached, missed (1 of 1) | not reached | reached, missed (1 of 1) | not reached |
+| D6 Price inconsistency | **found** 3 of 3 | **found** 1 of 1 | noticed 2 of 2 | **found** 1 of 1 | noticed 1 of 2 |
+| D7 Annual pricing is not self-serve | reached, missed (3 of 3) | reached, missed (1 of 1) | reached, missed (2 of 2) | reached, missed (1 of 1) | reached, missed (1 of 2) |
+| D8 The alert-rule threshold input only accepts the cryptic format >N/Nm ( | reached, missed (3 of 3) | reached, missed (1 of 1) | not reached | reached, missed (1 of 1) | not reached |
+| D9 The notification-channel dropdown offers ONLY "Email" | reached, missed (3 of 3) | reached, missed (1 of 1) | reached, missed (2 of 2) | reached, missed (1 of 1) | reached, missed (2 of 2) |
+
+Defects found by at least one archetype: 5 of 9 (D1, D2, D3, D4, D6).
+- Measured on-call engineer: found 5 (D1, D2, D3, D4, D6)
+- Impatient senior backend engineer: found 5 (D1, D2, D3, D4, D6)
+- Guarded senior backend engineer: found 1 (D1)
+- Skimming night-shift engineer: found 4 (D1, D2, D3, D6)
+- Stress: wary rushed night-shift engineer: found 1 (D1)
+
+Compared with study ed5786ef75884ddf9158becd0ecba690:
+
+| Defect | ed5786ef found | e4467439 found | Change |
+|---|---|---|---|
+| D1 Landing promises "Free forever. No credit card req | 7 of 7 runs | 9 of 9 runs | found in both |
+| D2 Docs quickstart initializes with Relay.init({ toke | 0 of 7 runs | 5 of 9 runs | newly found |
+| D3 Package-name inconsistency | 0 of 7 runs | 5 of 9 runs | newly found |
+| D4 Dashboard empty state is a dead end | 0 of 7 runs | 2 of 9 runs | newly found |
+| D5 Docs search is fake | 0 of 7 runs | 0 of 9 runs | found in neither |
+| D6 Price inconsistency | 2 of 7 runs | 5 of 9 runs | found in both |
+| D7 Annual pricing is not self-serve | 0 of 7 runs | 0 of 9 runs | found in neither |
+| D8 The alert-rule threshold input only accepts the cr | 0 of 7 runs | 0 of 9 runs | found in neither |
+| D9 The notification-channel dropdown offers ONLY "Ema | 0 of 7 runs | 0 of 9 runs | found in neither |
+
+Newly found: D2, D3, D4.
 
 **Credibility beat:** "6 of 7 planted defects found, mapped against a written
 answer key (`GROUND_TRUTH.md`) — plus five *true* findings I hadn't planted

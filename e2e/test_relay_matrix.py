@@ -73,8 +73,10 @@ def case_matrix_and_markdown():
         {"runId": "b", "archetypeName": "Baseline", "role": "baseline", "report": run(urls=["http://x/signup.html"])},
         {"runId": "c", "archetypeName": "Low trust", "role": "variant", "report": run(urls=["http://x/"])},
     ]
+    runs.append({"runId": "d", "archetypeName": "Low trust", "status": "aborted", "report": run()})
     m = rm.build_matrix(defects, runs)
     assert m["archetypes"] == ["Baseline", "Low trust"]
+    assert m["cells"]["D1|Low trust"]["n"] == 1, "aborted runs are not graded"
     assert m["cells"]["D1|Baseline"]["found"] == 1 and m["cells"]["D1|Baseline"]["n"] == 2
     assert m["cells"]["D1|Low trust"]["best"] == "reached"
     md = rm.render_markdown(m)

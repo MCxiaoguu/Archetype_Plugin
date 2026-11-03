@@ -156,6 +156,8 @@ def build_matrix(defects: list[dict[str, Any]], runs: Iterable[dict[str, Any]]) 
     archetypes: list[str] = []
     per_run = []
     for r in runs:
+        if r.get("status") == "aborted" or (r.get("report") or {}).get("status") == "aborted":
+            continue  # never a persona outcome (worker died, or the run budget skipped it)
         name = r.get("archetypeName") or "?"
         if name not in archetypes:
             archetypes.append(name)

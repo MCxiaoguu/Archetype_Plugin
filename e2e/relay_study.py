@@ -207,7 +207,8 @@ def main(argv: list[str]) -> int:
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     p.add_argument("--out", required=True)
     p.add_argument("--backend", default=os.environ.get("ARCHETYPE_BACKEND_URL", "http://127.0.0.1:5011"))
-    p.add_argument("--relay-port", type=int, default=8331)
+    p.add_argument("--relay-port", type=int, default=8322,
+                   help="Relay's own port: its docs show localhost:8322, and another port reads as a docs defect")
     p.add_argument("--parallel", type=int, default=4)
     p.add_argument("--model", default="sonnet", help="actor workers")
     p.add_argument("--outer-model", default="sonnet", help="the orchestrating session")
