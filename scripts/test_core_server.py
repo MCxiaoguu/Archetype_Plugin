@@ -490,7 +490,10 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(raw)))
         self.end_headers()
-        self.wfile.write(raw)
+        try:
+            self.wfile.write(raw)
+        except (BrokenPipeError, ConnectionResetError):
+            pass  # the client gave up first (deadline cases): expected
 
     def do_POST(self):  # noqa: N802
         self._dispatch("POST")
