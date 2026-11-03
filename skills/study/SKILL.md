@@ -47,7 +47,8 @@ does, into:
 | `parallel=1..4` | 4 in session, 2 unattended |
 | `watch=live` | off: headless |
 | `browser=chrome` | off: isolated Playwright |
-| `unattended` | off: actors run as subagents in this session |
+| `unattended` | off: actors run as subagents in this session. On: no questions and no confirmations (see "Unattended mode"), swarm runner |
+| `model=` | none: the workers' default model. With `unattended`, passed to `dispatch_study` for the actor workers (for example `sonnet`) |
 | `questions="...;..."` | none |
 | `factors=key,key,...` | none: the backend's selection. When given, select exactly these factor keys in this order after `generate_factors` (one `update_factors` call) instead of asking |
 | `study=<id>` | resume that study (section 0) |
@@ -68,6 +69,29 @@ archetype), `factorial` (3 factors, 8 archetypes, interactions),
 `half_fraction` (4 factors, 8 archetypes), `composites` (named mixes, no
 attribution). Suggest `factorial` or `half_fraction` only as a follow up to
 a finished study.
+
+### Unattended mode
+
+`unattended` is for a session nobody is watching (`claude -p`, CI, a user
+who walks away). The command line is the consent: the user asked for the
+whole study by typing it, so this mode asks nothing and confirms nothing.
+
+- A missing goal, url, ICP or success criterion: stop with one line naming
+  what is missing (nobody can answer a question). Never invent them.
+- Step 2: a suggested success check is accepted (`create_study` with
+  `study_id` and `confirm_checks: true`) unless `success_checks` were given.
+- Step 3: `factors=` is applied; otherwise the backend's selection stands.
+- Step 4: the archetypes stand. Steps 5 and 6: create the runs, then call
+  `dispatch_study` once with `confirm: true`, `parallel` (default 2) and
+  `model` when given.
+- Waiting: call `study_status` with `wait_seconds: 300` again and again (it
+  returns early when a run finishes) and print one progress line each time,
+  until it says the swarm runner finished and every run is terminal. Then
+  call `next_study_wave` once: it should answer "no more waves" (the runner
+  asked for them); if it creates runs, dispatch them the same way.
+- Step 8 as usual. Print the full report: it is the session's output.
+
+Every other rule still holds: never invent factors, archetypes or results.
 
 ## 2. Create the study
 
@@ -122,7 +146,9 @@ browsers: the report compares only runs with the same browser config):
    the next wave by itself when one finishes. Poll `study_status` every 60
    seconds and report progress in one line each time; when it says the
    runner finished and the backend has no more waves, go to step 8. Never
-   confirm on the user's behalf.
+   confirm on the user's behalf; the one exception is `unattended`, where
+   the command line was the confirmation (see "Unattended mode": call it
+   once with `confirm: true` and wait with `study_status` `wait_seconds`).
 3. **`watch=live`**: headed Playwright, two at a time, on servers
    `archetype-watch-1` and `archetype-watch-2`.
 4. **Default**: headless isolated Playwright, up to 4 at a time (or

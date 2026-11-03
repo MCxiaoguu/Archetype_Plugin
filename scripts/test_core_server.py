@@ -664,6 +664,7 @@ class ServerProc:
         # Neuter webbrowser.open in the login flow: `true` is a no-op command
         # (which the server also treats as "never open a browser").
         env["BROWSER"] = "true"
+        env["ARCHETYPE_STATUS_POLL"] = "0.2"
         env.pop("ARCHETYPE_NO_BROWSER", None)
         env.update(extra_env or {})
         # How this harness answers elicitation/create: "accept" or "decline".
@@ -2771,6 +2772,24 @@ def case_69_get_study_resumes_at_every_stage(srv: ServerProc, data_dir: Path) ->
     expect(bad.get("isError") is True, "id checked locally")
 
 
+def case_66b_study_status_waits_for_a_change(srv: ServerProc, data_dir: Path) -> None:
+    write_auth(data_dir)
+    running = dict(STUDY_STATUS_RESPONSE, runs={"allTerminal": False, "byStatus": {"running": 2, "completed": 3},
+                                               "terminal": 3, "total": 5})
+    STATE.error_overrides["/status"] = (200, running)
+    started = time.monotonic()
+    timer = threading.Timer(0.8, lambda: STATE.error_overrides.pop("/status", None))
+    timer.start()
+    text = result_text(call_tool(srv, "study_status", {"study_id": STUDY_ID, "wait_seconds": 30}))
+    elapsed = time.monotonic() - started
+    contains(text, "Runs: 5 of 5 finished", "answers with the changed state")
+    expect(0.7 < elapsed < 10, f"returned when the state changed, after {elapsed:.1f} s")
+    before = len([r for r in STATE.requests if r["path"].endswith("/status")])
+    call_tool(srv, "study_status", {"study_id": STUDY_ID})
+    after = len([r for r in STATE.requests if r["path"].endswith("/status")])
+    expect(after - before == 1, "no wait without wait_seconds")
+
+
 def case_68_study_tools_on_an_old_backend(srv: ServerProc, data_dir: Path) -> None:
     write_auth(data_dir)
     STATE.error_overrides["/api/studies"] = (404, {"error": "not_found", "message": "no such route"})
@@ -2951,6 +2970,7 @@ CASES = [
     ("next_study_wave: done, not yet, wave 2", case_65_next_study_wave),
     ("study_status counts runs and says what is next", case_66_study_status),
     ("study report: labels in words, stress, excluded, fencing", case_67_study_report),
+    ("study_status wait_seconds returns on the first change", case_66b_study_status_waits_for_a_change),
     ("study tools on an old backend and with bad ids", case_68_study_tools_on_an_old_backend),
     ("dispatch_study shows the estimate and waits for confirm", case_70_dispatch_study_needs_confirm),
     ("dispatch_study runs the swarm: workers, browsers, waves, status", case_71_dispatch_study_runs_the_swarm),

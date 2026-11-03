@@ -2818,6 +2818,9 @@ def _save_pool(
 # Factor and archetype generation run LLM calls server side (archetypes up
 # to ~90 s in parallel); give them the same headroom as run assembly.
 STUDY_TIMEOUT = _env_seconds("ARCHETYPE_STUDY_TIMEOUT", 180)
+# study_status wait_seconds: at most this long per call, polling this often.
+STATUS_MAX_WAIT = 300
+STATUS_POLL = _env_seconds("ARCHETYPE_STATUS_POLL", 10)
 
 DESIGN_MODES = ("ofat_stress", "ofat", "factorial", "half_fraction", "composites")
 REPEAT_POLICIES = ("confirm", "explore", "decide")
@@ -3373,6 +3376,24 @@ def handle_study_status(arguments: dict[str, Any]) -> dict[str, Any]:
     if isinstance(out, dict):
         return out
     resp = out[1]
+    # wait_seconds: block until something changes (a run finishes, the wave
+    # or the swarm runner ends) or the time is up, so an unattended session
+    # (claude -p) can follow a study without a sleep tool.
+    wait = min(max(_int_or(arguments.get("wait_seconds"), 0), 0), STATUS_MAX_WAIT)
+    if wait:
+        def key(r: dict[str, Any]) -> tuple:
+            folder = _study_dir(study_id)
+            runner = _read_json_file(folder / "runner.json" if folder else None)
+            counts = r.get("runs") or {}
+            return (r.get("status"), counts.get("terminal"), counts.get("total"), runner.get("state"))
+
+        start, deadline = key(resp), time.monotonic() + wait
+        while time.monotonic() < deadline and key(resp) == start:
+            time.sleep(min(STATUS_POLL, max(deadline - time.monotonic(), 0)))
+            again = _study_call(lambda t: backend_get(f"/api/studies/{study_id}/status", auth_token=t))
+            if isinstance(again, dict):
+                return again
+            resp = again[1]
     runs = resp.get("runs") or {}
     by_status = runs.get("byStatus") or {}
     order = ("queued", "running", "completed", "abandoned", "failed", "aborted")
@@ -4367,7 +4388,12 @@ TOOLS: dict[str, dict[str, Any]] = {
             "wave, whether it is all finished, and a local swarm runner's "
             "progress when one is working on it."
         ),
-        "schema": {"type": "object", "properties": {"study_id": {"type": "string"}}, "required": ["study_id"]},
+        "schema": {"type": "object", "properties": {
+            "study_id": {"type": "string"},
+            "wait_seconds": {"type": "integer", "minimum": 0, "maximum": STATUS_MAX_WAIT,
+                             "description": "Wait up to this long (at most 300) for a change: a run "
+                                            "finishing, the wave or the swarm runner ending. For unattended sessions."}},
+            "required": ["study_id"]},
         "handler": handle_study_status,
     },
     "get_study": {
