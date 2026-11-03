@@ -145,7 +145,7 @@ export function Progress({ state, fx }: { state: AppState; fx: Effects }) {
       </div>
       <footer class="actionbar">
         <p class="actionbar-note">
-          <IconClock size={12} /> {st.stage === 'watching' ? 'Checking every few seconds while this panel is open' : 'Keep this panel open until the runs start'}
+          <IconClock size={12} /> {st.stage === 'watching' ? 'Updates every few seconds' : 'Keep this panel open for now'}
         </p>
         {st.id && (
           <button type="button" class="btn btn-secondary" onClick={() => fx.openInArchetype()}>

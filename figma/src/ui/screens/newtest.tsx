@@ -30,6 +30,12 @@ function FramePicker(props: {
           {role === 'start' ? <span class="dot dot-start" aria-hidden="true" /> : <IconTarget size={12} />}
           <label for={selId}>{label}</label>
         </span>
+        <span class="pick-actions">
+        {current && (
+          <button type="button" class="link-btn quiet" title={`Show "${current.name}" on the canvas`} onClick={() => toMain({ type: 'show-node', nodeId: current.id })}>
+            Show
+          </button>
+        )}
         <button
           type="button"
           class="link-btn"
@@ -39,6 +45,7 @@ function FramePicker(props: {
         >
           Use selection
         </button>
+        </span>
       </div>
       <select
         id={selId}
@@ -52,11 +59,6 @@ function FramePicker(props: {
           <option value={f.id}>{flowNames.has(f.id) ? `${f.name}  (flow: ${flowNames.get(f.id)})` : f.name}</option>
         ))}
       </select>
-      {current && (
-        <button type="button" class="pick-locate" onClick={() => toMain({ type: 'show-node', nodeId: current.id })}>
-          Show on canvas
-        </button>
-      )}
     </div>
   );
 }

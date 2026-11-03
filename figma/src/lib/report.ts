@@ -213,7 +213,7 @@ export function buildReportView(report: StudyReport, frames: FrameIndex): Report
     for (const f of fv.frames) addPin(f, `${fv.id} ${fv.title} (${fv.severityLabel}, ${fv.hitCount} of ${fv.runCount} tries)`);
   }
   for (const d of dropOff) {
-    if (d.frame) addPin(d.frame, `${d.count} ${d.count === 1 ? 'persona gave up' : 'tries gave up'} here: ${d.personas.join(', ')}`);
+    if (d.frame) addPin(d.frame, `${d.count} ${d.count === 1 ? 'try' : 'tries'} gave up here: ${d.personas.join(', ')}`);
   }
   const pins: Pin[] = [...pinLines.entries()].map(([frameId, p]) => ({
     frameId,

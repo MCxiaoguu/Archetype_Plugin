@@ -101,6 +101,9 @@ export function createEffects(store: Store) {
     const errors = validateForm(s.form, preflight, s.fileKey);
     if (Object.keys(errors).length > 0) {
       store.dispatch({ type: 'notice', notice: { kind: 'error', text: 'A few things need a look before launch.' } });
+      if (typeof document !== 'undefined') {
+        setTimeout(() => (document.querySelector('[aria-invalid="true"]') as HTMLElement | null)?.focus(), 0);
+      }
       return;
     }
     const body = buildStudyRequest(s.form, { doc: s.doc, preflight, pluginVersion: s.pluginVersion, knownFileKey: s.fileKey });

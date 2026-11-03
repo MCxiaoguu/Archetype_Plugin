@@ -29,7 +29,13 @@ export function createStore(initial: AppState = INITIAL_STATE): Store {
 
 export function useStore(store: Store): AppState {
   const [s, set] = useState(store.get());
-  useEffect(() => store.subscribe(set), [store]);
+  useEffect(() => {
+    const off = store.subscribe(set);
+    // Effects run after paint: anything dispatched in between (the main
+    // thread's init can arrive that fast) would otherwise be missed.
+    set(store.get());
+    return off;
+  }, [store]);
   return s;
 }
 

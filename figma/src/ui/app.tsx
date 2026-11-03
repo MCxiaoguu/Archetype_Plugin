@@ -13,6 +13,7 @@ import { SignIn } from './screens/signin';
 import { useStore, type Store } from './store';
 
 const TITLES: Partial<Record<Screen, string>> = {
+  signin: 'Sign in',
   new: 'New test',
   progress: 'Running',
   report: 'Report',
@@ -30,12 +31,14 @@ function Header({ state, store, fx }: { state: AppState; store: Store; fx: Effec
           <IconBack />
         </button>
       ) : (
-        <span class="brand" aria-label="Archetype">
+        <span class="brand" title="Archetype">
           <Mark size={15} />
-          <span class="brand-word">Årchetype</span>
+          <span class="sr-only">Archetype</span>
         </span>
       )}
-      <span class="topbar-title">{TITLES[state.screen] ?? ''}</span>
+      <span class="topbar-title">
+        {state.screen === 'progress' && state.study && ['creating', 'factors', 'archetypes', 'runs'].includes(state.study.stage) ? 'Launching' : TITLES[state.screen] ?? ''}
+      </span>
       <nav class="topbar-actions" aria-label="Panel">
         {state.token && state.study && state.screen !== 'new' && !sub && (
           <button type="button" class="text-btn" onClick={() => fx.newTest()}>
