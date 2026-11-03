@@ -554,6 +554,11 @@ class Handler(BaseHTTPRequestHandler):
                 return 200, ARCHETYPES_RESPONSE
             if path.endswith("/runs/next"):
                 return 200, {"done": True, "reason": "no archetype disagrees with the baseline"}
+            if path.endswith("/runs") and method == "GET":
+                runs = [{"runId": r["runId"], "archetypeId": r["archetypeId"], "status": "queued", "wave": 1}
+                        for r in WAVE1_RESPONSE["runs"]]
+                runs.append({"runId": "r-old-0", "archetypeId": "a0", "status": "completed", "wave": 1})
+                return 200, {"studyId": STUDY_ID, "currentWave": 1, "status": "running", "runs": runs}
             if path.endswith("/runs"):
                 return 201, WAVE1_RESPONSE
             if path.endswith("/status"):
@@ -563,10 +568,10 @@ class Handler(BaseHTTPRequestHandler):
             if method == "PATCH":
                 return 200, dict(STUDY_RESPONSE, success=dict(STUDY_RESPONSE["success"], checksConfirmed=True))
             if method == "GET" and path.count("/") == 3:
-                runs = [{"runId": r["runId"], "archetypeId": r["archetypeId"], "status": "queued"}
-                        for r in WAVE1_RESPONSE["runs"]]
-                runs.append({"runId": "r-old-0", "archetypeId": "a0", "status": "completed"})
-                return 200, dict(STUDY_RESPONSE, status="running", runs=runs)
+                # The study object's run refs carry no status (docs/studies-api.md).
+                return 200, dict(STUDY_RESPONSE, status="running", runs=[
+                    {k: r[k] for k in ("runId", "archetypeId", "archetypeName", "repeatIndex")}
+                    for r in WAVE1_RESPONSE["runs"]])
         if path.endswith("/steps") and method == "POST":
             seq = ((body or {}).get("step") or {}).get("seq") or 1
             return 200, dict(STEPS_RESPONSE, state=dict(STEPS_RESPONSE["state"], seq=seq))
@@ -616,7 +621,10 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(raw)))
         self.end_headers()
-        self.wfile.write(raw)
+        try:
+            self.wfile.write(raw)
+        except (BrokenPipeError, ConnectionResetError):
+            pass  # the client gave up first (deadline cases): expected
 
     def do_POST(self):  # noqa: N802
         self._dispatch("POST")
@@ -887,6 +895,9 @@ def case_1_tools_list(srv: ServerProc, data_dir: Path) -> None:
         f"tools/list should show exactly the 20 tools, got {names}",
     )
     report = next(t for t in tools if t["name"] == "report_result")
+    quit_enum = report["inputSchema"]["properties"]["feedback"]["properties"]["outcome"]["properties"]["quit_reason"]["enum"]
+    expect(quit_enum == ["price_barrier", "confusion", "feature_not_found", "goal_completed", "frustration",
+                         "technical_error", "distraction", "other"], f"the backend's quit reasons, got {quit_enum}")
     finding = report["inputSchema"]["properties"]["feedback"]["properties"]["findings"]["items"]
     evidence = finding["properties"]["evidence"]
     expect(evidence["type"] == "object", f"evidence must be an object, got {evidence}")
@@ -2247,10 +2258,10 @@ def case_51_old_backend_fallback(srv: ServerProc, data_dir: Path) -> None:
     call_tool(srv, "report_result", {"run_id": run_id, "session_id": RUN_RESPONSE["sessionId"],
                                       "status": "abandoned", "steps": [],
                                       "feedback": {"verdict": "fail", "summary": "gave up",
-                                                   "outcome": {"completed": False, "quit_reason": "too_slow"}}})
+                                                   "outcome": {"completed": False, "quit_reason": "frustration"}}})
     body = STATE.last_for("/results")["body"]
     expect(body["status"] == "failed", f"abandoned maps to failed for an old backend, got {body['status']}")
-    expect(body["feedback"]["outcome"]["quit_reason"] == "too_slow", "the outcome is kept")
+    expect(body["feedback"]["outcome"]["quit_reason"] == "frustration", "the outcome is kept")
     step = body["steps"][0]
     expect(step["actionText"] == "click Start free trial" and step["observationPageType"] == "landing"
            and step["success"] is True and step["narration"].startswith("I want to try it"),
@@ -2274,6 +2285,28 @@ def case_52_claim(srv: ServerProc, data_dir: Path) -> None:
     expect((data_dir / "runs" / "queued0001.state.json").exists(), "claimed run state saved")
     bad = call_tool(srv, "start_run", {"run_id": "../features"})
     expect(bad.get("isError") and count_requests("/claim") == 1, "a bad run id never reaches the backend")
+
+
+def case_52b_claimed_briefing_from_a_study(srv: ServerProc, data_dir: Path) -> None:
+    write_auth(data_dir)
+    instructions = dict(RUN_V2_RESPONSE["instructions"], preconditions=["Has an account"], archetype={
+        "archetypeId": "a1", "name": "Impatient founder", "role": "variant", "variedFactors": ["patience"],
+        "whatIsDifferent": "Last month I closed a sign up halfway because a page took too long.",
+        "seedBeliefs": ["If something does not work in two tries, I close the tab."],
+        "factorStatements": ["Trust and willingness to share: 3 of 5, the usual level for founders."]})
+    STATE.error_overrides["/claim"] = (200, dict(RUN_V2_RESPONSE, runId="queued0009", instructions=instructions,
+                                                 study={"studyId": "study-7", "wave": 1, "repeatIndex": 0}))
+    result = call_tool(srv, "start_run", {"run_id": "queued0009", "browser": "chrome"})
+    text = result_text(result)
+    contains(text, "WHO YOU ARE TODAY\nLast month I closed a sign up halfway", "what is different")
+    contains(text, "What you believe:\n- If something does not work in two tries", "seed beliefs")
+    contains(text, "Where you stand:\n- Trust and willingness to share: 3 of 5", "factor statements")
+    expect("Impatient founder" not in text and "variant" not in text, "no archetype name or role for the actor")
+    contains(text, "You arrive with:\n- Has an account", "the study's preconditions")
+    state = json.loads((data_dir / "runs" / "queued0009.state.json").read_text())
+    expect(state["study_id"] == "study-7", f"study id from the study block: {state['study_id']}")
+    sent = STATE.last_for("/claim")["body"]["browser"]
+    expect(None not in sent.values() and sent["engine"] == "chrome", f"no null browser fields: {sent}")
 
 
 def case_53_claim_conflict(srv: ServerProc, data_dir: Path) -> None:
@@ -2396,6 +2429,16 @@ def case_57_give_up_note(srv: ServerProc, data_dir: Path) -> None:
     STATE.error_overrides["/steps"] = (409, {"error": "run_ended", "message": "patience budget exhausted twice"})
     text = result_text(call_tool(srv, "log_step", {"run_id": V2_RUN_ID, "step": v2_step(6)}))
     contains(text, "This run has ended (patience budget exhausted twice)", "ended run said")
+    ended_note = "Your patience ran out a second time, so this run is over: report abandoned."
+    STATE.error_overrides["/steps"] = (409, {"error": "run_ended", "note": ended_note, "state": dict(
+        STEPS_RESPONSE["state"], seq=7, ended=True, endedReason="patience_exhausted_twice")})
+    text = result_text(call_tool(srv, "log_step", {"run_id": V2_RUN_ID, "step": v2_step(7)}))
+    contains(text, f"NOTE: {ended_note}", "the backend's own note on a 409")
+    contains(text, "STATE step 7 of max 16", "the backend's state on a 409")
+    STATE.error_overrides["/steps"] = (200, dict(STEPS_RESPONSE, note="Stop now and report abandoned.", state=dict(
+        STEPS_RESPONSE["state"], seq=4, ended=True, endedReason="patience_exhausted_twice")))
+    text = result_text(call_tool(srv, "log_step", {"run_id": V2_RUN_ID, "step": v2_step(4)}))
+    contains(text, "NOTE: Stop now and report abandoned.", "an ending step keeps the backend note")
     expect(not (data_dir / "runs" / f"{V2_RUN_ID}.steps.jsonl").exists(), "an ended run buffers nothing")
 
 
@@ -2446,7 +2489,7 @@ def case_58_report_abandoned_with_actions_and_video(srv: ServerProc, data_dir: P
     old.write_bytes(b"0" * 9000)
     os.utime(old, (time.time() - 3600, time.time() - 3600))
     feedback = {"verdict": "fail", "summary": "Left at the card form.",
-                "outcome": {"completed": False, "quit_reason": "trust_refused", "abandoned_at_step": 7,
+                "outcome": {"completed": False, "quit_reason": "frustration", "abandoned_at_step": 7,
                             "in_their_words": "No refund terms, no card."}}
     result = call_tool(srv, "report_result", {"run_id": "queued0005", "session_id": "plugin-v2-session",
                                                "status": "abandoned", "steps": [], "feedback": feedback})
@@ -2583,7 +2626,7 @@ def case_64_create_study_runs(srv: ServerProc, data_dir: Path) -> None:
     text = result_text(call_tool(srv, "create_study_runs", {"study_id": STUDY_ID}))
     req = STATE.last_for("/runs")
     expect(req["path"] == f"/api/studies/{STUDY_ID}/runs" and req["body"] == {}, "POST runs with {}")
-    contains(text, "Wave 1: 5 run(s) created (queued, nothing is running yet).", "headline")
+    contains(text, "Wave 1: 5 run(s) created (queued until an actor claims them).", "headline")
     contains(text, "| Baseline founder | 3 |", "baseline repeats")
     contains(text, "- r-base-1 · Baseline founder · repeat 1\n- r-trust-1 · Low-trust founder", "dispatch order kept")
     contains(text, "5 run(s): about 16 to 30 minutes at 4 in parallel", "estimate at 4 browsers")
@@ -2603,11 +2646,19 @@ def case_65_next_study_wave(srv: ServerProc, data_dir: Path) -> None:
     busy = call_tool(srv, "next_study_wave", {"study_id": STUDY_ID})
     expect(not busy.get("isError"), "a running wave is not an error, just not yet")
     contains(result_text(busy), "Not yet: 2 runs are still running", "409 explained")
-    STATE.error_overrides["/runs/next"] = (200, {"wave": 2, "runs": [
-        {"runId": "r-trust-2", "archetypeName": "Low-trust founder", "repeatIndex": 2},
-        {"runId": "r-trust-3", "archetypeName": "Low-trust founder", "repeatIndex": 3}]})
-    contains(result_text(call_tool(srv, "next_study_wave", {"study_id": STUDY_ID})),
-             "Wave 2: 2 run(s) created", "wave 2 rendered")
+    STATE.error_overrides["/runs/next"] = (201, {"wave": 2, "created": True, "repeatPolicy": "confirm", "runs": [
+        {"runId": "r-trust-2", "archetypeName": "Low-trust founder", "repeatIndex": 1},
+        {"runId": "r-trust-3", "archetypeName": "Low-trust founder", "repeatIndex": 2}],
+        "reasons": [{"archetypeName": "Low-trust founder", "count": 2,
+                     "reason": "did not complete while the baseline majority completed"}]})
+    wave2 = result_text(call_tool(srv, "next_study_wave", {"study_id": STUDY_ID}))
+    contains(wave2, "Wave 2: 2 run(s) created", "wave 2 rendered")
+    contains(wave2, "- Low-trust founder (+2): did not complete while the baseline majority completed", "why it reruns")
+    expect("Likely wave 2" not in wave2, "no wave 2 estimate on wave 2")
+    STATE.error_overrides["/runs"] = (200, dict(WAVE1_RESPONSE, created=False, repeatPolicy="explore"))
+    again = result_text(call_tool(srv, "create_study_runs", {"study_id": STUDY_ID}))
+    contains(again, "Wave 1: 5 run(s) already existed", "an existing wave 1 is said so")
+    expect("Likely wave 2" not in again, "explore (from the backend) has no wave 2")
 
 
 def case_66_study_status(srv: ServerProc, data_dir: Path) -> None:
@@ -2697,6 +2748,8 @@ def case_70_dispatch_study_needs_confirm(srv: ServerProc, data_dir: Path) -> Non
     write_auth(data_dir)
     text = result_text(call_tool(srv, "dispatch_study", {"study_id": STUDY_ID}))
     contains(text, "Ready to run 5 queued run(s) unattended, 2 at a time.", "only queued runs counted")
+    expect(STATE.last_for("/runs")["path"] == f"/api/studies/{STUDY_ID}/runs"
+           and STATE.last_for("/runs")["method"] == "GET", "the live run listing is read")
     contains(text, "5 run(s): about 24 to 45 minutes at 2 in parallel", "estimate at the default parallel 2")
     contains(text, "confirm: true", "asks for confirmation")
     expect(not (data_dir / "studies" / STUDY_ID / "runner.json").exists(), "nothing started")
@@ -2814,6 +2867,7 @@ CASES = [
     ("v2 briefing: behavior rules, criterion, checks, protocol 2", case_50_start_run_v2_briefing),
     ("old backend: trait phrases, protocol 1, journal sent as v1 steps", case_51_old_backend_fallback),
     ("start_run(run_id) claims with the browser config", case_52_claim),
+    ("claimed study briefing: archetype words, preconditions, no role", case_52b_claimed_briefing_from_a_study),
     ("claim 409 and a backend without claim stop the actor", case_53_claim_conflict),
     ("log_step success: stamped, posted, state rendered", case_54_log_step_success),
     ("log_step buffers on timeout and flushes next time", case_55_log_step_buffers_on_timeout, STEP_FAST),

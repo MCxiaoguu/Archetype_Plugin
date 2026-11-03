@@ -1093,7 +1093,9 @@ def browser_config(name: Any) -> dict[str, Any] | None:
             BROWSER_PROFILES["playwright"], headless=match.group(1) == "browser",
             version=version, user_agent=pinned.get("user_agent"), viewport=pinned.get("viewport"),
         )
-    return dict(profile, server=name)
+    # Unknown values are left out rather than sent as null: the claim route
+    # answers 400 for a malformed browser config.
+    return {k: v for k, v in dict(profile, server=name).items() if v is not None}
 
 
 # ---------- persona traits as words (old backends) ----------
@@ -1202,11 +1204,12 @@ _CHECK_WORDS = {
     "actor_confirms": "you yourself confirm",
 }
 
-# Why a person stopped. The backend owns the enum; a briefing that lists its
-# own (reporting.quitReasons) wins over this default.
+# Why a person stopped: the backend's closed enum (docs/studies-api.md,
+# results protocol v2). A briefing that lists its own
+# (reporting.quitReasons) wins over this default.
 QUIT_REASONS = (
-    "patience_exhausted", "trust_refused", "unexpected_cost", "confusing",
-    "error_blocked", "too_slow", "not_worth_it", "goal_not_found", "other",
+    "price_barrier", "confusion", "feature_not_found", "goal_completed",
+    "frustration", "technical_error", "distraction", "other",
 )
 
 
@@ -1289,9 +1292,28 @@ def _render_run(body: dict[str, Any], preconditions: list[str] | None = None) ->
                 "read and what you are willing to share."
             )
 
+    # A study archetype's own words: what is different about this person,
+    # what they believe and where they stand on the factors the study does
+    # not vary. Its name, role and varied factors are left out on purpose:
+    # an actor told "you are the impatient variant" plays a caricature.
+    archetype = instructions.get("archetype") if isinstance(instructions.get("archetype"), dict) else {}
+    different = _pick(archetype, "whatIsDifferent", "what_is_different")
+    beliefs = [str(b) for b in (_pick(archetype, "seedBeliefs", "seed_beliefs", default=[]) or []) if str(b).strip()]
+    statements = [str(b) for b in (_pick(archetype, "factorStatements", "factor_statements", default=[]) or []) if str(b).strip()]
+    if different or beliefs or statements:
+        block = ["WHO YOU ARE TODAY"]
+        if different:
+            block.append(str(different))
+        if beliefs:
+            block.append("What you believe:\n" + "\n".join(f"- {b}" for b in beliefs))
+        if statements:
+            block.append("Where you stand:\n" + "\n".join(f"- {b}" for b in statements))
+        parts.append("\n".join(block))
+
     # What the tester brings with them (their own project, an account, prior
-    # knowledge). Rendered here from the caller's list: the backend does not
-    # read preconditions yet.
+    # knowledge): the caller's list, else the study's own.
+    if not preconditions:
+        preconditions = _as_precondition_list(instructions.get("preconditions"))
     if preconditions:
         parts.append(
             "You arrive with:\n"
@@ -1397,7 +1419,7 @@ def save_run_state(body: dict[str, Any], browser: dict[str, Any] | None) -> None
         "session_id": body.get("sessionId"),
         "started_at": time.time(),
         "protocol_version": protocol_version(body),
-        "study_id": _pick(body, "studyId", "study_id"),
+        "study_id": _pick(body, "studyId", "study_id") or _pick(body.get("study") or {}, "studyId", "study_id"),
         "criterion": criterion,
         "rules": [str(r) for r in (_pick(behavior, "rules", default=[]) or [])][:20],
         "max_steps": max_steps,
@@ -1834,8 +1856,12 @@ def handle_log_step(arguments: dict[str, Any]) -> dict[str, Any]:
                     "was slow); it goes out with your next step. Keep going."
                 )
             elif outcome == "ended":
-                remote = {"state": dict(local_state, ended=True,
-                                        endedReason=resp.get("message") or "the backend closed this run")}
+                # 409 run_ended carries the backend's state and note.
+                ended_state = dict(resp["state"] if isinstance(resp.get("state"), dict) else local_state)
+                ended_state["ended"] = True
+                if not _pick(ended_state, "endedReason", "ended_reason"):
+                    ended_state["endedReason"] = resp.get("message") or "the backend closed this run"
+                remote = dict(resp, state=ended_state)
             else:
                 remote = resp
 
@@ -1864,7 +1890,7 @@ def handle_log_step(arguments: dict[str, Any]) -> dict[str, Any]:
         elif state.get("last_rules"):
             rules = list(state["last_rules"])
 
-        if _pick(shown, "ended"):
+        if _pick(shown, "ended") and not note:
             reason = _pick(shown, "endedReason", "ended_reason") or "the budget ran out"
             note = (
                 f"This run has ended ({reason}). Do not take another action: "
@@ -3165,13 +3191,20 @@ def _save_wave(study_id: str, resp: dict[str, Any]) -> None:
 def _render_wave(study_id: str, resp: dict[str, Any], repeat_policy: str | None) -> str:
     runs = [r for r in (resp.get("runs") or []) if isinstance(r, dict)]
     wave = resp.get("wave", "?")
+    repeat_policy = resp.get("repeatPolicy") or repeat_policy
     counts: dict[str, int] = {}
     for r in runs:
         name = str(r.get("archetypeName") or r.get("archetypeId") or "?")
         counts[name] = counts.get(name, 0) + 1
-    lines = [f"Wave {wave}: {len(runs)} run(s) created (queued, nothing is running yet).", "",
+    made = "already existed" if resp.get("created") is False else "created"
+    lines = [f"Wave {wave}: {len(runs)} run(s) {made} (queued until an actor claims them).", "",
              "| Archetype | Runs |", "|---|---|"]
     lines += [f"| {_cell(n, 60)} | {c} |" for n, c in counts.items()]
+    reasons = [r for r in (resp.get("reasons") or []) if isinstance(r, dict)]
+    if reasons:
+        lines.append("\nWhy these archetypes run again:")
+        lines += [f"- {_clip(r.get('archetypeName'), 60)} (+{r.get('count', '?')}): {_clip(r.get('reason'), 240)}"
+                  for r in reasons]
     lines.append("\nRun order (interleaved by the backend; dispatch in this order):")
     for r in runs:
         lines.append(f"- {r.get('runId')} · {_clip(r.get('archetypeName'), 60)} · repeat {r.get('repeatIndex', 1)}")
@@ -3226,16 +3259,18 @@ def handle_next_study_wave(arguments: dict[str, Any]) -> dict[str, Any]:
     return tool_text(_render_wave(study_id, resp, None))
 
 
-def _queued_runs(study_id: str, study: dict[str, Any]) -> list[str]:
-    """The study's runs still waiting for an actor, in the backend's order."""
-    runs = study.get("runs") if isinstance(study.get("runs"), list) else []
-    queued = [
-        str(_pick(r, "runId", "run_id")) for r in runs
-        if isinstance(r, dict) and _pick(r, "status") == "queued" and _pick(r, "runId", "run_id")
-    ]
-    if queued or runs:
-        return [r for r in queued if _RUN_ID_RE.match(r)]
-    # A backend whose study object lists no runs: the last wave seen here.
+def _queued_runs(study_id: str, listing: dict[str, Any]) -> list[str]:
+    """The study's runs still waiting for an actor, in the backend's order,
+    from GET /api/studies/<id>/runs (each run carries its live status; the
+    study object's own run refs do not)."""
+    runs = listing.get("runs") if isinstance(listing.get("runs"), list) else None
+    if runs is not None:
+        return [
+            str(_pick(r, "runId", "run_id")) for r in runs
+            if isinstance(r, dict) and _pick(r, "status") == "queued"
+            and _RUN_ID_RE.match(str(_pick(r, "runId", "run_id")))
+        ]
+    # No run listing: the last wave seen here.
     waves = (_read_json_file((_study_dir(study_id) or Path("/nonexistent")) / "waves.json").get("waves") or {})
     if not waves:
         return []
@@ -3271,7 +3306,7 @@ def handle_dispatch_study(arguments: dict[str, Any]) -> dict[str, Any]:
             f"A swarm runner is already working on this study (pid {alive}). "
             "Follow it with study_status; create a stop file in the study folder to stop it."
         )
-    out = _study_call(lambda t: backend_get(f"/api/studies/{study_id}", auth_token=t))
+    out = _study_call(lambda t: backend_get(f"/api/studies/{study_id}/runs", auth_token=t))
     if isinstance(out, dict):
         return out
     runs = _queued_runs(study_id, out[1])
@@ -4168,7 +4203,7 @@ TOOLS: dict[str, dict[str, Any]] = {
     },
     "dispatch_study": {
         "description": (
-            "Run a study's queued runs unattended with the swarm runner: one "
+            "Run a study's queued runs (GET /api/studies/<id>/runs) unattended with the swarm runner: one "
             "`claude -p` worker per run, up to parallel (1 to 4, default 2) at "
             "a time, each on its own isolated headless browser, then the next "
             "wave, until the study is done. Without confirm: true it only "
