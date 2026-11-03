@@ -1187,8 +1187,16 @@ _CHECK_WORDS = {
 # results protocol v2). A briefing that lists its own
 # (reporting.quitReasons) wins over this default.
 QUIT_REASONS = (
-    "price_barrier", "confusion", "feature_not_found", "goal_completed",
+    "price_barrier", "trust_refused", "confusion", "feature_not_found", "goal_completed",
     "frustration", "technical_error", "distraction", "other",
+)
+
+# When to choose which, for the actor (briefing and agent files agree).
+QUIT_REASON_GUIDE = (
+    "Choose trust_refused when you leave because you do not trust the site: "
+    "a broken promise (it said no card, then asked for one), an unexplained "
+    "card request, or a data request you are not comfortable with. Choose "
+    "price_barrier only when the price itself is the objection."
 )
 
 
@@ -1356,7 +1364,7 @@ def _render_run(body: dict[str, Any], preconditions: list[str] | None = None) ->
             "evidence?{url?,selector?,quote?}}], personaReaction}. status "
             "abandoned means you, as this person, gave up: set outcome.completed "
             "false, the quit_reason, the step you left at and why in your own "
-            "words. evidence is optional per finding: the page url, a selector "
+            f"words. {QUIT_REASON_GUIDE} evidence is optional per finding: the page url, a selector "
             "or role plus name for the element, and the exact on-screen text "
             "you are reporting (quote up to 1000 characters)."
         )
