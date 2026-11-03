@@ -104,7 +104,15 @@ export function startServer(opts = {}) {
     server.listen(port, '127.0.0.1', () => {
       const actual = server.address().port;
       log(`http://localhost:${actual}  (${backend ? `live: ${backend}${opts.proxy ? ' via proxy' : ''}` : 'mock backend'})`);
-      resolveStart({ server, port: actual, close: () => new Promise((r) => server.close(r)) });
+      resolveStart({
+        server,
+        port: actual,
+        close: () =>
+          new Promise((r) => {
+            server.close(r);
+            server.closeAllConnections();
+          }),
+      });
     });
   });
 }

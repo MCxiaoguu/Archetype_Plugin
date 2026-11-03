@@ -141,6 +141,10 @@ function initPayload() {
           size: 'quick',
         }
       : storage.get(K.draft) ?? null;
+  // Seed storage so later save-study echoes keep the preset list, as Figma's
+  // clientStorage would.
+  storage.set(K.studies, studies);
+  if (lastStudyId) storage.set(K.last, lastStudyId);
   const settings = storage.get(K.settings) ?? { apiBase: config.apiBase, webBase: config.webBase };
   const sel = selection ? doc.frames.find((f) => f.id === selection) : null;
   return { type: 'init', settings, token, fileKey: null, doc, selection: sel ? { id: sel.id, name: sel.name } : null, studies, lastStudyId, draft, pluginVersion: 'harness' };

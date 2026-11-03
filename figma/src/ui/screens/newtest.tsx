@@ -287,7 +287,7 @@ export function NewTest({ state, store, fx }: { state: AppState; store: Store; f
         ) : pf?.blocker === 'unreachable' ? (
           <p class="actionbar-note error">Connect the start to the goal to launch.</p>
         ) : (
-          <p class="actionbar-note">{form.size === 'quick' ? 'About 5 to 10 minutes' : 'About 15 to 30 minutes'} once a runner picks it up</p>
+          <p class="actionbar-note">{form.size === 'quick' ? 'Takes about 5 to 10 minutes' : 'Takes about 15 to 30 minutes'}</p>
         )}
         <button type="submit" class="btn btn-primary" disabled={pf?.blocker === 'unreachable'}>
           Launch test

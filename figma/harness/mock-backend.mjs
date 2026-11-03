@@ -10,7 +10,8 @@ const here = dirname(fileURLToPath(import.meta.url));
 const REPORT = JSON.parse(readFileSync(join(here, 'fixtures/study-report.json'), 'utf8'));
 const PROTO = 'https://www.figma.com/proto/AbCdEfGh1234567890XyZ/Farside-billing';
 const at = (dash) => `${PROTO}?node-id=${dash}&starting-point-node-id=1%3A2&scaling=scale-down`;
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// unref: a long fake wait (the persona build that never ends) must not keep the process alive.
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms).unref());
 const iso = (t = Date.now()) => new Date(t).toISOString();
 
 const ARCHETYPES = REPORT.archetypes.map((a) => ({ archetypeId: a.archetypeId, archetypeName: a.name, role: a.role }));
