@@ -2222,7 +2222,7 @@ def case_50_start_run_v2_briefing(srv: ServerProc, data_dir: Path) -> None:
     expect(text.index("Done when:") > text.index("YOUR SCENARIOS"), "criterion sits under the scenarios header")
     contains(text, "PROTOCOL 2: after EVERY browser action, call log_step", "per step instruction")
     contains(text, "status (completed|failed|aborted|abandoned)", "abandoned in the contract")
-    contains(text, "outcome{completed true|false, quit_reason", "outcome in the contract")
+    contains(text, "outcome{completed true|false, in_their_words, and only when completed is false: quit_reason", "outcome in the contract")
     contains(text, "close the browser", "close before report")
     expect("PROTOCOL 1" not in text, "no v1 fallback text on a v2 run")
     expect("very high impatience" not in text, "rules replace the trait phrases")
@@ -2353,12 +2353,14 @@ def case_56_report_flushes_buffer_first(srv: ServerProc, data_dir: Path) -> None
     result = call_tool(srv, "report_result", {"run_id": V2_RUN_ID, "session_id": "plugin-v2-session",
                                                "status": "completed", "steps": [],
                                                "feedback": {"verdict": "pass", "summary": "ok",
-                                                            "outcome": {"completed": True, "in_their_words": "Easy."}}})
+                                                            "outcome": {"completed": True, "in_their_words": "Easy.",
+                                                                        "quit_reason": "other", "abandoned_at_step": 0}}})
     order = [r["path"].rsplit("/", 1)[-1] for r in STATE.requests[mark:]]
     expect(order[:2] == ["steps", "results"], f"flush before results, got {order}")
     body = STATE.last_for("/results")["body"]
     expect(body["steps"] == [], f"a flushed step is not sent twice, got {body['steps']}")
-    expect(body["feedback"]["outcome"]["completed"] is True, "outcome passes through")
+    expect(body["feedback"]["outcome"] == {"completed": True, "in_their_words": "Easy."},
+           f"a completed outcome carries no quit placeholders: {body['feedback']['outcome']}")
     expect(body["browser"]["engine"] == "chrome", "browser config from start_run")
     expect(body["rawActions"] == [], "rawActions always sent on v2, even empty")
     contains(result_text(result), "1 buffered step(s) sent first", "the flush is reported")
