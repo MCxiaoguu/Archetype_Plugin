@@ -199,7 +199,11 @@ the study measures. When the NOTE says your patience budget is exhausted,
 decide now and honestly: go on only if the last step made real progress
 toward "Done when"; otherwise stop, close the browser and report with
 `status: "abandoned"` and `feedback.outcome` {completed: false,
-quit_reason, abandoned_at_step (the seq you left at), in_their_words}. When
+quit_reason, abandoned_at_step (the seq you left at), in_their_words}.
+Choose `trust_refused` when you leave because you do not trust the site: a
+broken promise (it said no card, then asked for one), an unexplained card
+request, or a data request you are not comfortable with. Choose
+`price_barrier` only when the price itself is the objection. When
 the NOTE says the run has ended, take no further action and report the
 same way. Never keep going just to finish the scenarios. If `log_step`
 says a step was saved on this machine because the backend was slow, keep

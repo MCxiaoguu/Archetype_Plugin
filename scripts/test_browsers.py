@@ -381,6 +381,139 @@ def case_recorded_config_names_the_engine(tmp: Path) -> None:
     expect("bundled chromium 1248" in config["version"] and config["engine"] == "playwright", f"version names it: {config}")
 
 
+# ---- swarm runner against a stub backend ----
+
+RUNNER_WORKER = r"""#!/usr/bin/env python3
+import json, os, sys, time, urllib.request
+prompt = sys.argv[sys.argv.index("-p") + 1]
+run_id = prompt.split("--run ")[1].split()[0]
+plan = json.load(open(os.environ["RUNNER_PLAN"])).get(run_id, "report")
+base = os.environ["ARCHETYPE_BACKEND_URL"]
+def say(name):
+    print(json.dumps({"type": "assistant", "message": {"content": [{"type": "tool_use", "name": name}]}}), flush=True)
+if plan == "exit":
+    sys.exit(0)
+say("mcp__plugin_archetype_core__start_run")
+urllib.request.urlopen(urllib.request.Request(f"{base}/claim/{run_id}", data=b"{}", method="POST"))
+if plan == "stall":
+    say("mcp__plugin_archetype_core__log_step")
+    time.sleep(60)
+say("mcp__plugin_archetype_core__log_step")
+urllib.request.urlopen(urllib.request.Request(f"{base}/done/{run_id}", data=b"{}", method="POST"))
+"""
+
+
+class StubStudy:
+    """GET /runs, POST /runs/next, results; workers claim and finish through /claim and /done."""
+
+    def __init__(self, runs: list[str], wave2: dict | None = None) -> None:
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+        self.status = {r: "queued" for r in runs}
+        self.aborts: dict[str, str] = {}
+        self.wave2 = wave2
+        stub = self
+
+        class H(BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def reply(self, code, body):
+                data = json.dumps(body).encode()
+                self.send_response(code)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def do_GET(self):
+                rows = [{"runId": r, "status": st, "sessionId": f"s-{r}"} for r, st in stub.status.items()]
+                self.reply(200, {"runs": rows})
+
+            def do_POST(self):
+                length = int(self.headers.get("Content-Length") or 0)
+                body = json.loads(self.rfile.read(length) or b"{}")
+                parts = self.path.strip("/").split("/")
+                if parts[0] == "claim":
+                    stub.status[parts[1]] = "running"
+                    return self.reply(200, {})
+                if parts[0] == "done":
+                    stub.status[parts[1]] = "completed"
+                    return self.reply(200, {})
+                if self.path.endswith("/runs/next"):
+                    if stub.wave2 and not any(r in stub.status for r in stub.wave2["runs_ids"]):
+                        for r in stub.wave2["runs_ids"]:
+                            stub.status[r] = "queued"
+                        return self.reply(201, stub.wave2["body"])
+                    return self.reply(200, {"done": True, "reason": "no more"})
+                if self.path.endswith("/results"):
+                    run_id = parts[-2]
+                    assert body["sessionId"] == f"s-{run_id}" and body["status"] == "aborted"
+                    stub.status[run_id] = "aborted"
+                    stub.aborts[run_id] = body["abortReason"]
+                    return self.reply(200, {})
+                return self.reply(404, {})
+
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), H)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.url = f"http://127.0.0.1:{self.server.server_address[1]}"
+
+    def close(self) -> None:
+        self.server.shutdown()
+
+
+def run_runner(tmp: Path, stub: StubStudy, runs: list[str], plan: dict, *extra: str) -> dict:
+    worker = tmp / "claude"
+    worker.write_text(RUNNER_WORKER)
+    worker.chmod(0o755)
+    (tmp / "plan.json").write_text(json.dumps(plan))
+    data = tmp / "data"
+    data.mkdir(exist_ok=True)
+    (data / "auth.json").write_text(json.dumps({"access_token": "t"}))
+    env = dict(os.environ, RUNNER_PLAN=str(tmp / "plan.json"), ARCHETYPE_RUNNER_WATCH_S="0.2",
+               ARCHETYPE_RUNNER_WAVE_WAIT="0.1")
+    args = [sys.executable, str(HERE / "study_runner.py"), "--study", "s1", "--data-dir", str(data),
+            "--backend", stub.url, "--runs", ",".join(runs), "--parallel", "2", "--claude", str(worker), *extra]
+    out = subprocess.run(args, env=env, capture_output=True, text=True, timeout=120)
+    expect(out.returncode == 0, f"runner exit {out.returncode}: {out.stdout[-600:]} {out.stderr[-600:]}")
+    return json.loads((data / "studies" / "s1" / "runner.json").read_text())
+
+
+def case_runner_aborts_orphans(tmp: Path) -> None:
+    stub = StubStudy(["r-ok", "r-exit", "r-stall"])
+    try:
+        started = time.monotonic()
+        status = run_runner(tmp, stub, ["r-ok", "r-exit", "r-stall"], {"r-exit": "exit", "r-stall": "stall"},
+                            "--stall-min", "0.05")
+        expect(time.monotonic() - started < 30, "the stalled worker did not hold the study")
+        expect(stub.status == {"r-ok": "completed", "r-exit": "aborted", "r-stall": "aborted"}, f"statuses: {stub.status}")
+        expect(stub.aborts == {"r-exit": "worker exited without reporting",
+                               "r-stall": "claimed but no step for 0.05 minutes"}, f"reasons: {stub.aborts}")
+        expect(status["workers"]["r-stall"]["state"] == "stalled", f"stalled state: {status['workers']['r-stall']}")
+        expect(status["summary"]["aborted"] == 2, f"summary: {status['summary']}")
+    finally:
+        stub.close()
+
+
+def case_runner_budget_runs_the_highest_priority_wave_two_runs(tmp: Path) -> None:
+    wave2 = {"runs_ids": ["w2-steps", "w2-out-a", "w2-frus", "w2-out-b"], "body": {
+        "wave": 2,
+        "runs": [{"runId": "w2-steps", "archetypeId": "A"}, {"runId": "w2-out-a", "archetypeId": "B"},
+                 {"runId": "w2-frus", "archetypeId": "C"}, {"runId": "w2-out-b", "archetypeId": "B"}],
+        "reasons": [{"archetypeId": "A", "reason": "14 steps vs baseline median 10"},
+                    {"archetypeId": "B", "reason": "did not complete while the baseline majority completed"},
+                    {"archetypeId": "C", "reason": "frustration 35 vs baseline median 10"}]}}
+    stub = StubStudy(["w1-a", "w1-b"], wave2=wave2)
+    try:
+        status = run_runner(tmp, stub, ["w1-a", "w1-b"], {}, "--max-runs", "4")
+        ran = sorted(r for r, w in status["workers"].items() if w.get("state") == "finished")
+        expect(ran == ["w1-a", "w1-b", "w2-out-a", "w2-out-b"], f"outcome disagreements first: {ran}")
+        expect(stub.aborts == {"w2-frus": "not run: the run budget of 4 was spent",
+                               "w2-steps": "not run: the run budget of 4 was spent"}, f"budget: {stub.aborts}")
+    finally:
+        stub.close()
+
+
 CASES = [
     ("proxy answers the handshake and tools/list without starting a browser", case_proxy_is_lazy),
     ("proxy starts the pinned server on the first call, video folder absolute", case_proxy_starts_on_first_call),
@@ -394,6 +527,8 @@ CASES = [
     ("proxy launches the bundled Chromium when Chrome is missing", case_proxy_falls_back_to_bundled_chromium),
     ("proxy without any browser answers with the install command", case_proxy_without_a_browser_says_how_to_install),
     ("the recorded browser config names the engine that runs", case_recorded_config_names_the_engine),
+    ("runner aborts runs whose worker exited or stalled, with the reason", case_runner_aborts_orphans),
+    ("runner budget runs the highest priority wave 2 runs, the rest not run", case_runner_budget_runs_the_highest_priority_wave_two_runs),
 ]
 
 
