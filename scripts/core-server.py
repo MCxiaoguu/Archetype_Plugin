@@ -3266,6 +3266,102 @@ def handle_study_status(arguments: dict[str, Any]) -> dict[str, Any]:
     return tool_text("\n".join(lines))
 
 
+_RUN_ORDER = ("queued", "running", "completed", "abandoned", "failed", "aborted")
+
+
+def _study_next_step(study: dict[str, Any], runs: list[dict[str, Any]]) -> tuple[str, list[str]]:
+    """Where a study stands and the next tool call, from its live state."""
+    status = study.get("status")
+    spec = study.get("factorSpec") or {}
+    archetypes = [a for a in (study.get("archetypes") or []) if isinstance(a, dict)]
+    if status == "failed":
+        return "failed", ["The study failed; start a new one with create_study."]
+    if not spec.get("factors") or spec.get("stale"):
+        why = f" ({_clip(spec.get('staleReason'), 120)})" if spec.get("stale") else ""
+        return "factors", [f"Generate the factors{why}: generate_factors (force: true when stale)."]
+    if not archetypes:
+        return "archetypes", ["Show the factors (above) and confirm or edit them (update_factors), "
+                              "then generate_archetypes."]
+    if not runs:
+        return "runs", ["Create wave 1: create_study_runs."]
+    wave = max((_int_or(r.get("wave"), 1) for r in runs), default=1)
+    current = [r for r in runs if _int_or(r.get("wave"), 1) == wave]
+    queued = [r for r in current if r.get("status") == "queued"]
+    running = [r for r in current if r.get("status") == "running"]
+    if queued:
+        lines = [f"Wave {wave}: {len(queued)} run(s) wait for an actor. Dispatch them in this order "
+                 "(the study skill's step 6):"]
+        lines += [f"- {r.get('runId')} · {_clip(r.get('archetypeName'), 60)} · repeat {_int_or(r.get('repeatIndex'), 0) + 1}"
+                  for r in queued]
+        if running:
+            lines.append(f"{len(running)} more run(s) of this wave are already claimed: "
+                         + ", ".join(str(r.get("runId")) for r in running) + ".")
+        return "dispatch", lines
+    if running:
+        return "running", [
+            f"Wave {wave}: {len(running)} run(s) are claimed and have not reported: "
+            + ", ".join(f"{r.get('runId')} ({_clip(r.get('archetypeName'), 40)})" for r in running) + ".",
+            "Wait for their actors (study_status). A run whose actor is gone (closed session) "
+            "cannot be claimed again; the next wave waits for it.",
+        ]
+    if status == "complete" or study.get("runsDoneReason"):
+        reason = study.get("runsDoneReason")
+        return "report", [f"Every wave is done{': ' + _clip(reason, 200) if reason else ''}. "
+                          "Read the report: get_study_report."]
+    return "next_wave", [f"Every run of wave {wave} has finished: call next_study_wave "
+                         "(it adds runs where an archetype disagrees with the baseline, or says done)."]
+
+
+def handle_get_study(arguments: dict[str, Any]) -> dict[str, Any]:
+    """Resume a study by id: what it is, how far it got, and the next step."""
+    study_id = arguments.get("study_id")
+    bad = _bad_study_id(study_id)
+    if bad:
+        return bad
+    out = _study_call(lambda t: backend_get(f"/api/studies/{study_id}", auth_token=t))
+    if isinstance(out, dict):
+        return out
+    study = out[1]
+    listing = authed_call(lambda t: backend_get(f"/api/studies/{study_id}/runs", auth_token=t))
+    if isinstance(listing, tuple) and 200 <= listing[0] < 300 and isinstance(listing[1].get("runs"), list):
+        runs = [r for r in listing[1]["runs"] if isinstance(r, dict)]
+    else:
+        # An older backend without the run listing: the study's run refs
+        # (no live status) stand in.
+        runs = [dict(r, status=r.get("status") or "unknown") for r in (study.get("runs") or [])
+                if isinstance(r, dict)]
+    lines = [_render_study(study, f"Study {_clip(study.get('title') or study_id, 120)} (resumed).")]
+    spec = study.get("factorSpec") or {}
+    chosen = [f for f in (spec.get("factors") or []) if isinstance(f, dict) and f.get("selected")]
+    if chosen:
+        lines.append("\nFactors: " + ", ".join(
+            f"{_clip(f.get('label') or f.get('key'), 50)} [{f.get('key')}] risk {f.get('riskPole') or '?'}"
+            for f in chosen))
+    archetypes = [a for a in (study.get("archetypes") or []) if isinstance(a, dict)]
+    if archetypes:
+        lines.append("Archetypes: " + ", ".join(
+            f"{_clip(a.get('name'), 50)} ({a.get('role') or '?'})" for a in archetypes))
+    if runs:
+        lines += ["", "| Wave | Run | Archetype | Repeat | Status | Outcome |", "|---|---|---|---|---|---|"]
+        for r in runs:
+            outcome = r.get("outcome") or {}
+            done = outcome.get("completed")
+            result = ("completed" if done else
+                      f"not completed{' at step ' + str(outcome.get('abandonedAtStep')) if outcome.get('abandonedAtStep') else ''}"
+                      if done is False else "")
+            lines.append(f"| {r.get('wave', 1)} | {r.get('runId')} | {_cell(r.get('archetypeName'), 50)} | "
+                         f"{_int_or(r.get('repeatIndex'), 0) + 1} | {r.get('status', '?')} | {result} |")
+        counts: dict[str, int] = {}
+        for r in runs:
+            counts[str(r.get("status"))] = counts.get(str(r.get("status")), 0) + 1
+        lines.append("Runs: " + " · ".join(f"{counts[k]} {k}" for k in _RUN_ORDER if counts.get(k)))
+    stage, advice = _study_next_step(study, runs)
+    lines.append(f"\nStage: {stage}. Next:")
+    lines += advice
+    lines.append(f"\nPortal: {study_web_url(study_id)}\n(studyId for tool calls: {study_id})")
+    return tool_text("\n".join(lines))
+
+
 def _swarm_lines(study_id: str) -> list[str]:
     """Progress of a local swarm runner for this study, when one ran."""
     folder = _study_dir(study_id)
@@ -4130,6 +4226,16 @@ TOOLS: dict[str, dict[str, Any]] = {
         ),
         "schema": {"type": "object", "properties": {"study_id": {"type": "string"}}, "required": ["study_id"]},
         "handler": handle_study_status,
+    },
+    "get_study": {
+        "description": (
+            "Resume an existing study by id (/archetype:study study=<id>): "
+            "the study, its factors and archetypes, every run with its live "
+            "status, the stage it reached and the next tool call (factors, "
+            "archetypes, runs, dispatch of queued runs, next wave or report)."
+        ),
+        "schema": {"type": "object", "properties": {"study_id": {"type": "string"}}, "required": ["study_id"]},
+        "handler": handle_get_study,
     },
     "get_study_report": {
         "description": (

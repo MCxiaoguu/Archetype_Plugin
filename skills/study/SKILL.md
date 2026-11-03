@@ -12,8 +12,22 @@ the factors and builds the archetypes; you run the actors and relay the
 report.
 
 Load the study tools in one ToolSearch query:
-`select:mcp__plugin_archetype_core__create_study,mcp__plugin_archetype_core__generate_factors,mcp__plugin_archetype_core__update_factors,mcp__plugin_archetype_core__generate_archetypes,mcp__plugin_archetype_core__create_study_runs,mcp__plugin_archetype_core__next_study_wave,mcp__plugin_archetype_core__study_status,mcp__plugin_archetype_core__get_study_report,mcp__plugin_archetype_core__list_features,mcp__plugin_archetype_core__list_pools`.
+`select:mcp__plugin_archetype_core__create_study,mcp__plugin_archetype_core__generate_factors,mcp__plugin_archetype_core__update_factors,mcp__plugin_archetype_core__generate_archetypes,mcp__plugin_archetype_core__create_study_runs,mcp__plugin_archetype_core__next_study_wave,mcp__plugin_archetype_core__study_status,mcp__plugin_archetype_core__get_study_report,mcp__plugin_archetype_core__get_study,mcp__plugin_archetype_core__list_features,mcp__plugin_archetype_core__list_pools`.
 Auth is self-healing in the main session; never pre-call `login`.
+
+## 0. Resume an existing study
+
+`/archetype:study study=<id>` (the portal tells users to do this, and it is
+how a study continues after a closed session): skip the intake and call
+`get_study` with that id. It shows the study, its factors and archetypes,
+every run with its live status, the stage it reached and the next tool
+call. Continue from that stage with the step below that owns it: factors
+(step 3), archetypes (step 4), runs (step 5), dispatch of the queued runs it
+lists, in its order (step 6; never runs that already finished), the next
+wave (step 7) or the report (step 8). Runs it shows as claimed but not
+reported belong to an actor that may still be working: wait for them with
+`study_status`; never dispatch them again. Other arguments given with
+`study=` (for example `unattended` or `parallel=`) still apply.
 
 ## 1. Intake
 
@@ -34,6 +48,8 @@ does, into:
 | `watch=live` | off: headless |
 | `browser=chrome` | off: isolated Playwright |
 | `questions="...;..."` | none |
+| `factors=key,key,...` | none: the backend's selection. When given, select exactly these factor keys in this order after `generate_factors` (one `update_factors` call) instead of asking |
+| `study=<id>` | resume that study (section 0) |
 | preconditions | context the testers bring, as in `validation` |
 
 Missing ICP or success criterion: ask ONCE, in one message, with
@@ -65,7 +81,10 @@ message as step 3's question, and apply the answer with `create_study`
 Call `generate_factors`. Show the table (factor, why it matters here, risk
 pole, typical level) and ask once: "Use these N factors, or edit?" Edits go
 through `update_factors` (select or deselect by key, rename, flip the risk
-pole, set the typical level, reorder). A note that factors were chosen
+pole, set the typical level, reorder). With `factors=`, apply that
+selection with one `update_factors` call (select the named keys, deselect
+the others, `order` as given) and show the result instead of asking; a key
+the backend did not offer is reported, not invented. A note that factors were chosen
 without a model means the backend used its default three: say so.
 
 ## 4. Archetypes

@@ -574,6 +574,8 @@ class Handler(BaseHTTPRequestHandler):
                 return 200, STUDY_REPORT_RESPONSE
             if method == "PATCH":
                 return 200, dict(STUDY_RESPONSE, success=dict(STUDY_RESPONSE["success"], checksConfirmed=True))
+            if method == "GET" and path.count("/") == 3:
+                return 200, STUDY_RESPONSE
         if path.endswith("/steps") and method == "POST":
             seq = ((body or {}).get("step") or {}).get("seq") or 1
             return 200, dict(STEPS_RESPONSE, state=dict(STEPS_RESPONSE["state"], seq=seq))
@@ -888,6 +890,7 @@ def case_1_tools_list(srv: ServerProc, data_dir: Path) -> None:
                 "update_factors",
                 "generate_archetypes",
                 "create_study_runs",
+                "get_study",
                 "next_study_wave",
                 "study_status",
                 "get_study_report",
@@ -2715,6 +2718,50 @@ def case_67_study_report(srv: ServerProc, data_dir: Path) -> None:
     expect(all(nonce not in l for l in lines[b + 1:e]), "no copy of the nonce inside")
 
 
+def case_69_get_study_resumes_at_every_stage(srv: ServerProc, data_dir: Path) -> None:
+    write_auth(data_dir)
+    study_path = f"/api/studies/{STUDY_ID}"
+    runs_path = f"/api/studies/{STUDY_ID}/runs"
+
+    def resume(study: dict, runs: list | None) -> str:
+        STATE.error_overrides.clear()
+        STATE.error_overrides[runs_path] = (200, {"studyId": STUDY_ID, "runs": runs or []})
+        STATE.once_overrides[study_path] = (200, study)
+        text = result_text(call_tool(srv, "get_study", {"study_id": STUDY_ID}))
+        expect(STATE.last_for(runs_path)["method"] == "GET", "reads the live run listing")
+        return text
+
+    draft = resume(STUDY_RESPONSE, [])
+    contains(draft, "Study Bank connection for invoicing (resumed).", "header")
+    contains(draft, "Stage: factors. Next:\nGenerate the factors: generate_factors", "draft goes to factors")
+    with_factors = dict(STUDY_RESPONSE, status="factors_ready", factorSpec=FACTORS_RESPONSE["factorSpec"])
+    text = resume(with_factors, [])
+    contains(text, "Factors: Trust and willingness to share [trust_willingness_to_share] risk low", "factors listed")
+    contains(text, "Stage: archetypes.", "then archetypes")
+    ready = dict(with_factors, status="archetypes_ready", archetypes=ARCHETYPES_RESPONSE["archetypes"])
+    contains(resume(ready, []), "Stage: runs. Next:\nCreate wave 1: create_study_runs.", "then runs")
+    wave = [dict(r, wave=1, status="queued") for r in WAVE1_RESPONSE["runs"]]
+    wave[0]["status"] = "completed"
+    wave[0]["outcome"] = {"completed": True}
+    wave[1]["status"] = "running"
+    text = resume(dict(ready, status="running"), wave)
+    contains(text, "Stage: dispatch.", "queued runs are dispatched")
+    contains(text, "- r-base-2 · Baseline founder · repeat 2\n- r-stress-1 · Everything at risk · repeat 1", "queued in order, 1 based repeats")
+    contains(text, "1 more run(s) of this wave are already claimed: r-trust-1.", "claimed runs named")
+    contains(text, "| 1 | r-base-1 | Baseline founder | 1 | completed | completed |", "run table")
+    expect("- r-base-1 ·" not in text, "finished runs are not dispatched again")
+    busy = [dict(r, status="completed") for r in wave]
+    busy[1]["status"] = "running"
+    contains(resume(dict(ready, status="running"), busy), "Stage: running.", "claimed only: wait")
+    done1 = [dict(r, status="abandoned" if r["runId"] == "r-trust-1" else "completed") for r in wave]
+    contains(resume(dict(ready, status="running"), done1), "Stage: next_wave.", "terminal wave asks for the next")
+    done = resume(dict(ready, status="complete", runsDoneReason="at most 2 waves run per study"), done1)
+    contains(done, "Stage: report. Next:\nEvery wave is done: at most 2 waves run per study. Read the report: get_study_report.", "then the report")
+    STATE.error_overrides.clear()
+    bad = call_tool(srv, "get_study", {"study_id": "../x"})
+    expect(bad.get("isError") is True, "id checked locally")
+
+
 def case_68_study_tools_on_an_old_backend(srv: ServerProc, data_dir: Path) -> None:
     write_auth(data_dir)
     STATE.error_overrides["/api/studies"] = (404, {"error": "not_found", "message": "no such route"})
@@ -2730,7 +2777,7 @@ def case_68_study_tools_on_an_old_backend(srv: ServerProc, data_dir: Path) -> No
         expect(bad.get("isError") is True and len(STATE.requests) == before, f"{tool} checks the id locally")
 
 CASES = [
-    ("initialize + tools/list shows 19 tools", case_1_tools_list),
+    ("initialize + tools/list shows 20 tools", case_1_tools_list),
     ("start_run happy path (camelCase body, rich tool text)", case_2_start_run_happy),
     ("start_run maps feature_id -> featureId", case_2b_start_run_feature_id),
     ("start_run says when a pool member was chosen, not spun off", case_2e_start_run_says_chosen_not_spun),
@@ -2820,6 +2867,7 @@ CASES = [
     ("study_status counts runs and says what is next", case_66_study_status),
     ("study report: labels in words, stress, excluded, fencing", case_67_study_report),
     ("study tools on an old backend and with bad ids", case_68_study_tools_on_an_old_backend),
+    ("get_study resumes a study at every stage", case_69_get_study_resumes_at_every_stage),
 ]
 
 
