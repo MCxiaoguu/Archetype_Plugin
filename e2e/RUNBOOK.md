@@ -279,3 +279,38 @@ cd "$BE" && uv run python "$PL/e2e/verify_backend.py" --user-id <sub> --cleanup
 | B1 full pipeline with dummy replay | Steps 1, 8 (`verify_backend.py`) |
 | B2 every stage monitored; Mongo inspected | Steps 1 (log tail), 8 (checklist) |
 | C outer monitors pane/logs/Mongo; vision agent verdict | Steps 3, 8, 9 |
+
+## Relay study case (H2): a behavioral study graded against the answer key
+
+`e2e/relay_study.py` runs one complete `/archetype:study` on the Relay demo
+app with the real plugin and a real backend, unattended, and prints the
+defect by archetype matrix from `demo-apps/relay/GROUND_TRUTH.md`
+(`e2e/relay_matrix.py`; unit tests in `e2e/test_relay_matrix.py`). No tmux
+and no login: it serves a fresh copy of Relay, writes a fake JWT shaped
+`auth.json` into its own plugin data folder (the real login is never
+touched), runs a shadow copy of the plugin in `claude -p` with
+`unattended`, and the swarm runner starts one `claude -p` actor per run on
+its own isolated headless browser.
+
+```bash
+# backend in DEV_MODE (fake Auth0) on :5011, Mongo and Redis running
+python3 e2e/relay_study.py --out /tmp/relay-study --backend http://127.0.0.1:5011
+# resume a study that stopped part way (queued runs only; finished runs are kept)
+python3 e2e/relay_study.py --out /tmp/relay-study --study <studyId>
+# grade an existing study again without running anything
+python3 e2e/relay_study.py --out /tmp/relay-study --study <studyId> --grade-only
+```
+
+Defaults: factors `patience,trust_willingness_to_share,reading_behavior`,
+design `ofat_stress` with 5 archetypes, repeats `confirm` (7 runs in wave 1,
+up to 8 more in wave 2), 4 actors in parallel on Sonnet, `--max-runs 16`.
+Output folder: `session.jsonl` (the orchestrating session), `matrix.md` and
+`matrix.json`, `study_report.json`, `runs/<runId>.json`,
+`plugin-data/studies/<id>/<runId>/stream.jsonl` per actor and the session
+videos under `plugin-data/browser/<server>/videos`.
+
+Matrix cells: **found** (a finding or the persona's own quitting words
+match the defect), noticed (only the step narration does), reached, missed
+(the run opened a page the defect lives on), not reached. Signatures for
+D1 to D9 are plain word groups in `relay_matrix.SIGNATURES`; a defect added
+to the answer key later is matched by the code spans and quotes of its row.
