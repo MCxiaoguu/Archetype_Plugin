@@ -51,6 +51,7 @@ import json
 import os
 import queue
 import re
+import subprocess
 import sys
 import threading
 import time
@@ -1045,6 +1046,18 @@ BROWSER_PROFILES: dict[str, dict[str, Any]] = {
 }
 
 
+def _pinned_browser() -> dict[str, Any]:
+    """browser/pinned.json: the one source of the plugin browsers' settings."""
+    try:
+        data = json.loads((Path(__file__).resolve().parent.parent / "browser" / "pinned.json").read_text())
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+PINNED_BROWSER = _pinned_browser()
+
+
 def _browser_name_from_tool(tool_name: str) -> str | None:
     """Which browser a recorded tool call drove, from its MCP tool name."""
     match = re.match(r"^mcp__plugin_archetype_(archetype-(?:browser|watch)-\d+)__", tool_name or "")
@@ -1070,8 +1083,16 @@ def browser_config(name: Any) -> dict[str, Any] | None:
         if not match:
             return None
         # The plugin's own isolated Playwright servers: headless for
-        # archetype-browser-N, headed for archetype-watch-N.
-        profile = dict(BROWSER_PROFILES["playwright"], headless=match.group(1) == "browser")
+        # archetype-browser-N, headed for archetype-watch-N, all on the
+        # pinned package, user agent and viewport (browser/pinned.json).
+        pinned = PINNED_BROWSER
+        version = pinned.get("package")
+        if version and pinned.get("playwright_version"):
+            version = f"{version} (playwright {pinned['playwright_version']}, chrome channel)"
+        profile = dict(
+            BROWSER_PROFILES["playwright"], headless=match.group(1) == "browser",
+            version=version, user_agent=pinned.get("user_agent"), viewport=pinned.get("viewport"),
+        )
     return dict(profile, server=name)
 
 
@@ -3197,6 +3218,97 @@ def handle_next_study_wave(arguments: dict[str, Any]) -> dict[str, Any]:
     return tool_text(_render_wave(study_id, resp, None))
 
 
+def _queued_runs(study_id: str, study: dict[str, Any]) -> list[str]:
+    """The study's runs still waiting for an actor, in the backend's order."""
+    runs = study.get("runs") if isinstance(study.get("runs"), list) else []
+    queued = [
+        str(_pick(r, "runId", "run_id")) for r in runs
+        if isinstance(r, dict) and _pick(r, "status") == "queued" and _pick(r, "runId", "run_id")
+    ]
+    if queued or runs:
+        return [r for r in queued if _RUN_ID_RE.match(r)]
+    # A backend whose study object lists no runs: the last wave seen here.
+    waves = (_read_json_file((_study_dir(study_id) or Path("/nonexistent")) / "waves.json").get("waves") or {})
+    if not waves:
+        return []
+    last = waves[max(waves, key=lambda k: _int_or(k, 0))]
+    return [str(r.get("runId")) for r in last if isinstance(r, dict) and _RUN_ID_RE.match(str(r.get("runId")))]
+
+
+def _runner_alive(study_id: str) -> int | None:
+    folder = _study_dir(study_id)
+    status = _read_json_file(folder / "runner.json" if folder else None)
+    pid = status.get("pid")
+    if status.get("state") not in ("starting", "running") or not isinstance(pid, int):
+        return None
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return None
+    return pid
+
+
+def handle_dispatch_study(arguments: dict[str, Any]) -> dict[str, Any]:
+    study_id = arguments.get("study_id")
+    bad = _bad_study_id(study_id)
+    if bad:
+        return bad
+    plugin_data = os.environ.get("CLAUDE_PLUGIN_DATA")
+    if not plugin_data:
+        return tool_text("CLAUDE_PLUGIN_DATA is not set; the runner needs it for the login and logs.", is_error=True)
+    parallel = max(1, min(_int_or(arguments.get("parallel"), 2), 4))
+    alive = _runner_alive(study_id)
+    if alive:
+        return tool_text(
+            f"A swarm runner is already working on this study (pid {alive}). "
+            "Follow it with study_status; create a stop file in the study folder to stop it."
+        )
+    out = _study_call(lambda t: backend_get(f"/api/studies/{study_id}", auth_token=t))
+    if isinstance(out, dict):
+        return out
+    runs = _queued_runs(study_id, out[1])
+    if not runs:
+        return tool_text(
+            "No queued runs to dispatch. Create them with create_study_runs, or "
+            "ask for the next wave with next_study_wave."
+        )
+    estimate = _estimate(len(runs), parallel)
+    if not arguments.get("confirm"):
+        return tool_text(
+            f"Ready to run {len(runs)} queued run(s) unattended, {parallel} at a time.\n"
+            f"Estimate: {estimate}. Each worker is a separate `claude -p` session on "
+            "your Claude plan, so parallel workers use quota quickly; 2 is the default "
+            "for that reason. When this wave finishes the runner asks for the next "
+            "wave and runs it too, until the backend says the study is done.\n"
+            "Ask the user to confirm, then call dispatch_study again with confirm: true."
+        )
+    folder = _study_dir(study_id)
+    assert folder is not None
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "stop").unlink(missing_ok=True)
+    cmd = [
+        sys.executable, str(Path(__file__).resolve().parent / "study_runner.py"),
+        "--study", study_id, "--data-dir", plugin_data, "--backend", BACKEND_BASE,
+        "--runs", ",".join(runs), "--parallel", str(parallel),
+        "--timeout-min", str(max(_int_or(arguments.get("timeout_minutes"), 30), 5)),
+    ]
+    if arguments.get("model"):
+        cmd += ["--model", str(arguments["model"])]
+    try:
+        with (folder / "runner.log").open("a") as runner_log:
+            proc = subprocess.Popen(cmd, stdout=runner_log, stderr=subprocess.STDOUT,
+                                    stdin=subprocess.DEVNULL, start_new_session=True)
+    except OSError as exc:
+        return tool_text(f"Could not start the swarm runner: {exc}", is_error=True)
+    return tool_text(
+        f"Swarm runner started (pid {proc.pid}): {len(runs)} run(s), {parallel} at a time.\n"
+        f"Estimate: {estimate}.\n"
+        f"Per run logs: {folder}/<run_id>/stream.jsonl; runner log: {folder}/runner.log.\n"
+        "Poll study_status every 60 seconds. To stop new workers, create the "
+        f"file {folder}/stop."
+    )
+
+
 def handle_study_status(arguments: dict[str, Any]) -> dict[str, Any]:
     study_id = arguments.get("study_id")
     bad = _bad_study_id(study_id)
@@ -4045,6 +4157,23 @@ TOOLS: dict[str, dict[str, Any]] = {
         ),
         "schema": {"type": "object", "properties": {"study_id": {"type": "string"}}, "required": ["study_id"]},
         "handler": handle_next_study_wave,
+    },
+    "dispatch_study": {
+        "description": (
+            "Run a study's queued runs unattended with the swarm runner: one "
+            "`claude -p` worker per run, up to parallel (1 to 4, default 2) at "
+            "a time, each on its own isolated headless browser, then the next "
+            "wave, until the study is done. Without confirm: true it only "
+            "shows the run count and a time and quota estimate."
+        ),
+        "schema": {"type": "object", "properties": {
+            "study_id": {"type": "string"},
+            "parallel": {"type": "integer", "minimum": 1, "maximum": 4},
+            "model": {"type": "string", "description": "Optional model for the workers."},
+            "timeout_minutes": {"type": "integer", "description": "Per run limit, default 30."},
+            "confirm": {"type": "boolean", "description": "true only after the user agreed to the estimate."}},
+            "required": ["study_id"]},
+        "handler": handle_dispatch_study,
     },
     "study_status": {
         "description": (

@@ -562,6 +562,11 @@ class Handler(BaseHTTPRequestHandler):
                 return 200, STUDY_REPORT_RESPONSE
             if method == "PATCH":
                 return 200, dict(STUDY_RESPONSE, success=dict(STUDY_RESPONSE["success"], checksConfirmed=True))
+            if method == "GET" and path.count("/") == 3:
+                runs = [{"runId": r["runId"], "archetypeId": r["archetypeId"], "status": "queued"}
+                        for r in WAVE1_RESPONSE["runs"]]
+                runs.append({"runId": "r-old-0", "archetypeId": "a0", "status": "completed"})
+                return 200, dict(STUDY_RESPONSE, status="running", runs=runs)
         if path.endswith("/steps") and method == "POST":
             seq = ((body or {}).get("step") or {}).get("seq") or 1
             return 200, dict(STEPS_RESPONSE, state=dict(STEPS_RESPONSE["state"], seq=seq))
@@ -876,9 +881,10 @@ def case_1_tools_list(srv: ServerProc, data_dir: Path) -> None:
                 "next_study_wave",
                 "study_status",
                 "get_study_report",
+                "dispatch_study",
             ]
         ),
-        f"tools/list should show exactly the 19 tools, got {names}",
+        f"tools/list should show exactly the 20 tools, got {names}",
     )
     report = next(t for t in tools if t["name"] == "report_result")
     finding = report["inputSchema"]["properties"]["feedback"]["properties"]["findings"]["items"]
@@ -2662,8 +2668,82 @@ def case_68_study_tools_on_an_old_backend(srv: ServerProc, data_dir: Path) -> No
         bad = call_tool(srv, tool, {"study_id": "../features"})
         expect(bad.get("isError") is True and len(STATE.requests) == before, f"{tool} checks the id locally")
 
+
+
+# ---------------------------------------------------------------------------
+# Swarm runner (plan 5.6 mode 3)
+# ---------------------------------------------------------------------------
+
+FAKE_CLAUDE = """#!/usr/bin/env python3
+import json, os, sys, time
+time.sleep(0.3)
+print(json.dumps({"type": "system", "argv": sys.argv[1:],
+                  "nested": [k for k in os.environ if k == "CLAUDECODE" or k.startswith("CLAUDE_CODE_")],
+                  "backend": os.environ.get("ARCHETYPE_BACKEND_URL")}))
+print(json.dumps({"type": "result", "subtype": "success"}))
+"""
+
+
+def fake_claude(data_dir: Path) -> str:
+    path = data_dir / "fake-claude"
+    path.write_text(FAKE_CLAUDE)
+    path.chmod(0o755)
+    return str(path)
+
+
+def case_70_dispatch_study_needs_confirm(srv: ServerProc, data_dir: Path) -> None:
+    write_auth(data_dir)
+    text = result_text(call_tool(srv, "dispatch_study", {"study_id": STUDY_ID}))
+    contains(text, "Ready to run 5 queued run(s) unattended, 2 at a time.", "only queued runs counted")
+    contains(text, "5 run(s): about 24 to 45 minutes at 2 in parallel", "estimate at the default parallel 2")
+    contains(text, "confirm: true", "asks for confirmation")
+    expect(not (data_dir / "studies" / STUDY_ID / "runner.json").exists(), "nothing started")
+    contains(result_text(call_tool(srv, "dispatch_study", {"study_id": STUDY_ID, "parallel": 9})),
+             "4 at a time", "parallel is capped at the 4 browsers")
+
+
+def case_71_dispatch_study_runs_the_swarm(srv: ServerProc, data_dir: Path) -> None:
+    write_auth(data_dir)
+    own = ServerProc(srv.port, data_dir, {"ARCHETYPE_CLAUDE_BIN": fake_claude(data_dir), "CLAUDECODE": "1",
+                                          "CLAUDE_CODE_ENTRYPOINT": "cli", "ARCHETYPE_RUNNER_WAVE_WAIT": "0.2"})
+    try:
+        own.initialize()
+        text = result_text(call_tool(own, "dispatch_study", {"study_id": STUDY_ID, "confirm": True, "parallel": 2}))
+        contains(text, "Swarm runner started", "started")
+        folder = data_dir / "studies" / STUDY_ID
+        status = {}
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            try:
+                status = json.loads((folder / "runner.json").read_text())
+            except (OSError, ValueError):
+                status = {}
+            if status.get("state") == "finished":
+                break
+            time.sleep(0.3)
+        expect(status.get("state") == "finished", f"runner finished: {status.get('state')}")
+        workers = status["workers"]
+        expect(sorted(workers) == sorted(r["runId"] for r in WAVE1_RESPONSE["runs"]), f"every queued run: {sorted(workers)}")
+        expect(all(w["state"] == "finished" and w["exit_code"] == 0 for w in workers.values()), "all finished")
+        expect({w["browser"] for w in workers.values()} == {"archetype-browser-1", "archetype-browser-2"},
+               "two workers, two browsers")
+        first = json.loads((folder / "r-base-1" / "stream.jsonl").read_text().splitlines()[0])
+        argv = first["argv"]
+        expect(argv[0] == "-p" and argv[1].startswith("/archetype:validation --run r-base-1 browser=archetype-browser-"),
+               f"worker prompt: {argv[:2]}")
+        expect(Path(argv[argv.index("--plugin-dir") + 1]).resolve() == (folder / "plugin").resolve(), "the shadow plugin")
+        expect(first["nested"] == [], f"Claude Code markers removed: {first['nested']}")
+        expect(first["backend"] == f"http://127.0.0.1:{srv.port}", "backend passed to workers")
+        expect(count_requests("/runs/next", "POST") >= 1, "asked for the next wave")
+        shown = result_text(call_tool(own, "study_status", {"study_id": STUDY_ID}))
+        contains(shown, "Swarm runner: finished · 5 of 5 worker(s) finished", "status shows the swarm")
+        again = result_text(call_tool(own, "dispatch_study", {"study_id": "../x", "confirm": True}))
+        contains(again, "is not a study id", "bad id refused")
+    finally:
+        own.close()
+
 CASES = [
-    ("initialize + tools/list shows 19 tools", case_1_tools_list),
+    ("initialize + tools/list shows 20 tools", case_1_tools_list),
     ("start_run happy path (camelCase body, rich tool text)", case_2_start_run_happy),
     ("start_run maps feature_id -> featureId", case_2b_start_run_feature_id),
     ("start_run says when a pool member was chosen, not spun off", case_2e_start_run_says_chosen_not_spun),
@@ -2752,6 +2832,8 @@ CASES = [
     ("study_status counts runs and says what is next", case_66_study_status),
     ("study report: labels in words, stress, excluded, fencing", case_67_study_report),
     ("study tools on an old backend and with bad ids", case_68_study_tools_on_an_old_backend),
+    ("dispatch_study shows the estimate and waits for confirm", case_70_dispatch_study_needs_confirm),
+    ("dispatch_study runs the swarm: workers, browsers, waves, status", case_71_dispatch_study_runs_the_swarm),
 ]
 
 
