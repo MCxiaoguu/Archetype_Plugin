@@ -3259,16 +3259,18 @@ def handle_next_study_wave(arguments: dict[str, Any]) -> dict[str, Any]:
     return tool_text(_render_wave(study_id, resp, None))
 
 
-def _queued_runs(study_id: str, study: dict[str, Any]) -> list[str]:
-    """The study's runs still waiting for an actor, in the backend's order."""
-    runs = study.get("runs") if isinstance(study.get("runs"), list) else []
-    queued = [
-        str(_pick(r, "runId", "run_id")) for r in runs
-        if isinstance(r, dict) and _pick(r, "status") == "queued" and _pick(r, "runId", "run_id")
-    ]
-    if queued or runs:
-        return [r for r in queued if _RUN_ID_RE.match(r)]
-    # A backend whose study object lists no runs: the last wave seen here.
+def _queued_runs(study_id: str, listing: dict[str, Any]) -> list[str]:
+    """The study's runs still waiting for an actor, in the backend's order,
+    from GET /api/studies/<id>/runs (each run carries its live status; the
+    study object's own run refs do not)."""
+    runs = listing.get("runs") if isinstance(listing.get("runs"), list) else None
+    if runs is not None:
+        return [
+            str(_pick(r, "runId", "run_id")) for r in runs
+            if isinstance(r, dict) and _pick(r, "status") == "queued"
+            and _RUN_ID_RE.match(str(_pick(r, "runId", "run_id")))
+        ]
+    # No run listing: the last wave seen here.
     waves = (_read_json_file((_study_dir(study_id) or Path("/nonexistent")) / "waves.json").get("waves") or {})
     if not waves:
         return []
@@ -3304,7 +3306,7 @@ def handle_dispatch_study(arguments: dict[str, Any]) -> dict[str, Any]:
             f"A swarm runner is already working on this study (pid {alive}). "
             "Follow it with study_status; create a stop file in the study folder to stop it."
         )
-    out = _study_call(lambda t: backend_get(f"/api/studies/{study_id}", auth_token=t))
+    out = _study_call(lambda t: backend_get(f"/api/studies/{study_id}/runs", auth_token=t))
     if isinstance(out, dict):
         return out
     runs = _queued_runs(study_id, out[1])
@@ -4201,7 +4203,7 @@ TOOLS: dict[str, dict[str, Any]] = {
     },
     "dispatch_study": {
         "description": (
-            "Run a study's queued runs unattended with the swarm runner: one "
+            "Run a study's queued runs (GET /api/studies/<id>/runs) unattended with the swarm runner: one "
             "`claude -p` worker per run, up to parallel (1 to 4, default 2) at "
             "a time, each on its own isolated headless browser, then the next "
             "wave, until the study is done. Without confirm: true it only "

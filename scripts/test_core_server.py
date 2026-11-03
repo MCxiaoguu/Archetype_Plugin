@@ -554,6 +554,11 @@ class Handler(BaseHTTPRequestHandler):
                 return 200, ARCHETYPES_RESPONSE
             if path.endswith("/runs/next"):
                 return 200, {"done": True, "reason": "no archetype disagrees with the baseline"}
+            if path.endswith("/runs") and method == "GET":
+                runs = [{"runId": r["runId"], "archetypeId": r["archetypeId"], "status": "queued", "wave": 1}
+                        for r in WAVE1_RESPONSE["runs"]]
+                runs.append({"runId": "r-old-0", "archetypeId": "a0", "status": "completed", "wave": 1})
+                return 200, {"studyId": STUDY_ID, "currentWave": 1, "status": "running", "runs": runs}
             if path.endswith("/runs"):
                 return 201, WAVE1_RESPONSE
             if path.endswith("/status"):
@@ -563,10 +568,10 @@ class Handler(BaseHTTPRequestHandler):
             if method == "PATCH":
                 return 200, dict(STUDY_RESPONSE, success=dict(STUDY_RESPONSE["success"], checksConfirmed=True))
             if method == "GET" and path.count("/") == 3:
-                runs = [{"runId": r["runId"], "archetypeId": r["archetypeId"], "status": "queued"}
-                        for r in WAVE1_RESPONSE["runs"]]
-                runs.append({"runId": "r-old-0", "archetypeId": "a0", "status": "completed"})
-                return 200, dict(STUDY_RESPONSE, status="running", runs=runs)
+                # The study object's run refs carry no status (docs/studies-api.md).
+                return 200, dict(STUDY_RESPONSE, status="running", runs=[
+                    {k: r[k] for k in ("runId", "archetypeId", "archetypeName", "repeatIndex")}
+                    for r in WAVE1_RESPONSE["runs"]])
         if path.endswith("/steps") and method == "POST":
             seq = ((body or {}).get("step") or {}).get("seq") or 1
             return 200, dict(STEPS_RESPONSE, state=dict(STEPS_RESPONSE["state"], seq=seq))
@@ -2743,6 +2748,8 @@ def case_70_dispatch_study_needs_confirm(srv: ServerProc, data_dir: Path) -> Non
     write_auth(data_dir)
     text = result_text(call_tool(srv, "dispatch_study", {"study_id": STUDY_ID}))
     contains(text, "Ready to run 5 queued run(s) unattended, 2 at a time.", "only queued runs counted")
+    expect(STATE.last_for("/runs")["path"] == f"/api/studies/{STUDY_ID}/runs"
+           and STATE.last_for("/runs")["method"] == "GET", "the live run listing is read")
     contains(text, "5 run(s): about 24 to 45 minutes at 2 in parallel", "estimate at the default parallel 2")
     contains(text, "confirm: true", "asks for confirmation")
     expect(not (data_dir / "studies" / STUDY_ID / "runner.json").exists(), "nothing started")
