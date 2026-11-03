@@ -2612,7 +2612,7 @@ def case_64_create_study_runs(srv: ServerProc, data_dir: Path) -> None:
     text = result_text(call_tool(srv, "create_study_runs", {"study_id": STUDY_ID}))
     req = STATE.last_for("/runs")
     expect(req["path"] == f"/api/studies/{STUDY_ID}/runs" and req["body"] == {}, "POST runs with {}")
-    contains(text, "Wave 1: 5 run(s) created (queued, nothing is running yet).", "headline")
+    contains(text, "Wave 1: 5 run(s) created (queued until an actor claims them).", "headline")
     contains(text, "| Baseline founder | 3 |", "baseline repeats")
     contains(text, "- r-base-1 · Baseline founder · repeat 1\n- r-trust-1 · Low-trust founder", "dispatch order kept")
     contains(text, "5 run(s): about 16 to 30 minutes at 4 in parallel", "estimate at 4 browsers")
@@ -2632,11 +2632,19 @@ def case_65_next_study_wave(srv: ServerProc, data_dir: Path) -> None:
     busy = call_tool(srv, "next_study_wave", {"study_id": STUDY_ID})
     expect(not busy.get("isError"), "a running wave is not an error, just not yet")
     contains(result_text(busy), "Not yet: 2 runs are still running", "409 explained")
-    STATE.error_overrides["/runs/next"] = (200, {"wave": 2, "runs": [
-        {"runId": "r-trust-2", "archetypeName": "Low-trust founder", "repeatIndex": 2},
-        {"runId": "r-trust-3", "archetypeName": "Low-trust founder", "repeatIndex": 3}]})
-    contains(result_text(call_tool(srv, "next_study_wave", {"study_id": STUDY_ID})),
-             "Wave 2: 2 run(s) created", "wave 2 rendered")
+    STATE.error_overrides["/runs/next"] = (201, {"wave": 2, "created": True, "repeatPolicy": "confirm", "runs": [
+        {"runId": "r-trust-2", "archetypeName": "Low-trust founder", "repeatIndex": 1},
+        {"runId": "r-trust-3", "archetypeName": "Low-trust founder", "repeatIndex": 2}],
+        "reasons": [{"archetypeName": "Low-trust founder", "count": 2,
+                     "reason": "did not complete while the baseline majority completed"}]})
+    wave2 = result_text(call_tool(srv, "next_study_wave", {"study_id": STUDY_ID}))
+    contains(wave2, "Wave 2: 2 run(s) created", "wave 2 rendered")
+    contains(wave2, "- Low-trust founder (+2): did not complete while the baseline majority completed", "why it reruns")
+    expect("Likely wave 2" not in wave2, "no wave 2 estimate on wave 2")
+    STATE.error_overrides["/runs"] = (200, dict(WAVE1_RESPONSE, created=False, repeatPolicy="explore"))
+    again = result_text(call_tool(srv, "create_study_runs", {"study_id": STUDY_ID}))
+    contains(again, "Wave 1: 5 run(s) already existed", "an existing wave 1 is said so")
+    expect("Likely wave 2" not in again, "explore (from the backend) has no wave 2")
 
 
 def case_66_study_status(srv: ServerProc, data_dir: Path) -> None:

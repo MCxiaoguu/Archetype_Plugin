@@ -3170,13 +3170,20 @@ def _save_wave(study_id: str, resp: dict[str, Any]) -> None:
 def _render_wave(study_id: str, resp: dict[str, Any], repeat_policy: str | None) -> str:
     runs = [r for r in (resp.get("runs") or []) if isinstance(r, dict)]
     wave = resp.get("wave", "?")
+    repeat_policy = resp.get("repeatPolicy") or repeat_policy
     counts: dict[str, int] = {}
     for r in runs:
         name = str(r.get("archetypeName") or r.get("archetypeId") or "?")
         counts[name] = counts.get(name, 0) + 1
-    lines = [f"Wave {wave}: {len(runs)} run(s) created (queued, nothing is running yet).", "",
+    made = "already existed" if resp.get("created") is False else "created"
+    lines = [f"Wave {wave}: {len(runs)} run(s) {made} (queued until an actor claims them).", "",
              "| Archetype | Runs |", "|---|---|"]
     lines += [f"| {_cell(n, 60)} | {c} |" for n, c in counts.items()]
+    reasons = [r for r in (resp.get("reasons") or []) if isinstance(r, dict)]
+    if reasons:
+        lines.append("\nWhy these archetypes run again:")
+        lines += [f"- {_clip(r.get('archetypeName'), 60)} (+{r.get('count', '?')}): {_clip(r.get('reason'), 240)}"
+                  for r in reasons]
     lines.append("\nRun order (interleaved by the backend; dispatch in this order):")
     for r in runs:
         lines.append(f"- {r.get('runId')} · {_clip(r.get('archetypeName'), 60)} · repeat {r.get('repeatIndex', 1)}")
