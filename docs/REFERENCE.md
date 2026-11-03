@@ -37,7 +37,14 @@ or `/archetype:study study=<id>` to resume a study (`get_study`: the stage
 it reached and the next call). `unattended` asks nothing and confirms
 nothing (the command line is the consent): it accepts a suggested check,
 applies `factors=` or the backend's selection, dispatches the swarm runner
-with `confirm: true` and waits with `study_status` `wait_seconds: 300`. A
+with `confirm: true` and waits with `study_status` `wait_seconds: 300`.
+`max_runs=N` caps the actor runs (`dispatch_study` `max_runs`, the runner's
+`--max-runs`): a next wave larger than what is left runs the archetypes whose
+outcome disagreed with the baseline first, then frustration, then steps, and
+the rest are reported as aborted with "not run: the run budget of N was
+spent". The runner also aborts, with the reason, a run whose worker exited
+or timed out without reporting and one whose worker logged no step for
+`--stall-min` (20) minutes after the claim. A
 missing ICP or success criterion is asked once, with suggestions from the
 feature target or the pool.
 
@@ -172,8 +179,11 @@ under `protocolV2`. The body adds:
   outcome kept in feedback),
 - `feedback.outcome {completed, in_their_words, quit_reason?,
   abandoned_at_step?}` with the backend's quit reasons (`price_barrier`,
-  `confusion`, `feature_not_found`, `goal_completed`, `frustration`,
-  `technical_error`, `distraction`, `other`); quit fields are dropped from
+  `trust_refused`, `confusion`, `feature_not_found`, `goal_completed`,
+  `frustration`, `technical_error`, `distraction`, `other`; `trust_refused`
+  when the person leaves out of distrust, such as a broken promise, an
+  unexplained card request or a data request they are not comfortable with,
+  `price_barrier` only for the price itself); quit fields are dropped from
   a completed outcome,
 - `rawActions`: `runs/<run_id>.actions.jsonl` (at most 1000),
 - `browser`: the config of the browser the recorded actions drove, else the
