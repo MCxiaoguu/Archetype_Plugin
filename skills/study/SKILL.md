@@ -12,8 +12,22 @@ the factors and builds the archetypes; you run the actors and relay the
 report.
 
 Load the study tools in one ToolSearch query:
-`select:mcp__plugin_archetype_core__create_study,mcp__plugin_archetype_core__generate_factors,mcp__plugin_archetype_core__update_factors,mcp__plugin_archetype_core__generate_archetypes,mcp__plugin_archetype_core__create_study_runs,mcp__plugin_archetype_core__next_study_wave,mcp__plugin_archetype_core__study_status,mcp__plugin_archetype_core__dispatch_study,mcp__plugin_archetype_core__get_study_report,mcp__plugin_archetype_core__list_features,mcp__plugin_archetype_core__list_pools`.
+`select:mcp__plugin_archetype_core__create_study,mcp__plugin_archetype_core__generate_factors,mcp__plugin_archetype_core__update_factors,mcp__plugin_archetype_core__generate_archetypes,mcp__plugin_archetype_core__create_study_runs,mcp__plugin_archetype_core__next_study_wave,mcp__plugin_archetype_core__study_status,mcp__plugin_archetype_core__dispatch_study,mcp__plugin_archetype_core__get_study_report,mcp__plugin_archetype_core__get_study,mcp__plugin_archetype_core__list_features,mcp__plugin_archetype_core__list_pools`.
 Auth is self-healing in the main session; never pre-call `login`.
+
+## 0. Resume an existing study
+
+`/archetype:study study=<id>` (the portal tells users to do this, and it is
+how a study continues after a closed session): skip the intake and call
+`get_study` with that id. It shows the study, its factors and archetypes,
+every run with its live status, the stage it reached and the next tool
+call. Continue from that stage with the step below that owns it: factors
+(step 3), archetypes (step 4), runs (step 5), dispatch of the queued runs it
+lists, in its order (step 6; never runs that already finished), the next
+wave (step 7) or the report (step 8). Runs it shows as claimed but not
+reported belong to an actor that may still be working: wait for them with
+`study_status`; never dispatch them again. Other arguments given with
+`study=` (for example `unattended` or `parallel=`) still apply.
 
 ## 1. Intake
 
@@ -33,8 +47,11 @@ does, into:
 | `parallel=1..4` | 4 in session, 2 unattended |
 | `watch=live` | off: headless |
 | `browser=chrome` | off: isolated Playwright |
-| `unattended` | off: actors run as subagents in this session |
+| `unattended` | off: actors run as subagents in this session. On: no questions and no confirmations (see "Unattended mode"), swarm runner |
+| `model=` | none: the workers' default model. With `unattended`, passed to `dispatch_study` for the actor workers (for example `sonnet`) |
 | `questions="...;..."` | none |
+| `factors=key,key,...` | none: the backend's selection. When given, select exactly these factor keys in this order after `generate_factors` (one `update_factors` call) instead of asking |
+| `study=<id>` | resume that study (section 0) |
 | preconditions | context the testers bring, as in `validation` |
 
 Missing ICP or success criterion: ask ONCE, in one message, with
@@ -53,6 +70,29 @@ archetype), `factorial` (3 factors, 8 archetypes, interactions),
 attribution). Suggest `factorial` or `half_fraction` only as a follow up to
 a finished study.
 
+### Unattended mode
+
+`unattended` is for a session nobody is watching (`claude -p`, CI, a user
+who walks away). The command line is the consent: the user asked for the
+whole study by typing it, so this mode asks nothing and confirms nothing.
+
+- A missing goal, url, ICP or success criterion: stop with one line naming
+  what is missing (nobody can answer a question). Never invent them.
+- Step 2: a suggested success check is accepted (`create_study` with
+  `study_id` and `confirm_checks: true`) unless `success_checks` were given.
+- Step 3: `factors=` is applied; otherwise the backend's selection stands.
+- Step 4: the archetypes stand. Steps 5 and 6: create the runs, then call
+  `dispatch_study` once with `confirm: true`, `parallel` (default 2) and
+  `model` when given.
+- Waiting: call `study_status` with `wait_seconds: 300` again and again (it
+  returns early when a run finishes) and print one progress line each time,
+  until it says the swarm runner finished and every run is terminal. Then
+  call `next_study_wave` once: it should answer "no more waves" (the runner
+  asked for them); if it creates runs, dispatch them the same way.
+- Step 8 as usual. Print the full report: it is the session's output.
+
+Every other rule still holds: never invent factors, archetypes or results.
+
 ## 2. Create the study
 
 Call `create_study` (snake_case arguments; the tool sends camelCase).
@@ -66,7 +106,10 @@ message as step 3's question, and apply the answer with `create_study`
 Call `generate_factors`. Show the table (factor, why it matters here, risk
 pole, typical level) and ask once: "Use these N factors, or edit?" Edits go
 through `update_factors` (select or deselect by key, rename, flip the risk
-pole, set the typical level, reorder). A note that factors were chosen
+pole, set the typical level, reorder). With `factors=`, apply that
+selection with one `update_factors` call (select the named keys, deselect
+the others, `order` as given) and show the result instead of asking; a key
+the backend did not offer is reported, not invented. A note that factors were chosen
 without a model means the backend used its default three: say so.
 
 ## 4. Archetypes
@@ -103,7 +146,9 @@ browsers: the report compares only runs with the same browser config):
    the next wave by itself when one finishes. Poll `study_status` every 60
    seconds and report progress in one line each time; when it says the
    runner finished and the backend has no more waves, go to step 8. Never
-   confirm on the user's behalf.
+   confirm on the user's behalf; the one exception is `unattended`, where
+   the command line was the confirmation (see "Unattended mode": call it
+   once with `confirm: true` and wait with `study_status` `wait_seconds`).
 3. **`watch=live`**: headed Playwright, two at a time, on servers
    `archetype-watch-1` and `archetype-watch-2`.
 4. **Default**: headless isolated Playwright, up to 4 at a time (or
