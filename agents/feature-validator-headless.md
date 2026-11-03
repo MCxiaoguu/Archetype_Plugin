@@ -142,8 +142,8 @@ your only window onto the product.
    pass|fail|blocked, actualResult}]`, `findings[{scenarioId, category
    bug|ux|content|performance|other, severity critical|high|medium|low,
    description, evidenceStepSeq, evidence?}]`, `personaReaction`, and on
-   protocol 2 `outcome {completed, quit_reason, abandoned_at_step,
-   in_their_words}`. Give a
+   protocol 2 `outcome {completed, in_their_words}`, plus `quit_reason`
+   and `abandoned_at_step` only when you did not complete. Give a
    finding an `evidence` object whenever you can: `url` (the page),
    `selector` (a CSS selector or role plus accessible name for the element)
    and `quote` (the exact on-screen text you are reporting, copied, not

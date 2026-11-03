@@ -1326,8 +1326,8 @@ def _render_run(body: dict[str, Any], preconditions: list[str] | None = None) ->
             "run_id, session_id, status (completed|failed|aborted|abandoned), "
             "duration_seconds, steps ([] when every step went through log_step; "
             "the server sends them), feedback {verdict pass|fail|mixed, summary, "
-            "outcome{completed true|false, quit_reason "
-            f"{reasons}, abandoned_at_step, in_their_words}}, "
+            "outcome{completed true|false, in_their_words, and only when "
+            f"completed is false: quit_reason {reasons}, abandoned_at_step}}, "
             "scenarioResults[{scenarioId,status pass|fail|blocked,actualResult}], "
             "findings[{scenarioId,category bug|ux|content|performance|other,"
             "severity critical|high|medium|low,description,evidenceStepSeq,"
@@ -2039,6 +2039,14 @@ def handle_report_result(arguments: dict[str, Any]) -> dict[str, Any]:
     extra = unsent if version >= 2 else (journal if not steps else [])
     steps += [_v1_step(r) for r in extra if r.get("seq") not in have]
     steps.sort(key=lambda s: _int_or(s.get("seq"), 0))
+
+    # A completed run has no quit reason: drop the placeholders an actor
+    # sometimes fills in, so the report never counts a success as a quit.
+    outcome = feedback.get("outcome") if isinstance(feedback, dict) else None
+    if isinstance(outcome, dict) and outcome.get("completed") is True:
+        cleaned = {k: v for k, v in outcome.items() if k not in ("quit_reason", "abandoned_at_step")}
+        if cleaned != outcome:
+            feedback = dict(feedback, outcome=cleaned)
 
     status_out = status_arg
     if status_out == "abandoned" and version < 2:
