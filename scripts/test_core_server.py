@@ -900,8 +900,8 @@ def case_1_tools_list(srv: ServerProc, data_dir: Path) -> None:
     )
     report = next(t for t in tools if t["name"] == "report_result")
     quit_enum = report["inputSchema"]["properties"]["feedback"]["properties"]["outcome"]["properties"]["quit_reason"]["enum"]
-    expect(quit_enum == ["price_barrier", "confusion", "feature_not_found", "goal_completed", "frustration",
-                         "technical_error", "distraction", "other"], f"the backend's quit reasons, got {quit_enum}")
+    expect(quit_enum == ["price_barrier", "trust_refused", "confusion", "feature_not_found", "goal_completed",
+                         "frustration", "technical_error", "distraction", "other"], f"the backend's quit reasons, got {quit_enum}")
     finding = report["inputSchema"]["properties"]["feedback"]["properties"]["findings"]["items"]
     evidence = finding["properties"]["evidence"]
     expect(evidence["type"] == "object", f"evidence must be an object, got {evidence}")
@@ -2238,6 +2238,9 @@ def case_50_start_run_v2_briefing(srv: ServerProc, data_dir: Path) -> None:
     contains(text, "PROTOCOL 2: after EVERY browser action, call log_step", "per step instruction")
     contains(text, "status (completed|failed|aborted|abandoned)", "abandoned in the contract")
     contains(text, "outcome{completed true|false, in_their_words, and only when completed is false: quit_reason", "outcome in the contract")
+    contains(text, "price_barrier|trust_refused|confusion", "trust_refused is offered")
+    contains(text, "Choose trust_refused when you leave because you do not trust the site", "when to choose it")
+    contains(text, "Choose price_barrier only when the price itself is the objection", "price stays price")
     contains(text, "close the browser", "close before report")
     expect("PROTOCOL 1" not in text, "no v1 fallback text on a v2 run")
     expect("very high impatience" not in text, "rules replace the trait phrases")

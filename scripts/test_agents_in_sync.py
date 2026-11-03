@@ -41,7 +41,7 @@ REQUIRED_TOOLS = (
     "mcp__plugin_archetype_core__log_step",
     "mcp__plugin_archetype_core__report_result",
 )
-PER_STEP_MUSTS = ("log_step", "Trust gates", "Giving up", "abandoned", "visible_text_excerpt")
+PER_STEP_MUSTS = ("log_step", "Trust gates", "Giving up", "abandoned", "visible_text_excerpt", "trust_refused")
 
 
 def frontmatter(path: Path) -> dict[str, str]:
