@@ -74,6 +74,15 @@ Every isolated run records a video (`.webm`) and keeps a raw log of every
 browser call beside the persona's own step log, so a step the persona
 narrated but never did is flagged.
 
+## Figma plugin
+
+Designers can launch the same persona studies from inside Figma. The plugin in
+[`figma/`](figma/README.md) reads a prototype's connections, checks the flow
+before launch (unreachable goals, dead ends, broken hotspots, unclear layer
+names), creates a study against the prototype share link, and brings results
+back as a report and as annotations on the frames. See
+[figma/README.md](figma/README.md) to import it in the Figma desktop app.
+
 ## Architecture
 
 ```
