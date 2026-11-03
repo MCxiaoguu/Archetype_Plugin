@@ -4,7 +4,7 @@ inside Claude Code) and the Archetype backend.
 
 Claude never handles tokens or raw HTTP: it calls these MCP tools and reads
 their natural-language renderings. The run-path tools are described below;
-the TOOLS registry at the bottom of this file is the full list (ten tools).
+the TOOLS registry at the bottom of this file is the full list.
 
 Tools:
 
@@ -23,6 +23,13 @@ Tools:
                      report (falls back to ``GET /api/plugin/runs/<id>``).
 - ``list_features``— ``GET /api/features``: list the user's saved features
                      (their ``_id`` is the ``feature_id`` for ``start_run``).
+- ``log_step``:      ``POST /api/plugin/runs/<id>/steps`` (protocol 2): one
+                     step record per browser action, stamped with
+                     client_ts and elapsed_s, buffered locally when the
+                     backend is slow; answers with the actor's state.
+
+``start_run`` with ``run_id`` claims a run a study created in advance
+(``POST /api/plugin/runs/<id>/claim``).
 
 All tools other than ``login`` require a Bearer token; any 401 tells the user
 to run ``/archetype:setup`` to log in.
@@ -891,6 +898,222 @@ def run_web_url(run_id: str) -> str:
     return f"{PORTAL_URL}/workspace/tests/{urllib.parse.quote(run_id, safe='')}/results"
 
 
+# ---------- run-local files (protocol v2) ----------
+#
+# Everything a run needs between tool calls lives under
+# ${CLAUDE_PLUGIN_DATA}/runs/, keyed by run id:
+#   <run_id>.state.json     what start_run learned (protocol, budgets, rules)
+#                           plus the local patience counters
+#   <run_id>.journal.jsonl  every step log_step saw, sent or not
+#   <run_id>.steps.jsonl    the steps the backend has not acknowledged yet
+#   <run_id>.actions.jsonl  raw browser actions, written by action-hook.py
+# Several actors can share this server process (parallel subagents), so
+# every read-modify-write of one run's files holds that run's lock.
+
+_run_locks: dict[str, threading.Lock] = {}
+_run_locks_guard = threading.Lock()
+
+
+def _run_lock(run_id: str) -> threading.Lock:
+    with _run_locks_guard:
+        lock = _run_locks.get(run_id)
+        if lock is None:
+            lock = _run_locks[run_id] = threading.Lock()
+        return lock
+
+
+def _runs_dir() -> Path | None:
+    plugin_data = os.environ.get("CLAUDE_PLUGIN_DATA")
+    return Path(plugin_data) / "runs" if plugin_data else None
+
+
+def _run_file(run_id: str, suffix: str) -> Path | None:
+    base = _runs_dir()
+    return base / f"{run_id}.{suffix}" if base else None
+
+
+def _read_json_file(path: Path | None) -> dict[str, Any]:
+    if path is None or not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text())
+        return data if isinstance(data, dict) else {}
+    except Exception as exc:
+        log(f"unreadable {path.name}: {exc}")
+        return {}
+
+
+def _write_json_file(path: Path | None, data: dict[str, Any]) -> None:
+    if path is None:
+        return
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp.write_text(json.dumps(data, indent=2) + "\n")
+        tmp.replace(path)
+    except Exception as exc:  # local state is a convenience, never fatal
+        log(f"could not write {path}: {exc}")
+
+
+def _read_jsonl(path: Path | None, limit: int | None = None) -> list[dict[str, Any]]:
+    if path is None or not path.exists():
+        return []
+    out: list[dict[str, Any]] = []
+    try:
+        for line in path.read_text().splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                item = json.loads(line)
+            except json.JSONDecodeError:
+                continue  # a torn last line from a crash is skipped, not fatal
+            if isinstance(item, dict):
+                out.append(item)
+    except Exception as exc:
+        log(f"unreadable {path.name}: {exc}")
+    return out[-limit:] if limit else out
+
+
+def _write_jsonl(path: Path | None, items: list[dict[str, Any]]) -> None:
+    if path is None:
+        return
+    try:
+        if not items:
+            path.unlink(missing_ok=True)
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp.write_text("".join(json.dumps(i) + "\n" for i in items))
+        tmp.replace(path)
+    except Exception as exc:
+        log(f"could not write {path}: {exc}")
+
+
+def _append_jsonl(path: Path | None, item: dict[str, Any]) -> None:
+    if path is None:
+        return
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a") as fh:
+            fh.write(json.dumps(item) + "\n")
+    except Exception as exc:
+        log(f"could not append to {path}: {exc}")
+
+
+def _pick(d: Any, *keys: str, default: Any = None) -> Any:
+    """First present key of a dict, so snake_case and camelCase both work.
+
+    The study contract is camelCase at the REST edge while the briefing's
+    instructions.behavior block is specified in snake_case; reading both
+    spellings keeps the plugin working whichever one the backend ships."""
+    if not isinstance(d, dict):
+        return default
+    for key in keys:
+        if key in d and d[key] is not None:
+            return d[key]
+    return default
+
+
+def _int_or(value: Any, default: int) -> int:
+    if isinstance(value, bool):
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+# ---------- browser profiles ----------
+#
+# The browser config a run records on claim and on report (addendum D3):
+# {engine, version, headless, user_agent, viewport, profile}. The actor names
+# its browser; this table turns the name into the config, so the actor never
+# has to know user agents or versions.
+
+BROWSER_PROFILES: dict[str, dict[str, Any]] = {
+    "chrome": {
+        "engine": "chrome", "version": None, "headless": False,
+        "user_agent": None, "viewport": None, "profile": "real",
+    },
+    # A Playwright server the user registered themselves as `playwright`:
+    # its flags are unknown, so only what is certain is recorded.
+    "playwright": {
+        "engine": "playwright", "version": None, "headless": True,
+        "user_agent": None, "viewport": None, "profile": "isolated",
+    },
+}
+
+
+def _browser_name_from_tool(tool_name: str) -> str | None:
+    """Which browser a recorded tool call drove, from its MCP tool name."""
+    match = re.match(r"^mcp__plugin_archetype_(archetype-(?:browser|watch)-\d+)__", tool_name or "")
+    if match:
+        return match.group(1)
+    if (tool_name or "").startswith("mcp__claude-in-chrome__"):
+        return "chrome"
+    if (tool_name or "").startswith("mcp__playwright__"):
+        return "playwright"
+    return None
+
+
+def browser_config(name: Any) -> dict[str, Any] | None:
+    """The recorded browser config for a browser name, or None if unknown."""
+    if isinstance(name, dict):
+        return name or None
+    if not isinstance(name, str) or not name.strip():
+        return None
+    name = name.strip()
+    profile = BROWSER_PROFILES.get(name)
+    if profile is None:
+        match = re.match(r"^archetype-(browser|watch)-\d+$", name)
+        if not match:
+            return None
+        # The plugin's own isolated Playwright servers: headless for
+        # archetype-browser-N, headed for archetype-watch-N.
+        profile = dict(BROWSER_PROFILES["playwright"], headless=match.group(1) == "browser")
+    return dict(profile, server=name)
+
+
+# ---------- persona traits as words (old backends) ----------
+
+
+def _trait_level(value: Any) -> float | None:
+    """A trait value on any of the scales backends have used, as 0..1."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    v = float(value)
+    if v < 0:
+        return None
+    if v <= 1:
+        return v
+    if v <= 5:
+        return (v - 1) / 4
+    if v <= 100:
+        return v / 100
+    return None
+
+
+def _traits_to_phrases(traits: Any) -> list[str]:
+    """persona.traits as short phrases ("very high impatience").
+
+    Used only when the backend sends no behavior block: before protocol v2
+    the traits were never shown to the actor at all."""
+    if not isinstance(traits, dict):
+        return []
+    words = ((0.2, "very low"), (0.4, "low"), (0.6, "moderate"), (0.8, "high"))
+    phrases = []
+    for key, value in traits.items():
+        level = _trait_level(value)
+        if level is None or not isinstance(key, str):
+            continue
+        label = next((w for limit, w in words if level < limit), "very high")
+        name = re.sub(r"[_\-]+", " ", re.sub(r"(?<=[a-z])(?=[A-Z])", " ", key)).strip().lower()
+        if name:
+            phrases.append(f"{label} {name}")
+    return phrases
+
+
 # ---------- tool: start_run ----------
 
 
@@ -904,12 +1127,83 @@ def _as_precondition_list(value: Any) -> list[str]:
     return [str(item).strip() for item in items if str(item).strip()]
 
 
+def protocol_version(body: dict[str, Any]) -> int:
+    """2 for a protocol v2 briefing, 1 for every older backend.
+
+    Detected by the presence of instructions.protocol_version: a backend
+    that does not send it predates live steps, behavior rules and
+    abandonment, and the run falls back to the 0.5 behavior."""
+    instructions = body.get("instructions") or {}
+    raw = _pick(instructions, "protocol_version", "protocolVersion")
+    if raw is None:
+        raw = _pick(body, "protocol_version", "protocolVersion")
+    return max(_int_or(raw, 1), 1)
+
+
+def _behavior(body: dict[str, Any]) -> dict[str, Any]:
+    behavior = (body.get("instructions") or {}).get("behavior")
+    return behavior if isinstance(behavior, dict) else {}
+
+
+def _budget(behavior: dict[str, Any]) -> tuple[int, int]:
+    """(max_steps, max_unproductive_steps) from a behavior block; the
+    level 3 defaults of the policy table when absent."""
+    budget = _pick(behavior, "patience_budget", "patienceBudget", default={})
+    max_steps = _int_or(_pick(budget, "max_steps", "maxSteps"), 22)
+    max_unproductive = _int_or(
+        _pick(budget, "max_unproductive_steps", "maxUnproductiveSteps"), 5
+    )
+    return max(max_steps, 1), max(max_unproductive, 1)
+
+
+def _success_block(body: dict[str, Any]) -> tuple[str | None, list[dict[str, Any]]]:
+    """The run's success criterion and checks, wherever the backend put them."""
+    instructions = body.get("instructions") or {}
+    success = _pick(instructions, "success", default={})
+    if not isinstance(success, dict):
+        success = {}
+    criterion = _pick(success, "criterion") or _pick(
+        instructions, "success_criterion", "successCriterion"
+    )
+    checks = _pick(success, "checks") or _pick(
+        instructions, "success_checks", "successChecks", default=[]
+    )
+    if not isinstance(checks, list):
+        checks = []
+    return (str(criterion) if criterion else None), [c for c in checks if isinstance(c, dict)]
+
+
+_CHECK_WORDS = {
+    "url_matches": "the address matches",
+    "text_visible": "you can read the text",
+    "element_present": "you can see the element",
+    "page_type_reached": "you reach a page of type",
+    "actor_confirms": "you yourself confirm",
+}
+
+# Why a person stopped. The backend owns the enum; a briefing that lists its
+# own (reporting.quitReasons) wins over this default.
+QUIT_REASONS = (
+    "patience_exhausted", "trust_refused", "unexpected_cost", "confusing",
+    "error_blocked", "too_slow", "not_worth_it", "goal_not_found", "other",
+)
+
+
+def _quit_reasons(body: dict[str, Any]) -> list[str]:
+    listed = _pick(body.get("reporting") or {}, "quitReasons", "quit_reasons")
+    if isinstance(listed, list) and listed and all(isinstance(r, str) for r in listed):
+        return listed
+    return list(QUIT_REASONS)
+
+
 def _render_run(body: dict[str, Any], preconditions: list[str] | None = None) -> str:
     """Assemble the natural-language briefing the actor LLM reads and acts on."""
     persona = body.get("persona") or {}
     instructions = body.get("instructions") or {}
     scenarios = instructions.get("scenarios") or []
     conduct = instructions.get("conduct") or []
+    version = protocol_version(body)
+    behavior = _behavior(body)
 
     parts: list[str] = []
 
@@ -949,6 +1243,31 @@ def _render_run(body: dict[str, Any], preconditions: list[str] | None = None) ->
             "through the scenarios in that frame of mind."
         )
 
+    # How this person behaves, as rules. A v2 backend sends them; for an
+    # older one the persona's traits are put into words instead, so the
+    # actor still plays a specific person rather than a patient tester.
+    rules = [str(r).strip() for r in (_pick(behavior, "rules", default=[]) or []) if str(r).strip()]
+    if rules:
+        max_steps, max_unproductive = _budget(behavior)
+        parts.append(
+            "HOW YOU BEHAVE\n"
+            + "\n".join(f"- {rule}" for rule in rules)
+            + f"\nYour patience: at most {max_unproductive} steps in a row that get "
+            f"you nowhere, and {max_steps} steps in all. These rules are hard "
+            "limits on what you do. They override the scenario steps: when a "
+            "rule says no, the scenario is blocked, and you say why in your "
+            "own words."
+        )
+    else:
+        phrases = _traits_to_phrases(persona.get("traits"))
+        if phrases:
+            parts.append(
+                "HOW YOU BEHAVE\n"
+                f"You are a person with {', '.join(phrases)}. Act that way "
+                "throughout: it decides how long you persist, how closely you "
+                "read and what you are willing to share."
+            )
+
     # What the tester brings with them (their own project, an account, prior
     # knowledge). Rendered here from the caller's list: the backend does not
     # read preconditions yet.
@@ -965,6 +1284,14 @@ def _render_run(body: dict[str, Any], preconditions: list[str] | None = None) ->
     header = "— YOUR SCENARIOS —"
     if goal or target:
         header += f"\n(goal: {goal or '—'} · target: {target or '—'})"
+    criterion, checks = _success_block(body)
+    if criterion:
+        header += f"\nDone when: {criterion}"
+        for check in checks:
+            words = _CHECK_WORDS.get(str(check.get("type")), str(check.get("type") or "check"))
+            value = check.get("value")
+            optional = "" if check.get("required", True) else " (optional)"
+            header += f"\n  - {words}{': ' + str(value) if value else ''}{optional}"
     parts.append(header)
     for i, sc in enumerate(scenarios, start=1):
         lines = [f"{i}. [{sc.get('id', '')}] {sc.get('title', '')}".rstrip()]
@@ -985,25 +1312,161 @@ def _render_run(body: dict[str, Any], preconditions: list[str] | None = None) ->
         f"runId: {body.get('runId', '')}\nsessionId: {body.get('sessionId', '')}"
     )
 
-    parts.append(
-        "When finished, call report_result with run_id, session_id, "
-        "status (completed|failed|aborted), duration_seconds, steps (seq, "
-        "scenario_id, action_text, narration, url, observation_page_type, "
-        "success, error?, screenshot_b64? or screenshot_path? (a PNG, JPEG or "
-        "WebP file a screenshot tool saved; ≤6 total ≤1MB each)), feedback "
-        "{verdict pass|fail|mixed, summary, scenarioResults[{scenarioId,status "
-        "pass|fail|blocked,actualResult}], findings[{scenarioId,category "
-        "bug|ux|content|performance|other,severity critical|high|medium|low,"
-        "description,evidenceStepSeq,evidence?{url?,selector?,quote?}}], "
-        "personaReaction}. evidence is optional per finding: the page url, a "
-        "selector or role plus name for the element, and the exact on-screen "
-        "text you are reporting (quote up to 1000 characters)."
-    )
+    if version >= 2:
+        reasons = "|".join(_quit_reasons(body))
+        parts.append(
+            "PROTOCOL 2: after EVERY browser action, call log_step with run_id "
+            "and the step record (observe, recall, decide, act, after). Read the "
+            "STATE, ACTIVE RULES, RECALL and NOTE it returns before your next "
+            "action. When the NOTE says to decide, decide honestly: abandoning "
+            "is a normal thing real people do."
+        )
+        parts.append(
+            "When finished, close the browser, then call report_result with "
+            "run_id, session_id, status (completed|failed|aborted|abandoned), "
+            "duration_seconds, steps ([] when every step went through log_step; "
+            "the server sends them), feedback {verdict pass|fail|mixed, summary, "
+            "outcome{completed true|false, quit_reason "
+            f"{reasons}, abandoned_at_step, in_their_words}}, "
+            "scenarioResults[{scenarioId,status pass|fail|blocked,actualResult}], "
+            "findings[{scenarioId,category bug|ux|content|performance|other,"
+            "severity critical|high|medium|low,description,evidenceStepSeq,"
+            "evidence?{url?,selector?,quote?}}], personaReaction}. status "
+            "abandoned means you, as this person, gave up: set outcome.completed "
+            "false, the quit_reason, the step you left at and why in your own "
+            "words. evidence is optional per finding: the page url, a selector "
+            "or role plus name for the element, and the exact on-screen text "
+            "you are reporting (quote up to 1000 characters)."
+        )
+    else:
+        parts.append(
+            "When finished, call report_result with run_id, session_id, "
+            "status (completed|failed|aborted), duration_seconds, steps (seq, "
+            "scenario_id, action_text, narration, url, observation_page_type, "
+            "success, error?, screenshot_b64? or screenshot_path? (a PNG, JPEG or "
+            "WebP file a screenshot tool saved; ≤6 total ≤1MB each)), feedback "
+            "{verdict pass|fail|mixed, summary, scenarioResults[{scenarioId,status "
+            "pass|fail|blocked,actualResult}], findings[{scenarioId,category "
+            "bug|ux|content|performance|other,severity critical|high|medium|low,"
+            "description,evidenceStepSeq,evidence?{url?,selector?,quote?}}], "
+            "personaReaction}. evidence is optional per finding: the page url, a "
+            "selector or role plus name for the element, and the exact on-screen "
+            "text you are reporting (quote up to 1000 characters)."
+        )
+        parts.append(
+            "PROTOCOL 1: this backend predates live step logging. Keep the step "
+            "log yourself and send it with report_result as described above; "
+            "do not call log_step."
+        )
 
     return "\n\n".join(parts)
 
 
+def save_run_state(body: dict[str, Any], browser: dict[str, Any] | None) -> None:
+    """Remember what log_step and report_result need about this run."""
+    run_id = body.get("runId")
+    if not isinstance(run_id, str) or not _RUN_ID_RE.match(run_id):
+        return
+    behavior = _behavior(body)
+    max_steps, max_unproductive = _budget(behavior)
+    criterion, _checks = _success_block(body)
+    reporting = body.get("reporting") or {}
+    state = {
+        "run_id": run_id,
+        "session_id": body.get("sessionId"),
+        "started_at": time.time(),
+        "protocol_version": protocol_version(body),
+        "study_id": _pick(body, "studyId", "study_id"),
+        "criterion": criterion,
+        "rules": [str(r) for r in (_pick(behavior, "rules", default=[]) or [])][:20],
+        "max_steps": max_steps,
+        "max_unproductive": max_unproductive,
+        "steps_endpoint": _pick(reporting, "stepsEndpoint", "steps_endpoint"),
+        "browser": browser,
+        "local": {"seq": 0, "unproductive": 0, "progress": 0, "sentiments": [],
+                  "reviews": 0, "errors": {}, "screenshots": 0},
+    }
+    with _run_lock(run_id):
+        _write_json_file(_run_file(run_id, "state.json"), state)
+
+
+def load_run_state(run_id: str) -> dict[str, Any]:
+    return _read_json_file(_run_file(run_id, "state.json"))
+
+
+def _deadline_advice(pool: bool) -> str:
+    # The actor reads this text. Stress runs on 2026-09-24 showed an
+    # actor told to "retry once" calling start_run again on its own, so a
+    # dead backend cost three full deadlines. Retrying is the user's
+    # call, made in the main session, never the actor's.
+    advice = (
+        "No run was handed to this session, so there is nothing to act on "
+        "or report. Do not call start_run again: tell the user the run "
+        "could not be started and stop. The user decides whether to retry."
+    )
+    if pool:
+        advice += (
+            " Spinning a fresh tester off a pool is the slow step: if the "
+            "user retries and it times out again, suggest running without "
+            "pool= as the replay-derived persona. A tester may already "
+            "have been added to the pool by the abandoned attempt."
+        )
+    return advice
+
+
+def handle_claim_run(arguments: dict[str, Any]) -> dict[str, Any]:
+    """start_run(run_id=...): claim a run a study created in advance."""
+    run_id = arguments.get("run_id")
+    bad = _bad_run_id(run_id)
+    if bad:
+        return bad
+    browser = browser_config(arguments.get("browser"))
+    claim_body: dict[str, Any] = {"browser": browser} if browser else {}
+    result = authed_call(
+        lambda token: backend_post(
+            f"/api/plugin/runs/{run_id}/claim", claim_body,
+            auth_token=token, timeout=RUN_TIMEOUT,
+        )
+    )
+    if isinstance(result, str):
+        return not_connected(result)
+    status, resp = result
+    if resp.get("error") == "deadline_exceeded":
+        return tool_text(
+            f"{resp['message']}\n\nThe claim may or may not have gone "
+            f"through. Do not call start_run again: tell the caller run "
+            f"{run_id} could not be claimed and stop.",
+            is_error=True,
+        )
+    if status == 409:
+        return tool_text(
+            f"Run {run_id} cannot be claimed: "
+            f"{resp.get('message') or 'it is already claimed or finished'}. "
+            "Another actor owns it, or it already ran. Do NOT act on it and do "
+            "not report results for it: tell the caller and stop.",
+            is_error=True,
+        )
+    if status == 404 and resp.get("error") not in ("run_not_found", "not_a_plugin_run"):
+        return tool_text(
+            f"The backend at {BACKEND_BASE} cannot hand out study runs (no "
+            "claim route): it predates behavioral studies. Deploy the current "
+            "backend, or start an ad hoc run with a goal and url instead. Do "
+            "not act on this run.",
+            is_error=True,
+        )
+    if not (200 <= status < 300):
+        return backend_error_text(status, resp)
+    if not resp.get("runId"):
+        resp = dict(resp, runId=run_id)
+    save_run_state(resp, browser)
+    record_run_start(resp, {"goal": (resp.get("instructions") or {}).get("goal"),
+                            "url": (resp.get("instructions") or {}).get("targetUrl")})
+    return tool_text(_render_run(resp, _as_precondition_list(arguments.get("preconditions"))))
+
+
 def handle_start_run(arguments: dict[str, Any]) -> dict[str, Any]:
+    if arguments.get("run_id"):
+        return handle_claim_run(arguments)
     if not arguments.get("url") and not arguments.get("feature_id"):
         return tool_text(
             "start_run needs a url, or a feature_id whose feature has a url "
@@ -1031,23 +1494,10 @@ def handle_start_run(arguments: dict[str, Any]) -> dict[str, Any]:
         return not_connected(result)
     status, resp = result
     if resp.get("error") == "deadline_exceeded":
-        # The actor reads this text. Stress runs on 2026-09-24 showed an
-        # actor told to "retry once" calling start_run again on its own, so a
-        # dead backend cost three full deadlines. Retrying is the user's
-        # call, made in the main session, never the actor's.
-        advice = (
-            "No run was handed to this session, so there is nothing to act on "
-            "or report. Do not call start_run again: tell the user the run "
-            "could not be started and stop. The user decides whether to retry."
+        return tool_text(
+            f"{resp['message']}\n\n{_deadline_advice(bool(body.get('poolId')))}",
+            is_error=True,
         )
-        if body.get("poolId"):
-            advice += (
-                " Spinning a fresh tester off a pool is the slow step: if the "
-                "user retries and it times out again, suggest running without "
-                "pool= as the replay-derived persona. A tester may already "
-                "have been added to the pool by the abandoned attempt."
-            )
-        return tool_text(f"{resp['message']}\n\n{advice}", is_error=True)
     if not (200 <= status < 300):
         return backend_error_text(status, resp)
 
@@ -1069,7 +1519,341 @@ def handle_start_run(arguments: dict[str, Any]) -> dict[str, Any]:
         )
 
     record_run_start(resp, arguments)
+    save_run_state(resp, browser_config(arguments.get("browser")))
     return tool_text(_render_run(resp, preconditions))
+
+
+# ---------- tool: log_step ----------
+
+# A step must never block the actor: the whole log_step call, flush of older
+# buffered steps included, finishes inside this budget, then answers from
+# local state if the backend has not.
+STEP_TIMEOUT = _env_seconds("ARCHETYPE_STEP_TIMEOUT", 15)
+STEP_WORD_LIMIT = 120
+_FRICTION_LEVELS = ("none", "minor", "major", "blocked")
+
+
+def _iso_now() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()) + f".{int(time.time() * 1000) % 1000:03d}Z"
+
+
+def _step_part(step: dict[str, Any], key: str) -> dict[str, Any]:
+    part = step.get(key)
+    return part if isinstance(part, dict) else {}
+
+
+def _apply_step_locally(state: dict[str, Any], step: dict[str, Any]) -> dict[str, Any]:
+    """Advance the local patience counters with one step and return the
+    resulting state, mirroring the backend's rules (plan 5.4):
+    unproductive grows when the action failed, friction was major or
+    blocked, progress did not rise, or a trust request was refused; it
+    resets when progress rises by 10 or more. The give-up review fires on an
+    exhausted budget, the step cap or a repeated error; after a review the
+    counter is halved, and a second exhausted budget ends the run."""
+    local = state.setdefault("local", {})
+    act, after = _step_part(step, "act"), _step_part(step, "after")
+    friction = after.get("friction") if isinstance(after.get("friction"), dict) else {}
+    trust = after.get("trust_request") if isinstance(after.get("trust_request"), dict) else {}
+    seq = _int_or(step.get("seq"), local.get("seq", 0) + 1)
+    prev_progress = _int_or(local.get("progress"), 0)
+    progress = max(0, min(100, _int_or(after.get("progress"), prev_progress)))
+    unproductive = _int_or(local.get("unproductive"), 0)
+
+    if progress - prev_progress >= 10:
+        unproductive = 0
+    elif (
+        str(act.get("result") or "ok") != "ok"
+        or str(friction.get("level") or "none") in ("major", "blocked")
+        or progress <= prev_progress
+        or str(trust.get("decision") or "") == "refused"
+    ):
+        unproductive += 1
+
+    errors = local.setdefault("errors", {})
+    trigger = None
+    message = str(act.get("error_message") or "").strip()[:200]
+    if message:
+        errors[message] = errors.get(message, 0) + 1
+        if errors[message] >= 2:
+            trigger = "repeated_error"
+    sentiment = after.get("sentiment")
+    sentiments = local.setdefault("sentiments", [])
+    if isinstance(sentiment, (int, float)) and not isinstance(sentiment, bool):
+        sentiments.append(max(-2, min(2, int(sentiment))))
+        del sentiments[:-5]
+
+    max_steps = _int_or(state.get("max_steps"), 22)
+    max_unproductive = _int_or(state.get("max_unproductive"), 5)
+    review = unproductive >= max_unproductive or seq >= max_steps or trigger is not None
+    ended, ended_reason = False, None
+    shown_unproductive = unproductive
+    if review:
+        local["reviews"] = _int_or(local.get("reviews"), 0) + 1
+        if local["reviews"] >= 2 and unproductive >= max_unproductive:
+            ended, ended_reason = True, "patience budget exhausted twice"
+        elif seq >= max_steps + 5:
+            ended, ended_reason = True, "step limit passed"
+        unproductive = unproductive // 2 if unproductive >= max_unproductive else unproductive
+
+    local.update(seq=max(seq, _int_or(local.get("seq"), 0)), progress=progress,
+                 unproductive=unproductive)
+    return {
+        "seq": seq, "maxSteps": max_steps,
+        "unproductive": shown_unproductive,
+        "maxUnproductiveSteps": max_unproductive, "progress": progress,
+        "sentimentTrend": _sentiment_trend(sentiments),
+        "reviewGiveUp": review, "giveUpReason": trigger, "ended": ended,
+        "endedReason": ended_reason,
+    }
+
+
+def _sentiment_trend(sentiments: list[int]) -> str:
+    window = sentiments[-3:]
+    if len(window) < 2:
+        return "steady"
+    delta = window[-1] - window[0]
+    return "falling" if delta < 0 else "rising" if delta > 0 else "steady"
+
+
+def _words(text: str) -> int:
+    return len(text.split())
+
+
+def _clip_words(text: Any, limit: int) -> str:
+    words = " ".join(str(text or "").split()).split(" ")
+    return " ".join(words) if len(words) <= limit else " ".join(words[:limit]) + "..."
+
+
+def _give_up_note(criterion: str | None) -> str:
+    target = f' toward "{_clip_words(criterion, 12)}"' if criterion else ""
+    return (
+        "Your patience budget is exhausted: decide now. Continue only if the "
+        f"last step made real progress{target}; otherwise call report_result "
+        'with status "abandoned" and a quit_reason.'
+    )
+
+
+def render_step_answer(
+    state: dict[str, Any],
+    rules: list[str],
+    recall: list[Any],
+    note: str | None,
+    lead: str | None = None,
+) -> str:
+    """The text log_step returns: a fenced STATE line, then at most 120
+    words of ACTIVE RULES, RECALL and NOTE (plan 5.4)."""
+    seq = _int_or(_pick(state, "seq"), 0)
+    line = (
+        f"STATE step {seq} of max {_int_or(_pick(state, 'maxSteps', 'max_steps'), 0)}"
+        f" | unproductive {_int_or(_pick(state, 'unproductive'), 0)} of "
+        f"{_int_or(_pick(state, 'maxUnproductiveSteps', 'max_unproductive_steps'), 0)}"
+        f" | progress {_int_or(_pick(state, 'progress'), 0)}"
+        f" | sentiment trend: {_pick(state, 'sentimentTrend', 'sentiment_trend', default='steady')}"
+    )
+    rule_lines = [_clip_words(r, 20) for r in rules if str(r).strip()][:5]
+    recall_lines = []
+    for item in recall[:5]:
+        if isinstance(item, dict):
+            text, source = item.get("text"), item.get("source")
+        else:
+            text, source = item, None
+        if text:
+            recall_lines.append(_clip_words(text, 18) + (f" ({_clip_words(source, 4)})" if source else ""))
+
+    def body() -> str:
+        out = []
+        if lead:
+            out.append(lead)
+        if rule_lines:
+            out.append("ACTIVE RULES:\n" + "\n".join(f"- {r}" for r in rule_lines))
+        out.append("RECALL:\n" + ("\n".join(f"- {r}" for r in recall_lines) if recall_lines else "- nothing yet"))
+        if note:
+            out.append(f"NOTE: {note}")
+        return "\n".join(out)
+
+    text = body()
+    while _words(text) > STEP_WORD_LIMIT and (recall_lines or len(rule_lines) > 1):
+        if recall_lines:
+            recall_lines.pop()
+        else:
+            rule_lines.pop()
+        text = body()
+    if _words(text) > STEP_WORD_LIMIT and note:
+        note = _clip_words(note, max(STEP_WORD_LIMIT - (_words(text) - _words(note)), 20))
+        text = body()
+    return f"```\n{line}\n```\n{text}"
+
+
+def _prepare_step(step: dict[str, Any], state: dict[str, Any]) -> tuple[dict[str, Any], str | None]:
+    """Stamp a step and turn a screenshot path into base64 (the backend
+    cannot read local files). Returns (step, note about the screenshot)."""
+    out = dict(step)
+    local = state.setdefault("local", {})
+    if out.get("seq") is None:
+        out["seq"] = _int_or(local.get("seq"), 0) + 1
+    out["client_ts"] = _iso_now()
+    started = state.get("started_at")
+    if isinstance(started, (int, float)):
+        out["elapsed_s"] = round(max(time.time() - started, 0), 1)
+    shot_note = None
+    if "screenshot_path" in out:
+        raw = out.pop("screenshot_path")
+        if not out.get("screenshot_b64"):
+            if _int_or(local.get("screenshots"), 0) >= 6:
+                shot_note = "screenshot not attached: 6 per run already sent"
+            else:
+                encoded, why = _screenshot_from_path(raw)
+                if encoded:
+                    out["screenshot_b64"] = encoded
+                    local["screenshots"] = _int_or(local.get("screenshots"), 0) + 1
+                else:
+                    shot_note = f"screenshot not attached ({why})"
+    return out, shot_note
+
+
+def _post_step(run_id: str, session_id: Any, step: dict[str, Any], token: str | None,
+               timeout: float) -> tuple[str, int, dict[str, Any]]:
+    """One step to the backend: ("ok"|"retry"|"ended"|"rejected", status, body).
+
+    "retry" (timeout, network, 5xx, no token, missing route) keeps the step
+    in the buffer; "rejected" (400, 404 run) is the actor's to fix;
+    "ended" (409) means the backend stopped taking steps for this run."""
+    if not token or timeout <= 0:
+        return "retry", 0, {"error": "no_token" if not token else "deadline_exceeded"}
+    status, resp = backend_post(
+        f"/api/plugin/runs/{run_id}/steps", {"session_id": session_id, "step": step},
+        auth_token=token, timeout=timeout,
+    )
+    if 200 <= status < 300:
+        return "ok", status, resp
+    if status == 409:
+        return "ended", status, resp
+    if status == 400 or (status == 404 and resp.get("error") == "run_not_found"):
+        return "rejected", status, resp
+    return "retry", status, resp
+
+
+def flush_step_buffer(run_id: str, state: dict[str, Any], budget: float) -> tuple[int, int, str | None]:
+    """Send buffered steps oldest first within ``budget`` seconds.
+    Returns (sent, left, why the rest stayed). Caller holds the run lock."""
+    path = _run_file(run_id, "steps.jsonl")
+    pending = _read_jsonl(path)
+    if not pending:
+        return 0, 0, None
+    token = load_token()
+    deadline = time.monotonic() + budget
+    sent, why = 0, None
+    while pending:
+        outcome, status, resp = _post_step(
+            run_id, state.get("session_id"), pending[0], token,
+            min(STEP_TIMEOUT, deadline - time.monotonic()),
+        )
+        if outcome == "retry":
+            why = resp.get("error") or f"status {status}"
+            break
+        pending.pop(0)  # sent, ended or rejected: not worth resending
+        if outcome == "ok":
+            sent += 1
+    _write_jsonl(path, pending)
+    return sent, len(pending), why
+
+
+def handle_log_step(arguments: dict[str, Any]) -> dict[str, Any]:
+    run_id = arguments.get("run_id")
+    bad = _bad_run_id(run_id)
+    if bad:
+        return bad
+    step = arguments.get("step")
+    if not isinstance(step, dict) or not step:
+        return tool_text(
+            "log_step needs step: the record of the action you just took "
+            "(observe, recall, decide, act, after). Nothing was logged.",
+            is_error=True,
+        )
+    started = time.monotonic()
+    with _run_lock(run_id):
+        state = load_run_state(run_id)
+        if not state:
+            # A run this server did not start (restart, other machine): keep
+            # going with defaults rather than lose the actor's steps.
+            state = {"run_id": run_id, "protocol_version": 2, "max_steps": 22,
+                     "max_unproductive": 5, "rules": [], "local": {}}
+        if arguments.get("session_id"):
+            state["session_id"] = arguments["session_id"]
+        prepared, shot_note = _prepare_step(step, state)
+        local_state = _apply_step_locally(state, prepared)
+
+        lead_bits = [shot_note] if shot_note else []
+        remote: dict[str, Any] | None = None
+        if _int_or(state.get("protocol_version"), 1) < 2:
+            lead_bits.append(
+                "Saved on this machine: this backend predates live steps, so "
+                "the steps go out with report_result."
+            )
+        else:
+            _sent, left, _why = flush_step_buffer(run_id, state, STEP_TIMEOUT * 0.5)
+            remaining = STEP_TIMEOUT - (time.monotonic() - started)
+            outcome, status, resp = ("retry", 0, {})
+            if left == 0:
+                outcome, status, resp = _post_step(
+                    run_id, state.get("session_id"), prepared, load_token(), remaining
+                )
+            if outcome == "rejected":
+                # Nothing is kept: the state changes above stay in memory.
+                return tool_text(
+                    f"The backend rejected step {prepared.get('seq')}: "
+                    f"{backend_error_message(status, resp)} Fix the record and "
+                    "call log_step again for this step.",
+                    is_error=True,
+                )
+            if outcome == "retry":
+                _append_jsonl(_run_file(run_id, "steps.jsonl"), prepared)
+                lead_bits.append(
+                    f"Step {prepared.get('seq')} saved on this machine (the backend "
+                    "was slow); it goes out with your next step. Keep going."
+                )
+            elif outcome == "ended":
+                remote = {"state": dict(local_state, ended=True,
+                                        endedReason=resp.get("message") or "the backend closed this run")}
+            else:
+                remote = resp
+
+        _append_jsonl(_run_file(run_id, "journal.jsonl"), prepared)
+        rules = list(state.get("rules") or [])[:5]
+        recall: list[Any] = list(state.get("last_recall") or [])
+        note: str | None = None
+        shown = local_state
+        if remote is not None:
+            remote_state = remote.get("state") if isinstance(remote.get("state"), dict) else None
+            if remote_state:
+                shown = remote_state
+                state["local"]["unproductive"] = _int_or(
+                    _pick(remote_state, "unproductive"), state["local"].get("unproductive", 0))
+                state["local"]["progress"] = _int_or(
+                    _pick(remote_state, "progress"), state["local"].get("progress", 0))
+            active = _pick(remote, "activeRules", "active_rules")
+            if isinstance(active, list) and active:
+                rules = [str(r) for r in active]
+                state["last_rules"] = rules
+            fresh = remote.get("recall")
+            if isinstance(fresh, list):
+                recall = fresh
+                state["last_recall"] = fresh
+            note = remote.get("note") or None
+        elif state.get("last_rules"):
+            rules = list(state["last_rules"])
+
+        if _pick(shown, "ended"):
+            reason = _pick(shown, "endedReason", "ended_reason") or "the budget ran out"
+            note = (
+                f"This run has ended ({reason}). Do not take another action: "
+                'close the browser and call report_result with status "abandoned".'
+            )
+        elif note is None and _pick(shown, "reviewGiveUp", "review_give_up"):
+            note = _give_up_note(state.get("criterion"))
+        _write_json_file(_run_file(run_id, "state.json"), state)
+
+    return tool_text(render_step_answer(shown, rules, recall, note, " ".join(lead_bits) or None))
 
 
 # ---------- tool: report_result ----------
@@ -1156,23 +1940,139 @@ def _map_step(step: dict[str, Any], notes: list[str] | None = None) -> dict[str,
     return out
 
 
+# Raw actions uploaded per run: enough for a long run, small enough to post.
+RAW_ACTIONS_LIMIT = 1000
+_REPORT_STATUSES = ("completed", "failed", "aborted", "abandoned")
+
+
+def _v1_step(record: dict[str, Any]) -> dict[str, Any]:
+    """A protocol v2 step record in the v1 shape every backend accepts, with
+    the full record riding along as protocolV2 (plan 5.3 mapping)."""
+    observe, decide, act = (_step_part(record, k) for k in ("observe", "decide", "act"))
+    step: dict[str, Any] = {
+        "seq": _int_or(record.get("seq"), 0),
+        "actionText": decide.get("action_text") or act.get("target") or "",
+        "narration": decide.get("monologue") or "",
+        "url": observe.get("url") or "",
+        "observationPageType": observe.get("page_type") or "other",
+        "success": str(act.get("result") or "ok") == "ok",
+    }
+    if record.get("scenario_id"):
+        step["scenarioId"] = record["scenario_id"]
+    if act.get("error_message"):
+        step["error"] = act["error_message"]
+    if record.get("screenshot_b64"):
+        step["screenshotB64"] = record["screenshot_b64"]
+    step["protocolV2"] = {k: v for k, v in record.items() if k != "screenshot_b64"}
+    return step
+
+
+def _browser_used(actions: list[dict[str, Any]]) -> str | None:
+    """The browser the run's recorded actions drove (most used wins)."""
+    counts: dict[str, int] = {}
+    for action in actions:
+        name = _browser_name_from_tool(str(action.get("tool_name") or ""))
+        if name:
+            counts[name] = counts.get(name, 0) + 1
+    return max(counts, key=counts.get) if counts else None
+
+
+def find_run_video(server: str | None, since: Any) -> str | None:
+    """The video a plugin browser server recorded for this run: the largest
+    .webm in its video folder written after the run started."""
+    plugin_data = os.environ.get("CLAUDE_PLUGIN_DATA")
+    if not plugin_data or not server or not re.match(r"^archetype-(browser|watch)-\d+$", server):
+        return None
+    folder = Path(plugin_data) / "browser" / server / "videos"
+    floor = float(since) - 5 if isinstance(since, (int, float)) else 0
+    try:
+        videos = [p for p in folder.glob("*.webm") if p.stat().st_mtime >= floor and p.stat().st_size > 0]
+    except OSError:
+        return None
+    if not videos:
+        return None
+    return str(max(videos, key=lambda p: p.stat().st_size))
+
+
+def _forget_run_files(run_id: str) -> None:
+    for suffix in ("state.json", "journal.jsonl", "steps.jsonl", "actions.jsonl"):
+        path = _run_file(run_id, suffix)
+        if path is not None:
+            try:
+                path.unlink(missing_ok=True)
+            except OSError as exc:
+                log(f"could not remove {path}: {exc}")
+
+
 def handle_report_result(arguments: dict[str, Any]) -> dict[str, Any]:
     run_id = arguments.get("run_id")
     bad = _bad_run_id(run_id)
     if bad:
         return bad
+    status_arg = arguments.get("status")
+    if status_arg not in _REPORT_STATUSES:
+        return tool_text(
+            f"status must be one of {', '.join(_REPORT_STATUSES)}; got {status_arg!r}.",
+            is_error=True,
+        )
     skipped: list[str] = []
+    notes: list[str] = []
+    feedback = arguments.get("feedback") or {}
+
+    with _run_lock(run_id):
+        state = load_run_state(run_id)
+        version = _int_or(state.get("protocol_version"), 1) if state else 1
+        if version >= 2:
+            sent, left, why = flush_step_buffer(run_id, state, RESULT_TIMEOUT * 0.5)
+            if sent:
+                notes.append(f"{sent} buffered step(s) sent first")
+            if left:
+                notes.append(f"{left} step(s) the backend never acknowledged ride along with the results ({why})")
+        unsent = _read_jsonl(_run_file(run_id, "steps.jsonl"))
+        journal = _read_jsonl(_run_file(run_id, "journal.jsonl"))
+        actions = _read_jsonl(_run_file(run_id, "actions.jsonl"), RAW_ACTIONS_LIMIT)
+
+    steps = [_map_step(s, skipped) for s in (arguments.get("steps") or []) if isinstance(s, dict)]
+    have = {s.get("seq") for s in steps}
+    # v2: steps the backend never took go with the results. v1: an actor
+    # that logged steps instead of keeping its own log still gets them sent.
+    extra = unsent if version >= 2 else (journal if not steps else [])
+    steps += [_v1_step(r) for r in extra if r.get("seq") not in have]
+    steps.sort(key=lambda s: _int_or(s.get("seq"), 0))
+
+    status_out = status_arg
+    if status_out == "abandoned" and version < 2:
+        status_out = "failed"
+        notes.append("this backend predates abandonment, so the run is recorded as failed (the outcome is kept in feedback)")
+
     body: dict[str, Any] = {
         "sessionId": arguments.get("session_id"),
-        "status": arguments.get("status"),
-        "steps": [_map_step(s, skipped) for s in (arguments.get("steps") or [])],
+        "status": status_out,
+        "steps": steps,
         # feedback is passed through untouched: its nested keys must already
         # be camelCase (scenarioResults, evidenceStepSeq, ...) per the
-        # contract rendered by start_run's report_result guidance.
-        "feedback": arguments.get("feedback") or {},
+        # contract rendered by start_run's report_result guidance; outcome
+        # keeps the snake_case keys of the protocol v2 contract.
+        "feedback": feedback,
     }
     if arguments.get("duration_seconds") is not None:
         body["durationSeconds"] = arguments["duration_seconds"]
+    elif state.get("started_at"):
+        body["durationSeconds"] = round(max(time.time() - float(state["started_at"]), 0))
+
+    if version >= 2:
+        used = _browser_used(actions)
+        browser = (
+            browser_config(used) or state.get("browser")
+            or browser_config(arguments.get("browser"))
+        )
+        if browser:
+            body["browser"] = browser
+        body["rawActions"] = actions
+        given = (arguments.get("artifacts") or {}).get("video_path") if isinstance(arguments.get("artifacts"), dict) else None
+        video = given or find_run_video((browser or {}).get("server") or used, state.get("started_at"))
+        if video:
+            body["artifacts"] = {"video_path": video}
 
     result = authed_call(
         lambda token: backend_post(
@@ -1195,10 +2095,10 @@ def handle_report_result(arguments: dict[str, Any]) -> dict[str, Any]:
     if not (200 <= status < 300):
         return backend_error_text(status, resp)
 
-    verdict = (resp.get("summary") or {}).get("verdict") or (
-        arguments.get("feedback") or {}
-    ).get("verdict")
-    record_run_result(run_id, arguments.get("status"), verdict)
+    verdict = (resp.get("summary") or {}).get("verdict") or feedback.get("verdict")
+    record_run_result(run_id, status_out, verdict)
+    with _run_lock(run_id):
+        _forget_run_files(run_id)
 
     message = resp.get("message", "Results stored.")
     summary = resp.get("summary") or {}
@@ -1207,6 +2107,12 @@ def handle_report_result(arguments: dict[str, Any]) -> dict[str, Any]:
         f"Findings: {summary.get('findings', '?')} · "
         f"Verdict: {summary.get('verdict', '?')}"
     )
+    if version >= 2:
+        line += f"\nRaw browser actions recorded: {len(actions)}"
+        if body.get("artifacts"):
+            line += f"\nVideo: {body['artifacts']['video_path']}"
+    if notes:
+        line += "\nNote: " + "; ".join(notes)
     if skipped:
         line += "\nScreenshot files not attached: " + "; ".join(skipped)
     return tool_text(
@@ -1998,6 +2904,25 @@ TOOLS: dict[str, dict[str, Any]] = {
                         "adds up to ~a minute before the run starts."
                     ),
                 },
+                "run_id": {
+                    "type": "string",
+                    "description": (
+                        "Claim mode: the runId of a run a study already "
+                        "created. Pass it (and browser) instead of goal, url, "
+                        "feature_id and pool_id; the run's persona and "
+                        "scenarios come with it. A run can be claimed once."
+                    ),
+                },
+                "browser": {
+                    "type": "string",
+                    "description": (
+                        "The browser this actor drives: the server name the "
+                        "dispatch prompt gave (for example archetype-browser-2), "
+                        "chrome for Claude in Chrome, or playwright for a "
+                        "self-registered Playwright server. Recorded with the "
+                        "run so the study compares like with like."
+                    ),
+                },
                 "preconditions": {
                     "type": "array",
                     "items": {"type": "string"},
@@ -2033,12 +2958,30 @@ TOOLS: dict[str, dict[str, Any]] = {
                 "session_id": {"type": "string"},
                 "status": {
                     "type": "string",
-                    "enum": ["completed", "failed", "aborted"],
+                    "enum": list(_REPORT_STATUSES),
+                    "description": (
+                        "abandoned: the persona gave up, as a real person "
+                        "would. Give feedback.outcome with it."
+                    ),
+                },
+                "browser": {
+                    "type": "string",
+                    "description": "Optional: the browser name passed to start_run.",
+                },
+                "artifacts": {
+                    "type": "object",
+                    "description": (
+                        "Optional. video_path is found by the server for the "
+                        "plugin's own browsers; pass it only if you know it."
+                    ),
+                    "properties": {"video_path": {"type": "string"}},
                 },
                 "duration_seconds": {"type": "number"},
                 "steps": {
                     "type": "array",
                     "description": (
+                        "Protocol 2: [] when every step went through log_step "
+                        "(the server sends any it buffered). Protocol 1: "
                         "snake_case step objects. A step may attach a screenshot "
                         "as screenshot_b64, or as screenshot_path: the PNG, JPEG "
                         "or WebP file a screenshot tool saved (read here; at "
@@ -2049,10 +2992,23 @@ TOOLS: dict[str, dict[str, Any]] = {
                     "type": "object",
                     "description": (
                         "camelCase inside: verdict, summary, scenarioResults, "
-                        "findings, personaReaction. Passed to the backend "
-                        "untouched."
+                        "findings, personaReaction, plus outcome (protocol 2). "
+                        "Passed to the backend untouched."
                     ),
                     "properties": {
+                        "outcome": {
+                            "type": "object",
+                            "description": (
+                                "Protocol 2: did this person get it done, and "
+                                "if not, why they stopped."
+                            ),
+                            "properties": {
+                                "completed": {"type": "boolean"},
+                                "quit_reason": {"type": "string", "enum": list(QUIT_REASONS)},
+                                "abandoned_at_step": {"type": "integer"},
+                                "in_their_words": {"type": "string"},
+                            },
+                        },
                         "findings": {
                             "type": "array",
                             "items": {
@@ -2068,6 +3024,107 @@ TOOLS: dict[str, dict[str, Any]] = {
             "required": ["run_id", "session_id", "status", "steps", "feedback"],
         },
         "handler": handle_report_result,
+    },
+    "log_step": {
+        "description": (
+            "Protocol 2: record the step you just took (one browser action) "
+            "and get back your STATE (step budget, unproductive steps, "
+            "progress), ACTIVE RULES, RECALL and, when it is time, a NOTE "
+            "asking you to decide whether to go on. Call it after EVERY "
+            "browser action. Never blocks: a slow backend gets the step later."
+        ),
+        "schema": {
+            "type": "object",
+            "properties": {
+                "run_id": {"type": "string"},
+                "session_id": {"type": "string"},
+                "step": {
+                    "type": "object",
+                    "description": (
+                        "seq (1, 2, 3...), scenario_id?, observe {page_type, "
+                        "summary, stood_out, visible_text_excerpt (up to 300 "
+                        "characters you actually read), url, title}, recall "
+                        "{applied: what from RECALL applies now, or null}, "
+                        "decide {monologue (2 to 4 first-person sentences), "
+                        "intent, action_text, confidence 1 to 5, rule_applied?}, "
+                        "act {target?, result ok|failed|no_change, "
+                        "error_message?}, after {friction {level, type?, note?}, "
+                        "sentiment -2 to 2, progress 0 to 100, hesitation, "
+                        "trust_request? {kind, decision, reason}, remember?}, "
+                        "screenshot_path? (a file a screenshot tool saved)."
+                    ),
+                    "properties": {
+                        "seq": {"type": "integer"},
+                        "scenario_id": {"type": "string"},
+                        "observe": {
+                            "type": "object",
+                            "properties": {
+                                "page_type": {"type": "string", "enum": [
+                                    "landing", "signup", "login", "onboarding", "pricing",
+                                    "checkout", "cart", "dashboard", "settings", "search",
+                                    "content", "form", "verification", "error", "help", "other"]},
+                                "summary": {"type": "string"},
+                                "stood_out": {"type": "string"},
+                                "visible_text_excerpt": {"type": "string"},
+                                "url": {"type": "string"},
+                                "title": {"type": "string"},
+                            },
+                        },
+                        "recall": {"type": "object", "properties": {"applied": {"type": ["string", "null"]}}},
+                        "decide": {
+                            "type": "object",
+                            "properties": {
+                                "monologue": {"type": "string"},
+                                "intent": {"type": "string"},
+                                "action_text": {"type": "string"},
+                                "confidence": {"type": "integer", "minimum": 1, "maximum": 5},
+                                "rule_applied": {"type": "string"},
+                            },
+                        },
+                        "act": {
+                            "type": "object",
+                            "properties": {
+                                "target": {"type": "string"},
+                                "result": {"type": "string", "enum": ["ok", "failed", "no_change"]},
+                                "error_message": {"type": "string"},
+                            },
+                        },
+                        "after": {
+                            "type": "object",
+                            "properties": {
+                                "friction": {
+                                    "type": "object",
+                                    "properties": {
+                                        "level": {"type": "string", "enum": list(_FRICTION_LEVELS)},
+                                        "type": {"type": "string", "enum": [
+                                            "navigation", "copy", "form", "trust",
+                                            "performance", "error", "other"]},
+                                        "note": {"type": "string"},
+                                    },
+                                },
+                                "sentiment": {"type": "integer", "minimum": -2, "maximum": 2},
+                                "progress": {"type": "integer", "minimum": 0, "maximum": 100},
+                                "hesitation": {"type": "boolean"},
+                                "trust_request": {
+                                    "type": "object",
+                                    "properties": {
+                                        "kind": {"type": "string", "enum": [
+                                            "email", "phone", "address", "card", "permissions",
+                                            "account", "upload", "social_login"]},
+                                        "decision": {"type": "string", "enum": ["shared", "refused", "deferred"]},
+                                        "reason": {"type": "string"},
+                                    },
+                                },
+                                "remember": {"type": "string"},
+                            },
+                        },
+                        "screenshot_path": {"type": "string"},
+                    },
+                },
+            },
+            "required": ["run_id", "step"],
+        },
+        "handler": handle_log_step,
     },
     "get_run": {
         "description": (
