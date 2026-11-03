@@ -35,7 +35,16 @@ runner starts: a next wave larger than what is left runs its highest
 priority runs (archetypes whose outcome disagreed with the baseline
 first) and the rest are aborted with a budget reason.
 
-Usage: study_runner.py --study ID --data-dir DIR --backend URL [--runs a,b]
+Watch mode (--watch) serves studies other clients started, such as the
+Figma plugin: it polls GET /api/studies?execution=remote&status=running,
+runs every queued run of each study (oldest first) with the same workers,
+waves and orphan handling, then polls again. --once makes one pass and
+exits (for cron or CI). A file named `stop` in <data>/studies stops it
+between studies.
+
+Usage: study_runner.py --watch --data-dir DIR --backend URL [--once]
+                       [--poll-sec 20] [worker options below]
+       study_runner.py --study ID --data-dir DIR --backend URL [--runs a,b]
                        [--parallel 2] [--model M] [--timeout-min 30]
                        [--stall-min 20] [--max-runs N]
                        [--no-next-wave] [--dry-run]
@@ -456,9 +465,84 @@ class Runner:
         return 0
 
 
+def api(opts: argparse.Namespace, method: str, path: str) -> tuple[int, dict[str, Any]]:
+    """One backend call with the user's token, for the watcher (no study yet)."""
+    try:
+        token = json.loads((Path(opts.data_dir) / "auth.json").read_text()).get("access_token")
+    except (OSError, ValueError):
+        token = None
+    req = urllib.request.Request(
+        f"{opts.backend.rstrip('/')}{path}", method=method, data=b"{}" if method == "POST" else None,
+        headers={"Content-Type": "application/json", "Accept": "application/json",
+                 "User-Agent": "archetype-claude-plugin/study-runner",
+                 **({"Authorization": f"Bearer {token}"} if token else {})},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            return resp.status, json.loads(resp.read().decode() or "{}")
+    except urllib.error.HTTPError as exc:
+        try:
+            return exc.code, json.loads(exc.read().decode() or "{}")
+        except ValueError:
+            return exc.code, {}
+    except Exception as exc:
+        return 0, {"error": "network_error", "message": str(exc)}
+
+
+def queued_work(opts: argparse.Namespace) -> list[tuple[str, list[str]]]:
+    """Remote studies with queued runs, oldest first: [(study_id, [run ids])]."""
+    status, body = api(opts, "GET", "/api/studies?execution=remote&status=running&limit=50")
+    if status != 200:
+        log(f"listing remote studies failed: {status} {body.get('message') or body.get('error')}")
+        return []
+    work = []
+    for study in reversed(body.get("studies") or []):
+        study_id = study.get("studyId") if isinstance(study, dict) else None
+        if not isinstance(study_id, str) or not _ID.match(study_id):
+            continue
+        code, runs = api(opts, "GET", f"/api/studies/{study_id}/runs")
+        if code != 200:
+            continue
+        queued = [r["runId"] for r in runs.get("runs") or []
+                  if isinstance(r, dict) and r.get("status") == "queued" and _ID.match(str(r.get("runId")))]
+        if queued:
+            work.append((study_id, queued))
+    return work
+
+
+def watch(opts: argparse.Namespace) -> int:
+    """Serve remote studies until stopped (or one pass with --once)."""
+    stop_file = Path(opts.data_dir) / "studies" / "stop"
+    stop_file.parent.mkdir(parents=True, exist_ok=True)
+    poll = float(os.environ.get("ARCHETYPE_WATCH_POLL_S") or opts.poll_sec)
+    served = 0
+    log(f"watching {opts.backend} for remote studies (poll every {poll:g} s)")
+    try:
+        while not stop_file.exists():
+            work = queued_work(opts)
+            for study_id, runs in work:
+                if stop_file.exists():
+                    break
+                log(f"study {study_id}: {len(runs)} queued run(s)")
+                study_opts = argparse.Namespace(**{**vars(opts), "study": study_id, "runs": ",".join(runs)})
+                Runner(study_opts).run()
+                served += 1
+            if opts.once:
+                break
+            if not work:
+                time.sleep(poll)
+    except KeyboardInterrupt:
+        log("interrupted")
+    log(f"watch stopped after {served} study pass(es)")
+    return 0
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("--study", required=True)
+    parser.add_argument("--study")
+    parser.add_argument("--watch", action="store_true", help="serve every remote study's queued runs")
+    parser.add_argument("--once", action="store_true", help="with --watch: one pass, then exit")
+    parser.add_argument("--poll-sec", type=float, default=20, help="with --watch: seconds between polls")
     parser.add_argument("--data-dir", default=os.environ.get("CLAUDE_PLUGIN_DATA"))
     parser.add_argument("--backend", default=os.environ.get("ARCHETYPE_BACKEND_URL", "https://api.syntheticarchetype.com"))
     parser.add_argument("--runs", default="", help="comma separated run ids of the current wave")
@@ -472,10 +556,14 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--no-next-wave", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     opts = parser.parse_args(argv)
-    if not _ID.match(opts.study):
-        parser.error("--study must be a study id")
     if not opts.data_dir:
         parser.error("--data-dir (or CLAUDE_PLUGIN_DATA) is required: it holds auth.json")
+    if opts.watch:
+        if opts.study or opts.runs:
+            parser.error("--watch finds its own studies: leave out --study and --runs")
+        return watch(opts)
+    if not opts.study or not _ID.match(opts.study):
+        parser.error("--study must be a study id (or use --watch)")
     return Runner(opts).run()
 
 

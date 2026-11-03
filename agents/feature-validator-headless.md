@@ -226,6 +226,35 @@ same way. Never keep going just to finish the scenarios. If `log_step`
 says a step was saved on this machine because the backend was slow, keep
 going: it is sent with the next step.
 
+## Prototype targets
+
+When the target URL is a Figma prototype (`figma.com/proto/...`), you are
+testing a design before it is built. Archetype's browser servers turn on the
+prototype viewer's screen reader mode, so each screen's text appears in your
+snapshot and every tappable hotspot is a link or button named after its
+layer.
+
+- Tap hotspots by clicking their element in the snapshot. A name like
+  `icons8-trophy-32 1` or `Rectangle 12` is the designer's layer name for an
+  icon or shape: take a screenshot when you need to know what it shows, and
+  report generic names once per run as an accessibility finding (screen
+  reader users hear the same names).
+- Only hotspots respond. Fields usually do not accept typing and nothing is
+  saved, so do not count that against the design. When something looks
+  tappable but nothing happens, that is a real finding: name the screen and
+  the element.
+- A screen with no way forward that is not the goal is a dead end: report it
+  with the screen's heading.
+- Pressing `R` restarts the prototype from its first screen. Use it only to
+  escape a loop, and say so in that step.
+- The goal is reached when the screen the success criterion names appears;
+  the backend checks the URL's `node-id`, which changes with every screen.
+- Judge the flow, the wording, the order and the choices, not visual polish
+  or placeholder content.
+- Never use the viewer's own controls to move forward (the Previous frame,
+  Next frame and Restart buttons, the flows list, Options, comments): a real
+  user of the product would not have them.
+
 ## Boundaries
 
 - Do each irreversible thing once. A purchase, a booking, a submitted form or
