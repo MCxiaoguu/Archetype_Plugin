@@ -276,6 +276,27 @@ a print mode session without permission bypass: the actor's three browser
 calls ran with no denial, while the same call from the main session was
 denied.
 
+### Figma prototypes (`browser/figma-proto-init.js`)
+
+Every browser server loads `browser/figma-proto-init.js` with
+`--init-script`. It does nothing outside `figma.com/proto` and
+`figma.com/deck`. On a prototype it turns on the viewer's own screen reader
+mode (the `enable.screenreader` setting behind Options, Advanced settings,
+Accessibility settings), which renders each screen's text and every hotspot
+as real page elements, and lifts those elements above the canvas that
+otherwise swallows clicks. The actor then reads a prototype from its
+snapshot and taps hotspots with an ordinary `browser_click`, and each tap
+runs the prototype interaction. The viewer rewrites the URL's `node-id`
+(dash form, `71-616`) on every screen change, so the goal screen is a
+`url_matches` check such as `*node-id=71-616&*`. The actor procedure's
+"Prototype targets" section covers the rest: only hotspots respond, layer
+names are labels, dead hotspots and dead ends are findings, and the
+viewer's own controls are off limits.
+
+Measured on 2026-11-03: a Claude actor finished a third party 12 screen
+prototype (from its welcome screen to the end of its tutorial) in 103
+seconds and reported a real wiring defect on the way.
+
 ### Swarm runner (`scripts/study_runner.py`, `dispatch_study`)
 
 `dispatch_study {study_id, parallel?, model?, timeout_minutes?, confirm?}`
@@ -300,6 +321,23 @@ true`. The runner:
   and `studies/<id>/runner.json` (read by `study_status`),
 - asks for the next wave when the queue is empty, until the backend says
   done; a `stop` file in the study folder stops new workers.
+
+**Watch mode** serves studies that another client started and asked to be
+run remotely (`execution: "remote"`), such as the Figma plugin:
+
+```
+python3 scripts/study_runner.py --watch --data-dir ${CLAUDE_PLUGIN_DATA} \
+  --backend https://api.syntheticarchetype.com [--parallel 2] [--once] [--poll-sec 20]
+```
+
+It polls `GET /api/studies?execution=remote&status=running`, runs every
+queued run of each study (oldest first) with the same workers, waves,
+orphan handling and budget as above, then polls again. Runs that are
+already claimed or finished are left alone, so two watchers never act on
+one run (the claim is atomic on the backend). `--once` makes one pass for
+cron or CI; a `stop` file in `${CLAUDE_PLUGIN_DATA}/studies/` stops it
+between studies. It uses the login in `auth.json`, so it serves that
+account's studies.
 
 `docs/examples/study-ci.yml` is a documented GitHub Actions job (not
 enabled here) that runs a study against a preview URL and comments the

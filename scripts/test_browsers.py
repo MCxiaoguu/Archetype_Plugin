@@ -160,6 +160,8 @@ def case_proxy_starts_on_first_call(tmp: Path) -> None:
         config = json.loads(Path(argv[argv.index("--config") + 1]).read_text())
         video_dir = config["browser"]["contextOptions"]["recordVideo"]["dir"]
         expect(video_dir == str(out_dir / "videos") and Path(video_dir).is_dir(), f"absolute video folder: {video_dir}")
+        init = Path(argv[argv.index("--init-script") + 1])
+        expect(init.is_absolute() and init.name == "figma-proto-init.js" and init.exists(), f"prototype init script: {init}")
         second = proxy.rpc("tools/call", {"name": "browser_click", "arguments": {}})
         expect(second["result"]["content"][0]["text"] == "did browser_click", "second call reuses the server")
         expect(sum(1 for e in proxy.child_events() if "argv" in e) == 1, "one browser server per proxy")
@@ -412,6 +414,8 @@ class StubStudy:
         self.status = {r: "queued" for r in runs}
         self.aborts: dict[str, str] = {}
         self.wave2 = wave2
+        self.studies = ["s1"]
+        self.listings: list[str] = []
         stub = self
 
         class H(BaseHTTPRequestHandler):
@@ -427,6 +431,9 @@ class StubStudy:
                 self.wfile.write(data)
 
             def do_GET(self):
+                if self.path.startswith("/api/studies?"):
+                    stub.listings.append(self.path)
+                    return self.reply(200, {"studies": [{"studyId": s, "execution": "remote"} for s in stub.studies]})
                 rows = [{"runId": r, "status": st, "sessionId": f"s-{r}"} for r, st in stub.status.items()]
                 self.reply(200, {"runs": rows})
 
@@ -514,6 +521,36 @@ def case_runner_budget_runs_the_highest_priority_wave_two_runs(tmp: Path) -> Non
         stub.close()
 
 
+def case_runner_watch_serves_remote_studies(tmp: Path) -> None:
+    stub = StubStudy(["q-a", "q-b"])
+    stub.status["done-1"] = "completed"
+    try:
+        worker = tmp / "claude"
+        worker.write_text(RUNNER_WORKER)
+        worker.chmod(0o755)
+        (tmp / "plan.json").write_text("{}")
+        data = tmp / "data"
+        data.mkdir(exist_ok=True)
+        (data / "auth.json").write_text(json.dumps({"access_token": "t"}))
+        env = dict(os.environ, RUNNER_PLAN=str(tmp / "plan.json"), ARCHETYPE_RUNNER_WATCH_S="0.2",
+                   ARCHETYPE_RUNNER_WAVE_WAIT="0.1")
+        args = [sys.executable, str(HERE / "study_runner.py"), "--watch", "--once", "--data-dir", str(data),
+                "--backend", stub.url, "--parallel", "2", "--claude", str(worker)]
+        out = subprocess.run(args, env=env, capture_output=True, text=True, timeout=120)
+        expect(out.returncode == 0, f"watch exit {out.returncode}: {out.stderr[-600:]}")
+        expect(stub.listings and "execution=remote" in stub.listings[0] and "status=running" in stub.listings[0],
+               f"asks only for remote running studies: {stub.listings}")
+        expect(stub.status == {"q-a": "completed", "q-b": "completed", "done-1": "completed"},
+               f"queued runs served, finished ones left alone: {stub.status}")
+        status = json.loads((data / "studies" / "s1" / "runner.json").read_text())
+        expect(sorted(status["workers"]) == ["q-a", "q-b"], f"only queued runs got workers: {sorted(status['workers'])}")
+        bad = subprocess.run([sys.executable, str(HERE / "study_runner.py"), "--watch", "--study", "s1",
+                              "--data-dir", str(data)], capture_output=True, text=True, timeout=30)
+        expect(bad.returncode != 0 and "--watch finds its own studies" in bad.stderr, "watch refuses --study")
+    finally:
+        stub.close()
+
+
 CASES = [
     ("proxy answers the handshake and tools/list without starting a browser", case_proxy_is_lazy),
     ("proxy starts the pinned server on the first call, video folder absolute", case_proxy_starts_on_first_call),
@@ -529,6 +566,7 @@ CASES = [
     ("the recorded browser config names the engine that runs", case_recorded_config_names_the_engine),
     ("runner aborts runs whose worker exited or stalled, with the reason", case_runner_aborts_orphans),
     ("runner budget runs the highest priority wave 2 runs, the rest not run", case_runner_budget_runs_the_highest_priority_wave_two_runs),
+    ("runner --watch serves every queued run of remote studies", case_runner_watch_serves_remote_studies),
 ]
 
 
