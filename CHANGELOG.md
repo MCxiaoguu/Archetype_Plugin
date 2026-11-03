@@ -3,6 +3,21 @@
 All notable changes to the Archetype plugin. Versions follow
 `.claude-plugin/plugin.json`.
 
+## Unreleased: Figma prototypes
+
+### Added
+
+- Studies can target Figma prototypes. Every browser server loads
+  `browser/figma-proto-init.js`, which turns on the prototype viewer's
+  screen reader mode and lifts its hotspots above the canvas, so the actor
+  reads each screen and taps hotspots like any page. The actor procedure
+  has a "Prototype targets" section (dead hotspots and dead ends are
+  findings, layer names are labels, the viewer's own controls are off
+  limits).
+- `study_runner.py --watch` serves studies created with `execution:
+  "remote"` (the Figma plugin's): it polls the backend, runs every queued
+  run of each study, then polls again. `--once` makes a single pass.
+
 ## 0.6.0 (2026-11-03): behavioral studies
 
 ### Added
