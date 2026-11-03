@@ -3478,6 +3478,25 @@ def _render_study_report(report: dict[str, Any], study_id: str) -> str:
                 f"{frustration if frustration is not None else '?'} |"
             )
 
+    reasons = []
+    for a in archetypes:
+        q = a.get("quitReasons") if isinstance(a.get("quitReasons"), dict) else {}
+        if q:
+            reasons.append(f"{_clip(a.get('name'), 50)}: " + ", ".join(f"{_clip(k, 30)} {v}" for k, v in q.items()))
+    if reasons:
+        lines.append("\nWhy they left: " + "; ".join(reasons))
+    spread = []
+    for a in archetypes:
+        v = a.get("variance") if isinstance(a.get("variance"), dict) else {}
+        if v.get("varianceRuns"):
+            def rng(x: Any) -> str:
+                return f"{x.get('min')} to {x.get('max')}" if isinstance(x, dict) else "?"
+            spread.append(f"{_clip(a.get('name'), 50)}: {v.get('completed', '?')} of {v.get('n', '?')} completed "
+                          f"({v['varianceRuns']} variance run(s)), frustration {rng(v.get('frustrationScore'))}, "
+                          f"steps {rng(v.get('steps'))}")
+    if spread:
+        lines.append("Variance between repeats: " + "; ".join(spread))
+
     impacts = [f for f in (report.get("factorImpact") or []) if isinstance(f, dict)]
     if impacts:
         lines += ["", "Factor impact (risk pole against the baseline):", "",
@@ -3567,6 +3586,10 @@ def _render_study_report(report: dict[str, Any], study_id: str) -> str:
             bits.append(f"{browser['excludedRuns']} run(s) on another browser config excluded")
     elif isinstance(browser, str):
         bits.append(f"browser {browser}")
+    generator = honesty.get("generator")
+    if generator:
+        bits.append({"model": "archetypes written by a model", "template": "archetypes from templates (no model answered)",
+                     "mixed": "archetypes mix model and template generation"}.get(str(generator), f"archetypes: {generator}"))
     integrity = honesty.get("integrity") or {}
     share = integrity.get("unverifiedShare") if isinstance(integrity, dict) else None
     if isinstance(share, (int, float)) and not isinstance(share, bool):
