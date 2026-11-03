@@ -51,6 +51,7 @@ import json
 import os
 import queue
 import re
+import subprocess
 import sys
 import threading
 import time
@@ -1045,6 +1046,18 @@ BROWSER_PROFILES: dict[str, dict[str, Any]] = {
 }
 
 
+def _pinned_browser() -> dict[str, Any]:
+    """browser/pinned.json: the one source of the plugin browsers' settings."""
+    try:
+        data = json.loads((Path(__file__).resolve().parent.parent / "browser" / "pinned.json").read_text())
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+PINNED_BROWSER = _pinned_browser()
+
+
 def _browser_name_from_tool(tool_name: str) -> str | None:
     """Which browser a recorded tool call drove, from its MCP tool name."""
     match = re.match(r"^mcp__plugin_archetype_(archetype-(?:browser|watch)-\d+)__", tool_name or "")
@@ -1055,6 +1068,18 @@ def _browser_name_from_tool(tool_name: str) -> str | None:
     if (tool_name or "").startswith("mcp__playwright__"):
         return "playwright"
     return None
+
+
+def _browser_engine_label() -> str:
+    """The engine the plugin's servers launch here (browser_engine.py):
+    "chrome channel", or "bundled chromium <revision>" without Chrome."""
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import browser_engine
+
+        return str(browser_engine.pick().get("label") or "no browser installed")
+    except Exception:
+        return "chrome channel"
 
 
 def browser_config(name: Any) -> dict[str, Any] | None:
@@ -1070,8 +1095,16 @@ def browser_config(name: Any) -> dict[str, Any] | None:
         if not match:
             return None
         # The plugin's own isolated Playwright servers: headless for
-        # archetype-browser-N, headed for archetype-watch-N.
-        profile = dict(BROWSER_PROFILES["playwright"], headless=match.group(1) == "browser")
+        # archetype-browser-N, headed for archetype-watch-N, all on the
+        # pinned package, user agent and viewport (browser/pinned.json).
+        pinned = PINNED_BROWSER
+        version = pinned.get("package")
+        if version and pinned.get("playwright_version"):
+            version = f"{version} (playwright {pinned['playwright_version']}, {_browser_engine_label()})"
+        profile = dict(
+            BROWSER_PROFILES["playwright"], headless=match.group(1) == "browser",
+            version=version, user_agent=pinned.get("user_agent"), viewport=pinned.get("viewport"),
+        )
     # Unknown values are left out rather than sent as null: the claim route
     # answers 400 for a malformed browser config.
     return {k: v for k, v in dict(profile, server=name).items() if v is not None}
@@ -2793,6 +2826,9 @@ def _save_pool(
 # Factor and archetype generation run LLM calls server side (archetypes up
 # to ~90 s in parallel); give them the same headroom as run assembly.
 STUDY_TIMEOUT = _env_seconds("ARCHETYPE_STUDY_TIMEOUT", 180)
+# study_status wait_seconds: at most this long per call, polling this often.
+STATUS_MAX_WAIT = 300
+STATUS_POLL = _env_seconds("ARCHETYPE_STATUS_POLL", 10)
 
 DESIGN_MODES = ("ofat_stress", "ofat", "factorial", "half_fraction", "composites")
 REPEAT_POLICIES = ("confirm", "explore", "decide")
@@ -3263,6 +3299,107 @@ def handle_next_study_wave(arguments: dict[str, Any]) -> dict[str, Any]:
     return tool_text(_render_wave(study_id, resp, None))
 
 
+def _queued_runs(study_id: str, listing: dict[str, Any]) -> list[str]:
+    """The study's runs still waiting for an actor, in the backend's order,
+    from GET /api/studies/<id>/runs (each run carries its live status; the
+    study object's own run refs do not)."""
+    runs = listing.get("runs") if isinstance(listing.get("runs"), list) else None
+    if runs is not None:
+        return [
+            str(_pick(r, "runId", "run_id")) for r in runs
+            if isinstance(r, dict) and _pick(r, "status") == "queued"
+            and _RUN_ID_RE.match(str(_pick(r, "runId", "run_id")))
+        ]
+    # No run listing: the last wave seen here.
+    waves = (_read_json_file((_study_dir(study_id) or Path("/nonexistent")) / "waves.json").get("waves") or {})
+    if not waves:
+        return []
+    last = waves[max(waves, key=lambda k: _int_or(k, 0))]
+    return [str(r.get("runId")) for r in last if isinstance(r, dict) and _RUN_ID_RE.match(str(r.get("runId")))]
+
+
+def _runner_alive(study_id: str) -> int | None:
+    folder = _study_dir(study_id)
+    status = _read_json_file(folder / "runner.json" if folder else None)
+    pid = status.get("pid")
+    if status.get("state") not in ("starting", "running") or not isinstance(pid, int):
+        return None
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return None
+    return pid
+
+
+def handle_dispatch_study(arguments: dict[str, Any]) -> dict[str, Any]:
+    study_id = arguments.get("study_id")
+    bad = _bad_study_id(study_id)
+    if bad:
+        return bad
+    plugin_data = os.environ.get("CLAUDE_PLUGIN_DATA")
+    if not plugin_data:
+        return tool_text("CLAUDE_PLUGIN_DATA is not set; the runner needs it for the login and logs.", is_error=True)
+    parallel = max(1, min(_int_or(arguments.get("parallel"), 2), 4))
+    alive = _runner_alive(study_id)
+    if alive:
+        return tool_text(
+            f"A swarm runner is already working on this study (pid {alive}). "
+            "Follow it with study_status; create a stop file in the study folder to stop it."
+        )
+    out = _study_call(lambda t: backend_get(f"/api/studies/{study_id}/runs", auth_token=t))
+    if isinstance(out, dict):
+        return out
+    runs = _queued_runs(study_id, out[1])
+    if not runs:
+        return tool_text(
+            "No queued runs to dispatch. Create them with create_study_runs, or "
+            "ask for the next wave with next_study_wave."
+        )
+    budget = _int_or(arguments.get("max_runs"), 0)
+    estimate = _estimate(min(len(runs), budget) if budget > 0 else len(runs), parallel)
+    if budget > 0:
+        estimate += (f"; at most {budget} actor run(s) in all, waves included (a larger next wave runs its "
+                     "highest priority runs and the rest are recorded as not run)")
+    if not arguments.get("confirm"):
+        return tool_text(
+            f"Ready to run {len(runs)} queued run(s) unattended, {parallel} at a time.\n"
+            f"Estimate: {estimate}. Each worker is a separate `claude -p` session on "
+            "your Claude plan, so parallel workers use quota quickly; 2 is the default "
+            "for that reason. When this wave finishes the runner asks for the next "
+            "wave and runs it too, until the backend says the study is done.\n"
+            "Ask the user to confirm, then call dispatch_study again with confirm: true."
+        )
+    folder = _study_dir(study_id)
+    assert folder is not None
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "stop").unlink(missing_ok=True)
+    cmd = [
+        sys.executable, str(Path(__file__).resolve().parent / "study_runner.py"),
+        "--study", study_id, "--data-dir", plugin_data, "--backend", BACKEND_BASE,
+        "--runs", ",".join(runs), "--parallel", str(parallel),
+        "--timeout-min", str(max(_int_or(arguments.get("timeout_minutes"), 30), 5)),
+    ]
+    if arguments.get("model"):
+        cmd += ["--model", str(arguments["model"])]
+    if _int_or(arguments.get("max_runs"), 0) > 0:
+        cmd += ["--max-runs", str(_int_or(arguments.get("max_runs"), 0))]
+    if _int_or(arguments.get("stall_minutes"), 0) > 0:
+        cmd += ["--stall-min", str(_int_or(arguments.get("stall_minutes"), 0))]
+    try:
+        with (folder / "runner.log").open("a") as runner_log:
+            proc = subprocess.Popen(cmd, stdout=runner_log, stderr=subprocess.STDOUT,
+                                    stdin=subprocess.DEVNULL, start_new_session=True)
+    except OSError as exc:
+        return tool_text(f"Could not start the swarm runner: {exc}", is_error=True)
+    return tool_text(
+        f"Swarm runner started (pid {proc.pid}): {len(runs)} run(s), {parallel} at a time.\n"
+        f"Estimate: {estimate}.\n"
+        f"Per run logs: {folder}/<run_id>/stream.jsonl; runner log: {folder}/runner.log.\n"
+        "Poll study_status every 60 seconds. To stop new workers, create the "
+        f"file {folder}/stop."
+    )
+
+
 def handle_study_status(arguments: dict[str, Any]) -> dict[str, Any]:
     study_id = arguments.get("study_id")
     bad = _bad_study_id(study_id)
@@ -3272,6 +3409,24 @@ def handle_study_status(arguments: dict[str, Any]) -> dict[str, Any]:
     if isinstance(out, dict):
         return out
     resp = out[1]
+    # wait_seconds: block until something changes (a run finishes, the wave
+    # or the swarm runner ends) or the time is up, so an unattended session
+    # (claude -p) can follow a study without a sleep tool.
+    wait = min(max(_int_or(arguments.get("wait_seconds"), 0), 0), STATUS_MAX_WAIT)
+    if wait:
+        def key(r: dict[str, Any]) -> tuple:
+            folder = _study_dir(study_id)
+            runner = _read_json_file(folder / "runner.json" if folder else None)
+            counts = r.get("runs") or {}
+            return (r.get("status"), counts.get("terminal"), counts.get("total"), runner.get("state"))
+
+        start, deadline = key(resp), time.monotonic() + wait
+        while time.monotonic() < deadline and key(resp) == start:
+            time.sleep(min(STATUS_POLL, max(deadline - time.monotonic(), 0)))
+            again = _study_call(lambda t: backend_get(f"/api/studies/{study_id}/status", auth_token=t))
+            if isinstance(again, dict):
+                return again
+            resp = again[1]
     runs = resp.get("runs") or {}
     by_status = runs.get("byStatus") or {}
     order = ("queued", "running", "completed", "abandoned", "failed", "aborted")
@@ -4268,13 +4423,40 @@ TOOLS: dict[str, dict[str, Any]] = {
         "schema": {"type": "object", "properties": {"study_id": {"type": "string"}}, "required": ["study_id"]},
         "handler": handle_next_study_wave,
     },
+    "dispatch_study": {
+        "description": (
+            "Run a study's queued runs (GET /api/studies/<id>/runs) unattended with the swarm runner: one "
+            "`claude -p` worker per run, up to parallel (1 to 4, default 2) at "
+            "a time, each on its own isolated headless browser, then the next "
+            "wave, until the study is done. Without confirm: true it only "
+            "shows the run count and a time and quota estimate."
+        ),
+        "schema": {"type": "object", "properties": {
+            "study_id": {"type": "string"},
+            "parallel": {"type": "integer", "minimum": 1, "maximum": 4},
+            "model": {"type": "string", "description": "Optional model for the workers."},
+            "timeout_minutes": {"type": "integer", "description": "Per run limit, default 30."},
+            "max_runs": {"type": "integer", "minimum": 1,
+                         "description": "Start at most this many actor runs in all, next waves included; "
+                                        "the rest are recorded as not run (aborted with the budget reason)."},
+            "stall_minutes": {"type": "integer", "minimum": 1,
+                              "description": "Stop a worker that logged no step for this long after its claim (default 20)."},
+            "confirm": {"type": "boolean", "description": "true only after the user agreed to the estimate."}},
+            "required": ["study_id"]},
+        "handler": handle_dispatch_study,
+    },
     "study_status": {
         "description": (
             "Where a study stands: run counts by status for the current "
             "wave, whether it is all finished, and a local swarm runner's "
             "progress when one is working on it."
         ),
-        "schema": {"type": "object", "properties": {"study_id": {"type": "string"}}, "required": ["study_id"]},
+        "schema": {"type": "object", "properties": {
+            "study_id": {"type": "string"},
+            "wait_seconds": {"type": "integer", "minimum": 0, "maximum": STATUS_MAX_WAIT,
+                             "description": "Wait up to this long (at most 300) for a change: a run "
+                                            "finishing, the wave or the swarm runner ending. For unattended sessions."}},
+            "required": ["study_id"]},
         "handler": handle_study_status,
     },
     "get_study": {

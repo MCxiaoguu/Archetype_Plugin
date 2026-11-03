@@ -46,6 +46,18 @@
           }
         ]
       }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "mcp__plugin_archetype_.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/permission-hook.py\"",
+            "timeout": 10
+          }
+        ]
+      }
     ]
   }
 }

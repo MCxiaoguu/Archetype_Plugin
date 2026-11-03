@@ -12,7 +12,7 @@ the factors and builds the archetypes; you run the actors and relay the
 report.
 
 Load the study tools in one ToolSearch query:
-`select:mcp__plugin_archetype_core__create_study,mcp__plugin_archetype_core__generate_factors,mcp__plugin_archetype_core__update_factors,mcp__plugin_archetype_core__generate_archetypes,mcp__plugin_archetype_core__create_study_runs,mcp__plugin_archetype_core__next_study_wave,mcp__plugin_archetype_core__study_status,mcp__plugin_archetype_core__get_study_report,mcp__plugin_archetype_core__get_study,mcp__plugin_archetype_core__list_features,mcp__plugin_archetype_core__list_pools`.
+`select:mcp__plugin_archetype_core__create_study,mcp__plugin_archetype_core__generate_factors,mcp__plugin_archetype_core__update_factors,mcp__plugin_archetype_core__generate_archetypes,mcp__plugin_archetype_core__create_study_runs,mcp__plugin_archetype_core__next_study_wave,mcp__plugin_archetype_core__study_status,mcp__plugin_archetype_core__dispatch_study,mcp__plugin_archetype_core__get_study_report,mcp__plugin_archetype_core__get_study,mcp__plugin_archetype_core__list_features,mcp__plugin_archetype_core__list_pools`.
 Auth is self-healing in the main session; never pre-call `login`.
 
 ## 0. Resume an existing study
@@ -44,9 +44,12 @@ does, into:
 | `archetypes=4..8` | the backend's default for the mode |
 | `repeats=confirm\|explore\|decide` | `confirm` |
 | `mode=ofat_stress\|ofat\|factorial\|half_fraction\|composites` | `ofat_stress` |
-| `parallel=1..4` | 4 |
+| `parallel=1..4` | 4 in session, 2 unattended |
 | `watch=live` | off: headless |
 | `browser=chrome` | off: isolated Playwright |
+| `unattended` | off: actors run as subagents in this session. On: no questions and no confirmations (see "Unattended mode"), swarm runner |
+| `max_runs=N` | none. With `unattended`: passed to `dispatch_study` as `max_runs`, the most actor runs the study may start, waves included (a larger wave 2 runs its highest priority runs; the rest are recorded as not run) |
+| `model=` | none: the workers' default model. With `unattended`, passed to `dispatch_study` for the actor workers (for example `sonnet`) |
 | `questions="...;..."` | none |
 | `factors=key,key,...` | none: the backend's selection. When given, select exactly these factor keys in this order after `generate_factors` (one `update_factors` call) instead of asking |
 | `study=<id>` | resume that study (section 0) |
@@ -67,6 +70,29 @@ archetype), `factorial` (3 factors, 8 archetypes, interactions),
 `half_fraction` (4 factors, 8 archetypes), `composites` (named mixes, no
 attribution). Suggest `factorial` or `half_fraction` only as a follow up to
 a finished study.
+
+### Unattended mode
+
+`unattended` is for a session nobody is watching (`claude -p`, CI, a user
+who walks away). The command line is the consent: the user asked for the
+whole study by typing it, so this mode asks nothing and confirms nothing.
+
+- A missing goal, url, ICP or success criterion: stop with one line naming
+  what is missing (nobody can answer a question). Never invent them.
+- Step 2: a suggested success check is accepted (`create_study` with
+  `study_id` and `confirm_checks: true`) unless `success_checks` were given.
+- Step 3: `factors=` is applied; otherwise the backend's selection stands.
+- Step 4: the archetypes stand. Steps 5 and 6: create the runs, then call
+  `dispatch_study` once with `confirm: true`, `parallel` (default 2), and
+  `model` and `max_runs` when given.
+- Waiting: call `study_status` with `wait_seconds: 300` again and again (it
+  returns early when a run finishes) and print one progress line each time,
+  until it says the swarm runner finished and every run is terminal. Then
+  call `next_study_wave` once: it should answer "no more waves" (the runner
+  asked for them); if it creates runs, dispatch them the same way.
+- Step 8 as usual. Print the full report: it is the session's output.
+
+Every other rule still holds: never invent factors, archetypes or results.
 
 ## 2. Create the study
 
@@ -102,7 +128,8 @@ question about browsers or modes: the arguments decided them.
 
 ## 6. Dispatch
 
-Choose the mode from the arguments, in this order:
+Choose the mode from the arguments, in this order (a study never mixes
+browsers: the report compares only runs with the same browser config):
 
 1. **`browser=chrome`**: the whole study runs sequentially in Claude in
    Chrome. Warn once: it uses the user's real browser profile (their
@@ -112,12 +139,23 @@ Choose the mode from the arguments, in this order:
    the `validation` skill once, then dispatch `feature-validator` agents one
    at a time, each with the prompt "Claim and execute Archetype run
    `<run_id>`. Your browser is `chrome`."
-2. **`watch=live`**: headed Playwright, two at a time, on servers
+2. **`unattended`** (the user is going to walk away, or CI): call
+   `dispatch_study` with the study id and `parallel` (default 2, at most
+   4). It shows the run count and a time and quota estimate; ask the user,
+   then call it again with `confirm: true`. The swarm runner starts one
+   `claude -p` worker per run, each on its own headless browser, and runs
+   the next wave by itself when one finishes. Poll `study_status` every 60
+   seconds and report progress in one line each time; when it says the
+   runner finished and the backend has no more waves, go to step 8. Never
+   confirm on the user's behalf; the one exception is `unattended`, where
+   the command line was the confirmation (see "Unattended mode": call it
+   once with `confirm: true` and wait with `study_status` `wait_seconds`).
+3. **`watch=live`**: headed Playwright, two at a time, on servers
    `archetype-watch-1` and `archetype-watch-2`.
-3. **Default**: headless isolated Playwright, up to 4 at a time (or
+4. **Default**: headless isolated Playwright, up to 4 at a time (or
    `parallel=`), on servers `archetype-browser-1` to `archetype-browser-4`.
 
-For 2 and 3: dispatch one `feature-validator-headless` agent per run in the
+For 3 and 4: dispatch one `feature-validator-headless` agent per run in the
 wave's order, in the background, each with exactly this prompt and nothing
 else: "Claim and execute Archetype run `<run_id>`. Your browser is
 `<server>`: use only the `mcp__plugin_archetype_<server>__browser_*`
