@@ -89,7 +89,20 @@ def case_unknown_defect_uses_its_own_terms():
     assert rm.grade_run([d], run(findings=["The footer still says Copyright 2019"]))["D10"]["level"] == "found"
 
 
-CASES = [case_parses_every_defect_row, case_demo_script_quotes_are_found, case_noticed_reached_and_words,
+def case_comparison_names_new_finds():
+    defects = rm.load_ground_truth(GROUND_TRUTH)
+    first = rm.build_matrix(defects, [{"runId": "a", "archetypeName": "B", "report": run(findings=["Card required despite no card promise"], urls=["http://x/signup.html"])}])
+    first["studyId"] = "aaaaaaaa1"
+    second = rm.build_matrix(defects, [{"runId": "b", "archetypeName": "B", "report": run(findings=[
+        "The dashboard says No events yet and nothing else"], urls=["http://x/dashboard.html"])}])
+    second["studyId"] = "bbbbbbbb2"
+    text = rm.render_comparison(first, second)
+    assert "| D1 Landing promises" in text and "1 of 1 runs | 0 of 1 runs | no longer found |" in text, text
+    assert "| D4 Dashboard empty state is a dead end | 0 of 1 runs | 1 of 1 runs | newly found |" in text, text
+    assert "Newly found: D4." in text
+
+
+CASES = [case_comparison_names_new_finds, case_parses_every_defect_row, case_demo_script_quotes_are_found, case_noticed_reached_and_words,
          case_matrix_and_markdown, case_unknown_defect_uses_its_own_terms]
 
 

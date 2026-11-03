@@ -131,11 +131,13 @@ def run_session(opts: argparse.Namespace, out: Path, data_dir: Path, relay_url: 
 
     shadow = study_runner.shadow_plugin(ROOT, out / "plugin", data_dir)
     if opts.study:
-        prompt = f"/archetype:study study={opts.study} unattended parallel={opts.parallel} model={opts.model}"
+        prompt = (f"/archetype:study study={opts.study} unattended parallel={opts.parallel} model={opts.model} "
+                  f"max_runs={opts.max_runs}")
     else:
-        prompt = (f'/archetype:study "{GOAL}" url={relay_url} icp="{ICP}" success="{SUCCESS}" '
+        pre = f' preconditions="{opts.preconditions}"' if opts.preconditions else ""
+        prompt = (f'/archetype:study "{GOAL}" url={relay_url} icp="{ICP}" success="{SUCCESS}"{pre} '
                   f"factors={opts.factors} archetypes=5 repeats=confirm mode=ofat_stress "
-                  f"parallel={opts.parallel} model={opts.model} unattended")
+                  f"parallel={opts.parallel} model={opts.model} max_runs={opts.max_runs} unattended")
     args = [opts.claude, "-p", prompt, "--plugin-dir", str(shadow), "--dangerously-skip-permissions",
             "--output-format", "stream-json", "--verbose", "--no-chrome", "--no-session-persistence",
             "--model", opts.outer_model]
@@ -158,8 +160,10 @@ def run_session(opts: argparse.Namespace, out: Path, data_dir: Path, relay_url: 
                 if sid and opts.max_runs:
                     code, listing = api(opts.backend, f"/api/studies/{sid}/runs", data_dir, timeout=30)
                     total = len(listing.get("runs") or []) if code == 200 else 0
-                    if total > opts.max_runs:
-                        log(f"{total} runs exist, over --max-runs {opts.max_runs}: stopping")
+                    started = sum(1 for r in listing.get("runs") or []
+                                  if r.get("status") not in ("queued", "aborted") or r.get("claimedAt"))
+                    if started > opts.max_runs:
+                        log(f"{started} runs started, over --max-runs {opts.max_runs}: stopping")
                         (data_dir / "studies" / sid / "stop").write_text("max runs\n")
                         os.killpg(child.pid, signal.SIGTERM)
                 if time.monotonic() - started > opts.timeout_min * 60:
@@ -187,6 +191,9 @@ def grade(opts: argparse.Namespace, out: Path, data_dir: Path, sid: str) -> dict
     matrix["studyId"] = sid
     (out / "matrix.json").write_text(json.dumps(matrix, indent=2))
     md = relay_matrix.render_markdown(matrix)
+    if opts.compare:
+        earlier = json.loads(Path(opts.compare).read_text())
+        md += "\n\n" + relay_matrix.render_comparison(earlier, matrix)
     (out / "matrix.md").write_text(md + "\n")
     print(f"\nStudy {sid}: report {code}, {len(runs)} run(s)\n")
     print(md)
@@ -203,6 +210,8 @@ def main(argv: list[str]) -> int:
     p.add_argument("--outer-model", default="sonnet", help="the orchestrating session")
     p.add_argument("--factors", default=FACTORS)
     p.add_argument("--study")
+    p.add_argument("--preconditions", default="", help="context every tester arrives with (quoted)")
+    p.add_argument("--compare", help="matrix.json of an earlier study to compare against")
     p.add_argument("--grade-only", action="store_true")
     p.add_argument("--max-runs", type=int, default=16)
     p.add_argument("--timeout-min", type=float, default=150)

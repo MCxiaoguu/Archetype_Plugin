@@ -203,3 +203,35 @@ def render_markdown(matrix: dict[str, Any]) -> str:
 
 def load_ground_truth(path: Path) -> list[dict[str, Any]]:
     return parse_ground_truth(Path(path).read_text())
+
+
+def _found_counts(matrix: dict[str, Any]) -> dict[str, tuple[int, int]]:
+    """Defect id to (runs that found it, runs graded)."""
+    out: dict[str, tuple[int, int]] = {}
+    for d in matrix["defects"]:
+        found = n = 0
+        for name in matrix["archetypes"]:
+            cell = matrix["cells"].get(f"{d['id']}|{name}") or {}
+            found += cell.get("found", 0)
+            n += cell.get("n", 0)
+        out[d["id"]] = (found, n)
+    return out
+
+
+def render_comparison(earlier: dict[str, Any], later: dict[str, Any]) -> str:
+    """Per defect: runs that found it in each study, and what changed."""
+    a, b = _found_counts(earlier), _found_counts(later)
+    lines = [f"Compared with study {earlier.get('studyId') or 'earlier'}:", "",
+             f"| Defect | {earlier.get('studyId', 'earlier')[:8]} found | {later.get('studyId', 'this')[:8]} found | Change |",
+             "|---|---|---|---|"]
+    for d in later["defects"]:
+        fa, na = a.get(d["id"], (0, 0))
+        fb, nb = b.get(d["id"], (0, 0))
+        change = ("newly found" if fb and not fa else "no longer found" if fa and not fb
+                  else "found in both" if fa and fb else "found in neither")
+        lines.append(f"| {d['id']} {d['title'][:50]} | {fa} of {na} runs | {fb} of {nb} runs | {change} |")
+    new = [d["id"] for d in later["defects"] if b.get(d["id"], (0, 0))[0] and not a.get(d["id"], (0, 0))[0]]
+    lines.append("")
+    lines.append(f"Newly found: {', '.join(new) or 'none'}.")
+    return "\n".join(lines)
+
