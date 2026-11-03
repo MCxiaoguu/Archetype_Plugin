@@ -160,15 +160,18 @@ def run_session(opts: argparse.Namespace, out: Path, data_dir: Path, relay_url: 
                 if sid and opts.max_runs:
                     code, listing = api(opts.backend, f"/api/studies/{sid}/runs", data_dir, timeout=30)
                     total = len(listing.get("runs") or []) if code == 200 else 0
-                    started = sum(1 for r in listing.get("runs") or []
-                                  if r.get("status") not in ("queued", "aborted") or r.get("claimedAt"))
-                    if started > opts.max_runs:
-                        log(f"{started} runs started, over --max-runs {opts.max_runs}: stopping")
+                    ran = sum(1 for r in listing.get("runs") or []
+                              if r.get("status") not in ("queued", "aborted") or r.get("claimedAt"))
+                    if ran > opts.max_runs:
+                        log(f"{ran} runs started, over --max-runs {opts.max_runs}: stopping")
                         (data_dir / "studies" / sid / "stop").write_text("max runs\n")
                         os.killpg(child.pid, signal.SIGTERM)
                 if time.monotonic() - started > opts.timeout_min * 60:
                     log("session timed out: stopping it")
-                    os.killpg(child.pid, signal.SIGTERM)
+                    try:
+                        os.killpg(child.pid, signal.SIGTERM)
+                    except OSError:
+                        pass
         except KeyboardInterrupt:
             os.killpg(child.pid, signal.SIGTERM)
             raise
