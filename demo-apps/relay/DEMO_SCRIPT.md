@@ -54,17 +54,38 @@ members`, `Pragmatic Managers · 0 members`.
 > front door. Segments fail differently — that's the insight a funnel chart
 > can't give you."
 
-**Screen:** the coverage matrix (the money slide):
+**Screen:** the coverage matrix (the money slide). It is no longer compiled
+by hand: `python3 e2e/relay_study.py --out <dir>` runs a whole
+`/archetype:study` on Relay with the real plugin and grades every run
+against `GROUND_TRUTH.md` (`e2e/relay_matrix.py`); `--study <id>
+--grade-only` regrades an existing study. Cells: **found** (a finding or
+the persona's quitting words), noticed (narration only), reached, missed
+(opened the page), not reached. The 2026-08-27 Zwick and Faulkner runs
+above predate studies; regrade any run set to refresh this slide.
 
-| Planted defect | Zwick (engineer, MIXED) | Faulkner (manager, FAIL) |
-|---|---|---|
-| D1 card required vs "no credit card" | **FOUND** — "reads as bait-and-switch" | **FOUND** |
-| D2 `RELAY_TOKEN` never provisioned | not reached (refused the card) | **FOUND** — "no token is displayed anywhere — not during onboarding, not in Settings" |
-| D3 `relay-sdk` vs `@relay/sdk` | not reached | **FOUND** — "would produce a require error" |
-| D4 dead-end empty dashboard | not reached | **FOUND** — "no calls to action, no links back to setup" |
-| D5 docs search always empty | **FOUND** | **FOUND** — "even though an 'Uptime checks' guide exists in the sidebar of the same page" |
-| D6 $29 vs $39 per seat | not reached | **FOUND** |
-| D7 annual behind Book-a-demo | missed | missed — *neither buyer bothered to book a demo, which is itself a finding* |
+Latest generated matrix, study `ed5786ef75884ddf9158becd0ecba690`
+(2026-11-03, `ofat_stress` on patience, trust and reading, repeats
+`confirm`, 7 runs on Sonnet, every run stopped at the card field, so no
+wave 2):
+
+| Planted defect | Pragmatic late-night evaluator | Low patience monitoring | Low trust monitoring | Low reading engagement | Stress: low trust skimmer |
+|---|---|---|---|---|---|
+| D1 Landing promises "Free forever. No credit card required." but signup r | **found** 3 of 3 | **found** 1 of 1 | **found** 1 of 1 | **found** 1 of 1 | **found** 1 of 1 |
+| D2 Docs quickstart initializes with Relay.init({ token: process.env.RELAY | reached, missed (2 of 3) | not reached | not reached | not reached | not reached |
+| D3 Package-name inconsistency | reached, missed (2 of 3) | not reached | not reached | not reached | not reached |
+| D4 Dashboard empty state is a dead end | not reached | not reached | not reached | not reached | not reached |
+| D5 Docs search is fake | reached, missed (2 of 3) | not reached | not reached | not reached | not reached |
+| D6 Price inconsistency | **found** 1 of 3 | noticed 1 of 1 | noticed 1 of 1 | reached, missed (1 of 1) | **found** 1 of 1 |
+| D7 Annual pricing is not self-serve | reached, missed (3 of 3) | reached, missed (1 of 1) | reached, missed (1 of 1) | reached, missed (1 of 1) | reached, missed (1 of 1) |
+| D8 The alert-rule threshold input only accepts the cryptic format >N/Nm ( | not reached | not reached | not reached | not reached | not reached |
+| D9 The notification-channel dropdown offers ONLY "Email" | reached, missed (3 of 3) | reached, missed (1 of 1) | reached, missed (1 of 1) | reached, missed (1 of 1) | reached, missed (1 of 1) |
+
+Defects found by at least one archetype: 2 of 9 (D1, D6).
+- Pragmatic late-night evaluator: found 2 (D1, D6)
+- Low patience monitoring: found 1 (D1)
+- Low trust monitoring: found 1 (D1)
+- Low reading engagement: found 1 (D1)
+- Stress: low trust skimmer: found 2 (D1, D6)
 
 **Credibility beat:** "6 of 7 planted defects found, mapped against a written
 answer key (`GROUND_TRUTH.md`) — plus five *true* findings I hadn't planted
