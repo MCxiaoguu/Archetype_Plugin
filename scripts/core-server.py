@@ -127,6 +127,64 @@ USER_AGENT = os.environ.get(
 )
 
 
+def _is_safe_url(url: str) -> bool:
+    """True for https URLs, or plain http only on the loopback interface."""
+    try:
+        parts = urllib.parse.urlsplit(url)
+    except ValueError:
+        return False
+    if parts.scheme == "https" and parts.hostname:
+        return True
+    return parts.scheme == "http" and parts.hostname in ("127.0.0.1", "localhost", "::1")
+
+
+# A bearer token must never travel over cleartext to a remote host, even if
+# ARCHETYPE_BACKEND_URL is misconfigured or pointed elsewhere.
+BACKEND_IS_SAFE = _is_safe_url(BACKEND_BASE)
+
+
+def _write_private(path: Path, text: str) -> None:
+    """Write ``text`` to ``path`` atomically with 0600 from the first byte.
+
+    write_text + chmod left a window where the token file existed with the
+    umask default (usually world-readable).
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(path.parent, 0o700)
+    except OSError:
+        pass
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        with os.fdopen(fd, "w") as fh:
+            fh.write(text)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
+
+
+def _attach_auth(req: urllib.request.Request, auth_token: str | None) -> bool:
+    """Add the bearer header; refuse (False) when the backend is not https."""
+    if not auth_token:
+        return True
+    if not BACKEND_IS_SAFE:
+        log(f"refusing to send credentials to non-https backend {BACKEND_BASE}")
+        return False
+    req.add_header("Authorization", f"Bearer {auth_token}")
+    return True
+
+
+_INSECURE_BODY = {
+    "error": "insecure_backend",
+    "message": "ARCHETYPE_BACKEND_URL must use https (http is allowed only for localhost).",
+}
+
+
 # ---------- I/O ----------
 
 
@@ -321,8 +379,8 @@ def backend_post(
         },
         method="POST",
     )
-    if auth_token:
-        req.add_header("Authorization", f"Bearer {auth_token}")
+    if not _attach_auth(req, auth_token):
+        return 0, dict(_INSECURE_BODY)
     return _send(req, timeout)
 
 
@@ -343,8 +401,8 @@ def backend_patch(
         },
         method="PATCH",
     )
-    if auth_token:
-        req.add_header("Authorization", f"Bearer {auth_token}")
+    if not _attach_auth(req, auth_token):
+        return 0, dict(_INSECURE_BODY)
     return _send(req, timeout)
 
 
@@ -362,8 +420,8 @@ def backend_get(
         },
         method="GET",
     )
-    if auth_token:
-        req.add_header("Authorization", f"Bearer {auth_token}")
+    if not _attach_auth(req, auth_token):
+        return 0, dict(_INSECURE_BODY)
     return _send(req, timeout)
 
 
@@ -547,9 +605,7 @@ def save_pending_login(pending: dict[str, Any]) -> None:
     if path is None:
         return
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(pending, indent=2) + "\n")
-        os.chmod(path, 0o600)
+        _write_private(path, json.dumps(pending, indent=2) + "\n")
     except Exception as exc:  # resumability is a convenience, never fatal
         log(f"could not save pending login: {exc}")
 
@@ -566,7 +622,6 @@ def clear_pending_login() -> None:
 
 
 def _save_token(auth_path: Path, token_body: dict[str, Any]) -> None:
-    auth_path.parent.mkdir(parents=True, exist_ok=True)
     payload: dict[str, Any] = {
         "access_token": token_body["access_token"],
         "token_type": token_body.get("token_type", "Bearer"),
@@ -577,8 +632,7 @@ def _save_token(auth_path: Path, token_body: dict[str, Any]) -> None:
         "saved_at": int(time.time()),
     }
     payload = {k: v for k, v in payload.items() if v is not None}
-    auth_path.write_text(json.dumps(payload, indent=2) + "\n")
-    os.chmod(auth_path, 0o600)
+    _write_private(auth_path, json.dumps(payload, indent=2) + "\n")
     clear_pending_login()
     log(f"saved token to {auth_path}")
 
@@ -660,6 +714,10 @@ def _device_login_locked() -> tuple[str | None, str]:
         )
         if not verify_url:
             return None, "Backend did not return a verification URL."
+        if not _is_safe_url(verify_url):
+            # The URL is opened in the user's browser; never hand it file:,
+            # javascript: or cleartext remote URLs from a tampered response.
+            return None, "Backend returned an unsafe verification URL; refusing to open it."
         pending = {
             "device_code": code_body["device_code"],
             "user_code": code_body.get("user_code", ""),
@@ -820,8 +878,7 @@ def _save_run_log(entries: list[dict[str, Any]]) -> None:
     if path is None:
         return
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(entries[-RUN_LOG_LIMIT:], indent=2) + "\n")
+        _write_private(path, json.dumps(entries[-RUN_LOG_LIMIT:], indent=2) + "\n")
     except Exception as exc:  # the log is best-effort, never fatal
         log(f"could not write run log: {exc}")
 
