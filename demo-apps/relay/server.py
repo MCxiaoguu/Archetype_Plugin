@@ -380,7 +380,7 @@ class RelayHandler(SimpleHTTPRequestHandler):
 
 def main():
     _load()
-    server = ThreadingHTTPServer(("", PORT), RelayHandler)
+    server = ThreadingHTTPServer((os.environ.get("RELAY_HOST", "127.0.0.1"), PORT), RelayHandler)
     print("Relay demo serving on http://localhost:%d" % PORT)
     try:
         server.serve_forever()
