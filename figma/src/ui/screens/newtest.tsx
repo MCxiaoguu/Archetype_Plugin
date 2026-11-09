@@ -1,5 +1,5 @@
 import { useMemo } from 'preact/hooks';
-import { BLOCKER_TEXT, runPreflight, type Preflight } from '../../lib/preflight';
+import { BLOCKER_TEXT, isFlowBlocker, runPreflight, type Preflight } from '../../lib/preflight';
 import type { AppState } from '../../lib/state';
 import { RUN_SIZES, validateForm, type RunSize } from '../../lib/study';
 import type { DocSnapshot, NodeRef } from '../../lib/types';
@@ -19,7 +19,9 @@ function FramePicker(props: {
 }) {
   const { role, value, doc, selection, store } = props;
   const label = role === 'start' ? 'Start here' : 'Goal screen';
-  const current = doc.frames.find((f) => f.id === value) ?? null;
+  // Component sets stay in the snapshot (their layers' interactions are read) but are not screens.
+  const screens = doc.frames.filter((f) => !f.notAScreen);
+  const current = screens.find((f) => f.id === value) ?? null;
   const flowNames = new Map(doc.flowStarts.map((f) => [f.nodeId, f.name]));
   const selId = `pick-${role}`;
   const canUse = !!selection && selection.id !== value;
@@ -55,7 +57,7 @@ function FramePicker(props: {
         onChange={(e) => store.dispatch({ type: 'pick', role, nodeId: (e.currentTarget as HTMLSelectElement).value || null })}
       >
         <option value="">{role === 'start' ? 'Choose a start frame' : 'Choose the goal frame'}</option>
-        {doc.frames.map((f) => (
+        {screens.map((f) => (
           <option value={f.id}>{flowNames.has(f.id) ? `${f.name}  (flow: ${flowNames.get(f.id)})` : f.name}</option>
         ))}
       </select>
@@ -77,10 +79,18 @@ function PreflightPanel({ pf, doc }: { pf: Preflight; doc: DocSnapshot }) {
     >
       <ul class="checks" aria-live="polite">
         {pf.blocker ? (
-          <li class={`check ${pf.blocker === 'unreachable' ? 'check-block' : 'check-todo'}`}>
-            {pf.blocker === 'unreachable' ? <IconStop /> : <IconWarn />}
+          <li class={`check ${isFlowBlocker(pf.blocker) ? 'check-block' : 'check-todo'}`}>
+            {isFlowBlocker(pf.blocker) ? <IconStop /> : <IconWarn />}
             <div>
-              <strong>{pf.blocker === 'unreachable' ? 'Goal not reachable' : 'Almost there'}</strong>
+              <strong>
+                {pf.blocker === 'unreachable'
+                  ? 'Goal not reachable'
+                  : pf.blocker === 'goal_is_overlay'
+                    ? 'Goal is an overlay'
+                    : pf.blocker === 'start_not_a_screen' || pf.blocker === 'goal_not_a_screen'
+                      ? 'Not a screen'
+                      : 'Almost there'}
+              </strong>
               <p>{BLOCKER_TEXT[pf.blocker]}</p>
             </div>
           </li>
@@ -181,7 +191,7 @@ export function NewTest({ state, store, fx }: { state: AppState; store: Store; f
   const errors = state.touched && pf ? validateForm(form, pf, state.fileKey) : {};
 
   if (!doc) return <div class="screen" />;
-  if (doc.frames.length === 0) {
+  if (!doc.frames.some((f) => !f.notAScreen)) {
     return (
       <div class="screen empty">
         <div class="empty-art" aria-hidden="true">
@@ -286,10 +296,12 @@ export function NewTest({ state, store, fx }: { state: AppState; store: Store; f
           </p>
         ) : pf?.blocker === 'unreachable' ? (
           <p class="actionbar-note error">Connect the start to the goal to launch.</p>
+        ) : pf?.blocker === 'goal_is_overlay' ? (
+          <p class="actionbar-note error">Pick a goal the flow navigates to.</p>
         ) : (
           <p class="actionbar-note">{form.size === 'quick' ? 'Takes about 5 to 10 minutes' : 'Takes about 15 to 30 minutes'}</p>
         )}
-        <button type="submit" class="btn btn-primary" disabled={pf?.blocker === 'unreachable'}>
+        <button type="submit" class="btn btn-primary" disabled={isFlowBlocker(pf?.blocker ?? null)}>
           Launch test
         </button>
       </footer>

@@ -1,5 +1,5 @@
 import { buildProtoUrl, checkShareLink, LINK_PROBLEM_TEXT } from './links';
-import type { Preflight } from './preflight';
+import { BLOCKER_TEXT, type Preflight } from './preflight';
 import type { DocSnapshot } from './types';
 
 export type RunSize = 'quick' | 'thorough';
@@ -61,8 +61,10 @@ export function validateForm(form: StudyForm, preflight: Preflight | null, known
   if (form.product.trim().length > 3000) errors.product = 'Keep this under 3000 characters.';
   const link = checkShareLink(form.link, knownFileKey);
   if (!link.ok) errors.link = LINK_PROBLEM_TEXT[link.reason];
-  if (preflight && !preflight.ok && form.startId && form.goalId) {
-    errors.flow = 'The goal screen cannot be reached from the start.';
+  if (preflight?.blocker === 'start_not_a_screen') errors.start = BLOCKER_TEXT.start_not_a_screen;
+  else if (preflight?.blocker === 'goal_not_a_screen') errors.goal = BLOCKER_TEXT.goal_not_a_screen;
+  else if (preflight && !preflight.ok && form.startId && form.goalId) {
+    errors.flow = preflight.blocker === 'goal_is_overlay' ? 'The goal screen only opens as an overlay.' : 'The goal screen cannot be reached from the start.';
   }
   return errors;
 }

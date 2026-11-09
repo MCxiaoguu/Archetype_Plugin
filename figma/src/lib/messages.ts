@@ -12,6 +12,18 @@ export const DEFAULT_SETTINGS: Settings = {
   webBase: 'https://www.syntheticarchetype.com',
 };
 
+/**
+ * An address the plugin may call or open: https anywhere, plain http only on
+ * this machine (a local backend). Written without URL, which Figma's main
+ * thread sandbox does not have.
+ */
+export function isSafeWebUrl(url: string): boolean {
+  return (
+    /^https:\/\/[^\s/?#@]+([/?#]\S*)?$/i.test(url) ||
+    /^http:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?([/?#]\S*)?$/i.test(url)
+  );
+}
+
 export function studyWebUrl(webBase: string, studyId: string): string {
   return `${webBase.trim().replace(/\/+$/, '')}/workspace/studies/${encodeURIComponent(studyId)}`;
 }

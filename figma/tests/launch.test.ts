@@ -78,15 +78,48 @@ describe('launch steps', () => {
     expect(calls).toEqual([]);
   });
 
-  it('gives up when the study never moves', async () => {
+  it('surfaces a conflict that leaves the study where it was, without retrying it', async () => {
+    const buildArchetypes = vi.fn(async () => {
+      throw new ApiError(409, 'factors_stale', 'The factors are stale (the study changed); regenerate them with POST /factors first.');
+    });
     const api: LaunchApi = {
-      getStatus: (async () => ({ status: 'draft' })) as unknown as LaunchApi['getStatus'],
-      identifyFactors: async () => {
-        throw new ApiError(409, 'not_editable', 'x');
-      },
-      buildArchetypes: async () => ({}),
+      getStatus: (async () => ({ status: 'factors_ready' })) as unknown as LaunchApi['getStatus'],
+      identifyFactors: async () => ({}),
+      buildArchetypes,
       startRuns: async () => ({}),
     };
-    await expect(continueLaunch(api, 's', { onStage: () => undefined, sleep: async () => undefined })).rejects.toThrow(/did not move forward/);
+    await expect(continueLaunch(api, 's', { onStage: () => undefined, sleep: async () => undefined })).rejects.toMatchObject({
+      code: 'factors_stale',
+      message: expect.stringMatching(/factors are stale/),
+    });
+    expect(buildArchetypes).toHaveBeenCalledTimes(1);
+  });
+
+  it('moves on when a conflict means someone else advanced the study', async () => {
+    let status: StudyStatusValue = 'archetypes_ready';
+    const api: LaunchApi = {
+      getStatus: (async () => ({ status })) as unknown as LaunchApi['getStatus'],
+      identifyFactors: async () => ({}),
+      buildArchetypes: async () => ({}),
+      startRuns: async () => {
+        status = 'running';
+        throw new ApiError(409, 'not_editable', 'This study is running; wave 1 can only start from archetypes_ready.');
+      },
+    };
+    expect(await continueLaunch(api, 's', { onStage: () => undefined, sleep: async () => undefined })).toBe('watching');
+  });
+
+  it('gives up when someone else keeps the study busy', async () => {
+    const sleep = vi.fn(async () => undefined);
+    const api: LaunchApi = {
+      getStatus: (async () => ({ status: 'archetypes_ready' })) as unknown as LaunchApi['getStatus'],
+      identifyFactors: async () => ({}),
+      buildArchetypes: async () => ({}),
+      startRuns: async () => {
+        throw new ApiError(409, 'wave_in_progress', 'Wave 1 is being created by another request; read the study again.');
+      },
+    };
+    await expect(continueLaunch(api, 's', { onStage: () => undefined, sleep })).rejects.toThrow(/did not move forward/);
+    expect(sleep).toHaveBeenCalledWith(5000);
   });
 });

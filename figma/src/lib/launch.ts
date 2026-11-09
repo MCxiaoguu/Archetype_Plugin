@@ -23,7 +23,8 @@ export function stageForStatus(status: StudyStatusValue | string): Stage {
   }
 }
 
-const BUSY_CODES = new Set(['generation_in_progress']);
+/** 409s that mean another request is doing this step right now. */
+const BUSY_CODES = new Set(['generation_in_progress', 'wave_in_progress']);
 const MAX_STEPS = 60;
 
 /**
@@ -43,13 +44,17 @@ export async function continueLaunch(api: LaunchApi, studyId: string, hooks: Lau
       else if (stage === 'archetypes') await api.buildArchetypes(studyId);
       else if (stage === 'runs') await api.startRuns(studyId);
     } catch (err) {
-      if (err instanceof ApiError && err.status === 409) {
-        // Someone else (another open panel, a retry) moved the study on, or
-        // personas are still being built. Wait a little and read again.
-        if (BUSY_CODES.has(err.code)) await hooks.sleep(5_000);
+      if (!(err instanceof ApiError) || err.status !== 409) throw err;
+      if (BUSY_CODES.has(err.code)) {
+        // Another request (an open panel, a retry) is on this step. Wait a
+        // little and read again.
+        await hooks.sleep(5_000);
         continue;
       }
-      throw err;
+      // Someone else may have moved the study on; if not, the conflict is
+      // the answer (stale factors, a missing persona) and retrying hides it.
+      const { status: after } = await api.getStatus(studyId);
+      if (stageForStatus(after) === stage) throw err;
     }
   }
   throw new Error('The study did not move forward. Open it in Archetype to see where it stopped.');

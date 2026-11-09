@@ -18,6 +18,11 @@ export interface FrameInfo {
   name: string;
   /** The overlay closes when the person clicks outside it. */
   closesOnOutsideClick?: boolean;
+  /**
+   * Set when the prototype viewer cannot open this top level node as a
+   * screen: a component set holds variants, it is not a screen itself.
+   */
+  notAScreen?: 'component_set';
 }
 
 export interface HotspotInfo {

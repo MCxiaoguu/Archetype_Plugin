@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { RunRowApi } from '../src/lib/api';
 import { frameForUrl, indexFrames } from '../src/lib/frames';
 import { FAST_POLL_MS, SLOW_POLL_MS, isStudyDone, isTerminalRun, nextQueuedSince, pollDelay, runnerState } from '../src/lib/poll';
-import { latestStepOf, personaRows, rowUrl, runsToPeek } from '../src/lib/runs';
+import { personaRows, rowUrl } from '../src/lib/runs';
 import { fixtureDoc, protoAt } from './helpers';
 
 const run = (over: Partial<RunRowApi>): RunRowApi => ({ runId: 'r', archetypeId: 'a', archetypeName: 'Baseline founder', role: 'baseline', status: 'queued', ...over });
@@ -59,14 +59,14 @@ describe('persona rows', () => {
   const index = indexFrames(fixtureDoc());
   const runs: RunRowApi[] = [
     run({ runId: 'b0', status: 'completed', outcome: { completed: true }, metrics: { steps: 4 } }),
-    run({ runId: 'v1', archetypeId: 'v', archetypeName: 'Low trust founder', role: 'variant', status: 'running', lastUrl: protoAt('2-30'), metrics: { steps: 3 } }),
+    run({ runId: 'v1', archetypeId: 'v', archetypeName: 'Low trust founder', role: 'variant', status: 'running', lastStep: { seq: 3, url: protoAt('2-30') }, metrics: null }),
     run({ runId: 's1', archetypeId: 's', archetypeName: 'Stress: everything at risk', role: 'stress', status: 'queued' }),
     run({ runId: 'b1', status: 'abandoned', outcome: { completed: false } }),
-    run({ runId: 'i1', archetypeId: 'i', archetypeName: 'Impatient founder', role: 'variant', status: 'running' }),
+    run({ runId: 'i1', archetypeId: 'i', archetypeName: 'Impatient founder', role: 'variant', status: 'running', lastStep: { seq: 2, url: protoAt('2-20') } }),
   ];
 
   it('groups runs by persona with plain status words and the current screen', () => {
-    const rows = personaRows(runs, { i1: { url: protoAt('2-20'), seq: 2 } }, index);
+    const rows = personaRows(runs, index);
     expect(rows.map((r) => [r.name, r.phase, r.statusText, r.screen, r.steps])).toEqual([
       ['Baseline founder', 'done', 'Reached the goal 1 of 2 times', null, null],
       ['Low trust founder', 'running', 'On Verify phone', 'Verify phone', 3],
@@ -77,29 +77,42 @@ describe('persona rows', () => {
   });
 
   it('says what a single finished try did', () => {
-    const rows = personaRows([run({ status: 'abandoned', outcome: { completed: false } })], {}, index);
+    const rows = personaRows([run({ status: 'abandoned', outcome: { completed: false } })], index);
     expect(rows[0]?.statusText).toBe('Gave up');
-    const ok = personaRows([run({ status: 'completed' })], {}, index);
+    const ok = personaRows([run({ status: 'completed', outcome: { completed: true } })], index);
     expect(ok[0]?.statusText).toBe('Reached the goal');
   });
 
+  it('does not count a try without a persona outcome as reached or given up', () => {
+    // As the backend's report scores runs: an aborted run, or one with no
+    // recorded outcome, is not a persona outcome.
+    for (const r of [
+      run({ status: 'aborted', outcome: null }),
+      run({ status: 'aborted', outcome: { completed: false } }),
+      run({ status: 'completed', outcome: null }),
+      run({ status: 'failed' }),
+    ]) {
+      const [row] = personaRows([r], index);
+      expect(row).toMatchObject({ phase: 'done', finished: 1, completed: 0, gaveUp: 0, statusText: 'Stopped before the end' });
+    }
+    const [mixed] = personaRows([run({ runId: 'a', status: 'completed', outcome: { completed: true } }), run({ runId: 'b', status: 'aborted' })], index);
+    expect(mixed).toMatchObject({ completed: 1, gaveUp: 0, statusText: 'Reached the goal 1 of 2 times' });
+  });
+
   it('counts partial progress while waiting', () => {
-    const rows = personaRows([run({ runId: 'a', status: 'completed' }), run({ runId: 'b', status: 'queued' })], {}, index);
+    const rows = personaRows([run({ runId: 'a', status: 'completed' }), run({ runId: 'b', status: 'queued' })], index);
     expect(rows[0]?.statusText).toBe('1 of 2 tries done');
   });
 
   it('falls back when the screen is unknown', () => {
-    const rows = personaRows([run({ status: 'running', lastUrl: protoAt('99-1') })], {}, index);
+    const rows = personaRows([run({ status: 'running', lastStep: { seq: 1, url: protoAt('99-1') } })], index);
     expect(rows[0]?.statusText).toBe('Clicking through');
+    expect(personaRows([run({ status: 'running', lastStep: null })], index)[0]?.statusText).toBe('Clicking through');
   });
 
-  it('reads the latest step and picks runs worth peeking at', () => {
-    expect(latestStepOf([{ seq: 1, url: 'a' }, { seq: 3, url: 'c' }, { seq: 2, url: 'b' }])).toEqual({ url: 'c', seq: 3 });
-    expect(latestStepOf([])).toBeNull();
-    expect(latestStepOf(undefined)).toBeNull();
-    expect(rowUrl(run({ lastStep: { url: 'x' } }))).toBe('x');
-    expect(rowUrl(run({ currentUrl: 'y' }))).toBe('y');
-    expect(runsToPeek(runs)).toEqual(['i1']);
-    expect(runsToPeek(Array.from({ length: 10 }, (_, i) => run({ runId: `r${i}`, status: 'running' })), 3)).toHaveLength(3);
+  it('reads the newest step from the run row', () => {
+    expect(rowUrl(run({ lastStep: { seq: 4, url: 'x' } }))).toBe('x');
+    expect(rowUrl(run({ lastStep: null }))).toBeNull();
+    expect(rowUrl(run({}))).toBeNull();
   });
 });

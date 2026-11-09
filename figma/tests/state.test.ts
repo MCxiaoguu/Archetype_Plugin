@@ -61,6 +61,27 @@ describe('panel state machine', () => {
     expect(s.form.startId).toBeNull();
   });
 
+  it('never picks a frame the prototype cannot open', () => {
+    const doc = fixtureDoc();
+    doc.frames.push({ id: '8:1', name: 'Button', notAScreen: 'component_set' });
+    doc.flowStarts = [{ nodeId: '8:1', name: 'Odd flow' }, ...doc.flowStarts];
+    let s = init({ doc });
+    expect(s.form.startId).toBe('1:2');
+    s = reducer(s, { type: 'pick', role: 'goal', nodeId: '8:1' });
+    expect(s.form.goalId).toBeNull();
+    s = run([{ type: 'selection', selection: { id: '8:1', name: 'Button' } }, { type: 'use-selection', role: 'goal' }], s);
+    expect(s.form.goalId).toBeNull();
+    expect(s.notice?.text).toMatch(/component set/);
+  });
+
+  it('drops a pick that turns out not to be a screen', () => {
+    let s = run([{ type: 'pick', role: 'goal', nodeId: '2:50' }, { type: 'pick', role: 'start', nodeId: '2:10' }], init());
+    const doc = fixtureDoc();
+    doc.frames = doc.frames.map((f) => (f.id === '2:50' || f.id === '2:10' ? { ...f, notAScreen: 'component_set' as const } : f));
+    s = reducer(s, { type: 'doc', doc });
+    expect(s.form).toMatchObject({ goalId: null, startId: '1:2' });
+  });
+
   it('drops picks that vanish from the page', () => {
     let s = run([{ type: 'pick', role: 'goal', nodeId: '2:50' }, { type: 'pick', role: 'start', nodeId: '2:10' }], init());
     const doc = fixtureDoc();
@@ -92,8 +113,6 @@ describe('panel state machine', () => {
     const runs: RunRowApi[] = [{ runId: 'r', archetypeId: 'a', archetypeName: 'A', status: 'queued' }];
     s = reducer(s, { type: 'poll', status: 'running', runs, now: 50 });
     expect(s.study).toMatchObject({ status: 'running', runs, lastPolledAt: 50, queuedSince: 1000 });
-    s = reducer(s, { type: 'peek', runId: 'r', step: { url: 'u', seq: 2 } });
-    expect(s.study?.latest.r).toEqual({ url: 'u', seq: 2 });
     s = reducer(s, { type: 'report', report: fixtureReport(), now: 60 });
     expect(s.screen).toBe('report');
     expect(s.study?.stage).toBe('done');

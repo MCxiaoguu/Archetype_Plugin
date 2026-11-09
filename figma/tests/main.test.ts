@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import type { StudyRecord } from '../src/lib/messages';
+import type { StudyRecord, UiToMain } from '../src/lib/messages';
 import { runPreflight } from '../src/lib/preflight';
 import { clearPins, pinFindings, showNode } from '../src/main/canvas';
 import { createController } from '../src/main/controller';
 import { readDocument, reactionActions, selectedFrame, topFrameOf, topLevelFrames } from '../src/main/document';
 import * as store from '../src/main/storage';
-import { makeFigma, type FakeNode } from './fake-figma';
+import { FakeNode, makeFigma } from './fake-figma';
 
 const rec = (id: string, at: number): StudyRecord => ({ studyId: id, title: id, startName: 'A', goalName: 'B', size: 'quick', launchedAt: at, status: 'running' });
 
@@ -53,6 +53,16 @@ describe('reading the page', () => {
     expect(pf.broken.map((b) => b.hotspotId)).toEqual(['2:23']);
     expect(pf.deadEnds.map((d) => d.name)).toEqual(['Plans']);
     expect(pf.genericNames.map((g) => g.name)).toEqual(['Rectangle 12', 'Frame 48']);
+  });
+
+  it('marks a component set as a frame the prototype cannot open', async () => {
+    const { api, page } = makeFigma();
+    const set = new FakeNode('8:1', 'Button', 'COMPONENT_SET');
+    set.add(new FakeNode('8:2', 'State=Default', 'COMPONENT'));
+    (page as FakeNode).add(set);
+    const doc = await readDocument(api);
+    expect(doc.frames.find((f) => f.id === '8:1')).toEqual({ id: '8:1', name: 'Button', notAScreen: 'component_set' });
+    expect(doc.frames.filter((f) => f.notAScreen)).toHaveLength(1);
   });
 
   it('treats removed destinations as broken', async () => {
@@ -162,6 +172,17 @@ describe('storage', () => {
     expect(store.fileId(c.api, true)).toBe('name:Farside billing');
   });
 
+  it('reads back what it saved in a view only file', async () => {
+    const { api } = makeFigma({ readOnlyRoot: true });
+    await store.saveStudy(api, rec('s1', 1));
+    await store.saveStudy(api, rec('s2', 2));
+    expect(await store.loadStudies(api)).toEqual({ studies: [rec('s2', 2), rec('s1', 1)], lastStudyId: 's2' });
+    await store.forgetLast(api);
+    expect((await store.loadStudies(api)).lastStudyId).toBeNull();
+    await store.saveDraft(api, { who: 'Nurses' });
+    expect(await store.loadDraft(api)).toEqual({ who: 'Nurses' });
+  });
+
   it('saves the draft per file', async () => {
     const { api } = makeFigma();
     expect(await store.loadDraft(api)).toBeNull();
@@ -188,7 +209,7 @@ describe('main thread controller', () => {
     const c = createController(api, '0.1.0');
     await c.handle({ type: 'resize', width: 100, height: 5000 });
     expect(api.ui.resize).toHaveBeenCalledWith(320, 1200);
-    await c.handle({ type: 'open-url', url: 'javascript:alert(1)' });
+    await expect(c.handle({ type: 'open-url', url: 'javascript:alert(1)' })).rejects.toThrow(/link/);
     await c.handle({ type: 'open-url', url: 'https://www.syntheticarchetype.com/workspace/studies/s1' });
     expect(api.openExternal).toHaveBeenCalledTimes(1);
     await c.handle({ type: 'show-node', nodeId: '2:20' });
@@ -198,6 +219,40 @@ describe('main thread controller', () => {
     expect(api.notify).toHaveBeenCalled();
     await c.handle({ type: 'clear-pins' });
     expect(api.ui.postMessage).toHaveBeenLastCalledWith({ type: 'pin-result', ok: true, count: 1, message: 'Cleared pins from 1 frame.' });
+  });
+
+  it('refuses panel messages it cannot act on safely, and says so', async () => {
+    const { api, nodes, storage } = makeFigma();
+    const c = createController(api, '0.1.0');
+    const bad: unknown[] = [
+      { type: 'open-url', url: 'http://evil.example/activate?user_code=WDJB' },
+      { type: 'open-url', url: 42 },
+      { type: 'save-settings', settings: { apiBase: 'ftp://api.example.com', webBase: 'https://www.syntheticarchetype.com' } },
+      { type: 'save-settings', settings: { apiBase: 'http://api.example.com', webBase: 'https://www.syntheticarchetype.com' } },
+      { type: 'save-token', token: 42 },
+      { type: 'save-study', record: null },
+      { type: 'save-study', record: { ...rec('', 1) } },
+      { type: 'save-draft', draft: 'x' },
+      { type: 'resize', width: Number.NaN, height: 400 },
+      { type: 'show-node', nodeId: null },
+      // Clear pins removes only labels with the prefix, so a pin without it could never be cleared.
+      { type: 'pin', pins: [{ frameId: '2:20', frameName: 'Connect bank', label: 'F1 Bank sign in fails' }] },
+      { type: 'pin', pins: 'all' },
+      { type: 'notify', text: { html: '<b>' } },
+      { type: 'rename-frames' },
+    ];
+    for (const msg of bad) {
+      await expect(c.handle(msg as UiToMain), JSON.stringify(msg)).rejects.toThrow(/^The panel sent/);
+    }
+    expect(api.openExternal).not.toHaveBeenCalled();
+    expect(api.ui.resize).not.toHaveBeenCalled();
+    expect(storage.size).toBe(0);
+    expect((nodes.get('2:20') as FakeNode).annotations).toEqual([]);
+
+    await c.handle({ type: 'open-url', url: 'http://localhost:5173/workspace/studies/s1' });
+    await c.handle({ type: 'save-settings', settings: { apiBase: 'http://127.0.0.1:5013', webBase: 'http://localhost:5173' } });
+    expect(api.openExternal).toHaveBeenCalledWith('http://localhost:5173/workspace/studies/s1');
+    expect((await store.loadSettings(api)).apiBase).toBe('http://127.0.0.1:5013');
   });
 
   it('stores what the panel saves and echoes the history', async () => {

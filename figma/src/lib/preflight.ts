@@ -19,7 +19,15 @@ export interface BrokenIssue {
   frameName: string;
 }
 
-export type Blocker = 'no_start' | 'no_goal' | 'same_frame' | 'unreachable' | 'no_frames';
+export type Blocker =
+  | 'no_start'
+  | 'no_goal'
+  | 'start_not_a_screen'
+  | 'goal_not_a_screen'
+  | 'same_frame'
+  | 'unreachable'
+  | 'goal_is_overlay'
+  | 'no_frames';
 
 export interface Preflight {
   /** Launch is allowed. Only `blocker` stops it; everything else is advice. */
@@ -43,9 +51,18 @@ export const BLOCKER_TEXT: Record<Blocker, string> = {
   no_frames: 'This page has no top level frames. Open the page with your prototype.',
   no_start: 'Pick the screen the test starts on.',
   no_goal: 'Pick the screen that means the goal is reached.',
+  start_not_a_screen: 'The start is a component set. The prototype cannot open a component set as a screen; pick a frame.',
+  goal_not_a_screen: 'The goal is a component set. The prototype cannot open a component set as a screen; pick a frame.',
   same_frame: 'The goal screen is the start screen. Pick a goal further into the flow.',
   unreachable: 'No chain of hotspots leads from the start to the goal screen, so no one can finish. Connect the screens in Prototype mode and check again.',
+  goal_is_overlay:
+    'The goal screen only opens as an overlay. An overlay keeps the address of the screen under it, so Archetype cannot see anyone reach it. Pick the screen the flow navigates to next, or connect the goal with Navigate to.',
 };
+
+/** Blockers that mean no one could finish as the flow stands, rather than a choice still to make. */
+export function isFlowBlocker(blocker: Blocker | null): boolean {
+  return blocker === 'unreachable' || blocker === 'goal_is_overlay';
+}
 
 const MAX_KEY_FEATURES = 20;
 
@@ -68,8 +85,9 @@ export function runPreflight(doc: DocSnapshot, startId: string | null, goalId: s
     genericNames: [],
     keyFeatures: [],
   };
-  if (graph.frames.size === 0) return { ...empty, blocker: 'no_frames' };
+  if (![...graph.frames.values()].some((f) => !f.notAScreen)) return { ...empty, blocker: 'no_frames' };
   if (!startId || !graph.frames.has(startId)) return { ...empty, blocker: 'no_start' };
+  if (graph.frames.get(startId)?.notAScreen) return { ...empty, blocker: 'start_not_a_screen' };
 
   const reach = distancesFrom(graph, startId);
   const inReach = (frameId: string) => reach.has(frameId);
@@ -104,9 +122,13 @@ export function runPreflight(doc: DocSnapshot, startId: string | null, goalId: s
     deadEnds: deadEnds(graph, startId, goalId).map((id) => ref(graph, id)),
   };
   if (!goalId || !graph.frames.has(goalId)) return { ...base, blocker: 'no_goal' };
+  if (graph.frames.get(goalId)?.notAScreen) return { ...base, blocker: 'goal_not_a_screen' };
   if (goalId === startId) return { ...base, blocker: 'same_frame' };
   const path = shortestPath(graph, startId, goalId);
   if (!path) return { ...base, blocker: 'unreachable' };
+  // The success check reads the goal frame from the step URL, which only a
+  // "Navigate to" from a screen in reach puts there.
+  if (![...(graph.navigatedFrom.get(goalId) ?? [])].some(inReach)) return { ...base, blocker: 'goal_is_overlay' };
 
   const names: string[] = [];
   for (const id of framesOnPaths(graph, startId, goalId)) {

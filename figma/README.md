@@ -30,7 +30,10 @@ studies API. The account is the product; the listing is free.
 **Preflight, instant and free.** Before anything leaves the file the plugin walks
 the prototype's connections from your start screen:
 
-- whether the goal is reachable at all, and the shortest path (the only thing that blocks launch);
+- whether the goal is reachable at all, and the shortest path;
+- whether the flow navigates to the goal: a goal that only opens as an overlay keeps the address of the
+  screen under it, so the `frame_reached` check could never see it (this, an unreachable goal and a start or
+  goal that is a component set, which the pickers never offer, are the only things that block launch);
 - dead ends a persona can reach and never leave;
 - hotspots that point at frames that no longer exist;
 - hotspot layers named `Rectangle 12`, `Frame 3`, `image 4`, `icons8-trophy-32 1` and friends. The prototype viewer's
@@ -80,16 +83,19 @@ screen reader mode on so hotspots read as named links). Success is a required
 `frame_reached` check on the goal frame's node id: met when a step URL's
 `node-id` names that frame, whatever else the URL carries.
 
-Until the hosted runner ships, someone runs the runner from this repository:
+Until the hosted runner ships, someone runs the runner from this repository,
+signed in (through the Claude Code plugin) to the same Archetype account as the
+designer, since a study is only visible to its owner:
 
 ```sh
-python3 scripts/study_runner.py --watch --backend http://localhost:5013
+python3 scripts/study_runner.py --watch --data-dir <folder with the plugin's auth.json> \
+  --backend http://localhost:5013
 ```
 
-(`--watch` is the polling mode the runner is gaining for remote studies; today
-`--study <id>` runs one study.) While nobody is running it, the panel says
-"Waiting for a runner" rather than showing an error, and you can close Figma: the
-tests are queued on the backend.
+It polls for the account's running remote studies, claims their queued runs and
+asks for the next wave until the backend says the study is complete. While
+nobody is running it, the panel says "Waiting for a runner" rather than showing
+an error, and you can close Figma: the tests are queued on the backend.
 
 ## Privacy: what leaves the file
 
@@ -121,7 +127,7 @@ random id in the file's plugin data so the history follows the file.
 └──────────────────────────────┬───────────────────────────────┘
                                │ fetch, Bearer token
                                ▼
-     Archetype API: /api/oauth/device/*, /api/studies/*, /api/plugin/runs/*/report
+     Archetype API: /api/oauth/device/code, /api/oauth/device/token, /api/studies/*
                                ▲
                                │ claims queued runs
                      runner (study_runner.py) ──▶ figma.com/proto/<key>/...
@@ -204,8 +210,8 @@ to go through the real device flow; the verification page opens in a new tab.
 ## Backend contract notes
 
 - The plugin sends `source`, `execution` and `figma` on study creation (new fields on `feat/figma-channel`).
-- "The screen a persona is on" reads `lastUrl` on `GET /api/studies/<id>/runs` rows when the backend sends it,
-  and otherwise peeks at `GET /api/plugin/runs/<runId>/report` for running runs, at most every 15 s each.
+- "The screen a persona is on" reads `lastStep.url` on `GET /api/studies/<id>/runs` rows (null until the
+  run's first step). The panel calls no `/api/plugin/*` route.
 - The panel's iframe has a `null` origin: the API's CORS list must include it.
 
 ## Publishing to the Figma Community

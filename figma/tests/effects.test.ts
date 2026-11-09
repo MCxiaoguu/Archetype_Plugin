@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { UiToMain } from '../src/lib/messages';
 import { DEFAULT_SETTINGS } from '../src/lib/messages';
-import { fixtureDoc, fixtureReport } from './helpers';
+import { indexFrames } from '../src/lib/frames';
+import { personaRows } from '../src/lib/runs';
+import { fixtureDoc, fixtureReport, protoAt } from './helpers';
 
 const sent: UiToMain[] = [];
 vi.mock('../src/ui/bridge', () => ({ toMain: (m: UiToMain) => sent.push(m), onMain: () => () => undefined }));
@@ -141,6 +143,102 @@ describe('panel effects', () => {
     fx.newTest();
   });
 
+  it('shows an error when the created study comes back without an id', async () => {
+    const calls = installFetch((method, path) => {
+      if (method === 'POST' && path === '/api/studies') return [201, { title: 'Pay', status: 'draft' }];
+      return [404, {}];
+    });
+    const { store, fx } = initStore('tok');
+    store.dispatch({ type: 'pick', role: 'goal', nodeId: '2:50' });
+    store.dispatch({ type: 'field', field: 'goal', value: 'Pay' });
+    store.dispatch({ type: 'field', field: 'who', value: 'Founders' });
+    store.dispatch({ type: 'field', field: 'link', value: 'https://www.figma.com/design/AbCdEfGh1234567890XyZ/x' });
+    await fx.launch();
+    expect(store.get().study?.error).toMatch(/did not return the study/);
+    expect(calls).toEqual(['POST /api/studies']);
+    expect(sent.map((m) => m.type)).not.toContain('save-study');
+  });
+
+  it('stops watching and shows the error when the study is gone', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let reads = 0;
+    const calls = installFetch((_m, path) => {
+      if (path === '/api/studies/s4/status' && reads++ === 0) return [200, { studyId: 's4', status: 'running' }];
+      return [404, { error: 'study_not_found', message: 'No study s4 for this user.' }];
+    });
+    const { store, fx } = initStore('tok');
+    store.dispatch({ type: 'open-study', record: { studyId: 's4', title: 't', startName: 'a', goalName: 'b', size: 'quick', launchedAt: 0, status: 'running' }, now: 0 });
+    fx.watch();
+    await vi.advanceTimersByTimeAsync(100);
+    expect(store.get().study?.error).toBe('No study s4 for this user.');
+    const before = calls.length;
+    await vi.advanceTimersByTimeAsync(60_000);
+    vi.useRealTimers();
+    expect(calls.length).toBe(before);
+  });
+
+  it('reads the screen each persona is on from the runs list alone', async () => {
+    const calls = installFetch((_m, path) => {
+      if (path === '/api/studies/s6/status') return [200, { studyId: 's6', status: 'running' }];
+      if (path === '/api/studies/s6/runs') {
+        return [
+          200,
+          {
+            studyId: 's6',
+            status: 'running',
+            runs: [
+              { runId: 'r1', archetypeId: 'a', archetypeName: 'Baseline founder', role: 'baseline', status: 'running', lastStep: null },
+              { runId: 'r2', archetypeId: 'v', archetypeName: 'Low trust founder', role: 'variant', status: 'running', lastStep: { seq: 3, url: protoAt('2-20') } },
+            ],
+          },
+        ];
+      }
+      return [404, { error: 'not_found', message: path }];
+    });
+    const { store, fx } = initStore('tok');
+    store.dispatch({ type: 'open-study', record: { studyId: 's6', title: 't', startName: 'a', goalName: 'b', size: 'quick', launchedAt: 0, status: 'running' }, now: 0 });
+    fx.watch();
+    await until(() => (store.get().study?.runs.length ?? 0) === 2);
+    await new Promise((r) => setTimeout(r, 20));
+    const st = store.get();
+    fx.newTest();
+    expect(calls.filter((c) => !c.startsWith('GET /api/studies/s6/'))).toEqual([]);
+    const rows = personaRows(st.study?.runs ?? [], indexFrames(st.doc));
+    expect(rows.map((r) => [r.name, r.statusText, r.steps])).toEqual([
+      ['Baseline founder', 'Clicking through', null],
+      ['Low trust founder', 'On Connect bank', 3],
+    ]);
+  });
+
+  it('says so when the runs list is missing instead of waiting for tries forever', async () => {
+    installFetch((_m, path) => {
+      if (path === '/api/studies/s7/status') return [200, { studyId: 's7', status: 'running' }];
+      if (path === '/api/studies/s7/runs') return [200, { studyId: 's7', status: 'running' }];
+      return [404, {}];
+    });
+    const { store, fx } = initStore('tok');
+    store.dispatch({ type: 'open-study', record: { studyId: 's7', title: 't', startName: 'a', goalName: 'b', size: 'quick', launchedAt: 0, status: 'running' }, now: 0 });
+    fx.watch();
+    await until(() => !!store.get().study?.pollError);
+    fx.newTest();
+    expect(store.get().study).toBeNull();
+  });
+
+  it('keeps the token and keeps watching through a sign in service outage', async () => {
+    let polls = 0;
+    installFetch((_m, path) => {
+      if (path === '/api/studies/s8/status' && polls++ === 0) return [200, { studyId: 's8', status: 'running' }];
+      return [503, { error: 'auth_unavailable', message: 'The sign in service is unavailable. Try again in a minute.' }];
+    });
+    const { store, fx } = initStore('tok');
+    store.dispatch({ type: 'open-study', record: { studyId: 's8', title: 't', startName: 'a', goalName: 'b', size: 'quick', launchedAt: 0, status: 'running' }, now: 0 });
+    fx.watch();
+    await until(() => !!store.get().study?.pollError);
+    expect(store.get()).toMatchObject({ token: 'tok', screen: 'progress', study: { error: null, pollError: 'The sign in service is unavailable. Try again in a minute.' } });
+    expect(sent.map((m) => m.type)).not.toContain('save-token');
+    fx.newTest();
+  });
+
   it('a 401 while watching signs out and clears the stored token', async () => {
     installFetch(() => [401, { error: 'Invalid token', message: 'bad' }]);
     const { store, fx } = initStore('tok');
@@ -149,6 +247,28 @@ describe('panel effects', () => {
     await until(() => store.get().screen === 'signin');
     expect(store.get().token).toBeNull();
     expect(sent).toContainEqual({ type: 'save-token', token: null });
+  });
+
+  it('returns to the form after a sign in that interrupted creating the study', async () => {
+    installFetch(() => [401, { error: 'Invalid token', message: 'Token validation failed' }]);
+    const { store, fx } = initStore('expired');
+    store.dispatch({ type: 'pick', role: 'goal', nodeId: '2:50' });
+    store.dispatch({ type: 'field', field: 'goal', value: 'Pay' });
+    store.dispatch({ type: 'field', field: 'who', value: 'Founders' });
+    store.dispatch({ type: 'field', field: 'link', value: 'https://www.figma.com/design/AbCdEfGh1234567890XyZ/x' });
+    await fx.launch();
+    expect(store.get().screen).toBe('signin');
+    fx.acceptToken('fresh');
+    expect(store.get()).toMatchObject({ screen: 'new', study: null, form: { goal: 'Pay', goalId: '2:50' } });
+  });
+
+  it('refuses a sign in page that is not https', async () => {
+    const calls = installFetch(() => [200, { device_code: 'd', user_code: 'WDJB-MJHT', verification_uri: 'http://auth.example/activate', verification_uri_complete: 'http://auth.example/activate?user_code=WDJB-MJHT', expires_in: 600, interval: 1 }]);
+    const { store, fx } = initStore(null);
+    await fx.signIn();
+    expect(store.get().auth).toMatchObject({ phase: 'error', error: expect.stringMatching(/not https/) });
+    expect(sent.map((m) => m.type)).not.toContain('open-url');
+    expect(calls).toEqual(['POST /api/oauth/device/code']);
   });
 
   it('signs in with the device flow and opens the verification page', async () => {

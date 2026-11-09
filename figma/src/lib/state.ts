@@ -2,7 +2,6 @@ import type { DeviceCode, RunRowApi, StudyStatusValue } from './api';
 import { DEFAULT_SETTINGS, type Draft, type InitPayload, type Settings, type StudyRecord } from './messages';
 import { nextQueuedSince } from './poll';
 import type { StudyReport } from './report';
-import type { LatestStep } from './runs';
 import { EMPTY_FORM, type RunSize, type StudyForm } from './study';
 import type { DocSnapshot, NodeRef } from './types';
 
@@ -21,7 +20,6 @@ export interface ActiveStudy {
   error: string | null;
   status: StudyStatusValue | null;
   runs: RunRowApi[];
-  latest: Record<string, LatestStep>;
   queuedSince: number | null;
   watchingSince: number | null;
   lastPolledAt: number | null;
@@ -93,7 +91,6 @@ export type Action =
   | { type: 'launch-failed'; message: string }
   | { type: 'retry'; now: number }
   | { type: 'poll'; status: StudyStatusValue; runs: RunRowApi[]; now: number }
-  | { type: 'peek'; runId: string; step: LatestStep }
   | { type: 'poll-failed'; message: string }
   | { type: 'report'; report: StudyReport; now: number }
   | { type: 'report-failed'; message: string }
@@ -119,7 +116,6 @@ function emptyStudy(now: number, record: StudyRecord | null, stage: Stage): Acti
     error: null,
     status: null,
     runs: [],
-    latest: {},
     queuedSince: null,
     watchingSince: stage === 'watching' ? now : null,
     lastPolledAt: null,
@@ -129,13 +125,14 @@ function emptyStudy(now: number, record: StudyRecord | null, stage: Stage): Acti
   };
 }
 
-function defaultStart(doc: DocSnapshot | null): string | null {
-  const first = doc?.flowStarts.find((f) => doc.frames.some((fr) => fr.id === f.nodeId));
-  return first ? first.nodeId : null;
+/** A top level frame on the page that the prototype can open as a screen. */
+function isScreen(doc: DocSnapshot | null, id: string | null): boolean {
+  return !!id && !!doc?.frames.some((f) => f.id === id && !f.notAScreen);
 }
 
-function frameExists(doc: DocSnapshot | null, id: string | null): boolean {
-  return !!id && !!doc?.frames.some((f) => f.id === id);
+function defaultStart(doc: DocSnapshot | null): string | null {
+  const first = doc?.flowStarts.find((f) => isScreen(doc, f.nodeId));
+  return first ? first.nodeId : null;
 }
 
 function landing(state: AppState): Screen {
@@ -183,8 +180,8 @@ export function reducer(state: AppState, action: Action): AppState {
     }
     case 'doc': {
       const form = { ...state.form };
-      if (!frameExists(action.doc, form.startId)) form.startId = defaultStart(action.doc);
-      if (!frameExists(action.doc, form.goalId)) form.goalId = null;
+      if (!isScreen(action.doc, form.startId)) form.startId = defaultStart(action.doc);
+      if (!isScreen(action.doc, form.goalId)) form.goalId = null;
       return { ...state, doc: action.doc, form };
     }
     case 'selection':
@@ -194,13 +191,17 @@ export function reducer(state: AppState, action: Action): AppState {
     case 'size':
       return { ...state, form: { ...state.form, size: action.size } };
     case 'pick': {
-      const id = frameExists(state.doc, action.nodeId) ? action.nodeId : null;
+      const id = isScreen(state.doc, action.nodeId) ? action.nodeId : null;
       return { ...state, form: { ...state.form, [action.role === 'start' ? 'startId' : 'goalId']: id } };
     }
     case 'use-selection': {
       const sel = state.selection;
-      if (!sel || !frameExists(state.doc, sel.id)) {
+      const frame = sel ? state.doc?.frames.find((f) => f.id === sel.id) : undefined;
+      if (!sel || !frame) {
         return { ...state, notice: { kind: 'info', text: 'Select one top level frame on the canvas first.' } };
+      }
+      if (frame.notAScreen) {
+        return { ...state, notice: { kind: 'info', text: 'A component set cannot be a test screen. Select a frame instead.' } };
       }
       return reducer({ ...state, notice: null }, { type: 'pick', role: action.role, nodeId: sel.id });
     }
@@ -241,8 +242,6 @@ export function reducer(state: AppState, action: Action): AppState {
         },
       };
     }
-    case 'peek':
-      return patchStudy(state, { latest: { ...(state.study?.latest ?? {}), [action.runId]: action.step } });
     case 'poll-failed':
       return patchStudy(state, { pollError: action.message });
     case 'report': {
@@ -294,6 +293,9 @@ export function reducer(state: AppState, action: Action): AppState {
     case 'signed-out':
       return {
         ...state,
+        // A launch the sign out cut off before the study existed has nothing
+        // to resume; the form still holds what was typed.
+        study: state.study?.id ? state.study : null,
         token: null,
         screen: 'signin',
         auth: INITIAL_STATE.auth,

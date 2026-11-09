@@ -29,7 +29,7 @@ function runRow(a, i, status, extra = {}) {
     status,
     metrics: done || status === 'running' ? { steps: extra.steps ?? report?.steps ?? 3, frustrationScore: report?.frustrationScore ?? 0 } : null,
     outcome: done ? { completed: status === 'completed', quitReason: status === 'completed' ? null : report?.quitReason ?? 'frustration', abandonedAtStep: null } : null,
-    ...(extra.lastUrl ? { lastUrl: extra.lastUrl } : {}),
+    lastStep: extra.lastUrl ? { seq: extra.steps ?? 1, url: extra.lastUrl } : null,
   };
 }
 
@@ -103,7 +103,9 @@ export function createMockBackend({ log = () => {} } = {}) {
     if (path === '/api/oauth/device/token' && method === 'POST') {
       const n = (devicePolls.get(body?.device_code) ?? 0) + 1;
       devicePolls.set(body?.device_code, n);
-      if (n < 4) return [403, { error: n === 2 ? 'slow_down' : 'authorization_pending', error_description: 'waiting' }];
+      // Auth0's status codes: 429 for slow_down, 403 while pending.
+      if (n === 2) return [429, { error: 'slow_down', error_description: 'You are polling faster than allowed.' }];
+      if (n < 4) return [403, { error: 'authorization_pending', error_description: 'waiting' }];
       return [200, { access_token: 'mock-token', token_type: 'Bearer', expires_in: 86400 }];
     }
     if (!path.startsWith('/api/')) return null;
@@ -145,11 +147,6 @@ export function createMockBackend({ log = () => {} } = {}) {
       }
       if (sub === '/report' && method === 'GET') return [200, { ...REPORT, studyId: s.id, title: s.title, cached: false }];
       if (sub === '' && method === 'GET') return [200, { studyId: s.id, title: s.title, status: simulated(s).status }];
-    }
-    const run = /^\/api\/plugin\/runs\/([^/]+)\/report$/.exec(path);
-    if (run && method === 'GET') {
-      const step = 1 + (Math.floor(Date.now() / 4000) % 3);
-      return [200, { status: 'running', steps: Array.from({ length: step }, (_, i) => ({ seq: i + 1, url: at(['1-2', '2-10', '2-20'][i]) })) }];
     }
     return [404, { error: 'not_found', message: `${method} ${path} is not part of the mock.` }];
   }

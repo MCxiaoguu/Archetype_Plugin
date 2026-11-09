@@ -48,7 +48,7 @@ export function Progress({ state, fx }: { state: AppState; fx: Effects }) {
   const now = useTicker(!!st && st.stage !== 'done');
   if (!st) return <div class="screen" />;
   const idx = stepIndex(st.stage);
-  const rows = personaRows(st.runs, st.latest, indexFrames(state.doc));
+  const rows = personaRows(st.runs, indexFrames(state.doc));
   const runner = runnerState(st.runs, st.queuedSince, now);
   const total = st.runs.length;
   const finished = rows.reduce((s, r) => s + r.finished, 0);

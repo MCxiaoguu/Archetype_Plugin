@@ -20,10 +20,7 @@ export function fileId(api: PluginAPI, create: boolean): string | null {
   if (api.fileKey) return api.fileKey;
   const existing = api.root.getPluginData(FILE_ID_KEY);
   if (existing) return existing;
-  if (!create) {
-    // A view only file never got an id; its history lives under its name.
-    return null;
-  }
+  if (!create) return null;
   const id = `f${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
   try {
     api.root.setPluginData(FILE_ID_KEY, id);
@@ -31,8 +28,17 @@ export function fileId(api: PluginAPI, create: boolean): string | null {
   } catch {
     // View only files refuse writes; fall back to the file name so history
     // still works on this machine.
-    return `name:${api.root.name}`;
+    return nameId(api);
   }
+}
+
+function nameId(api: PluginAPI): string {
+  return `name:${api.root.name}`;
+}
+
+/** Where to read this file's history: its id, or, when it never got one (a view only file), its name. */
+function readId(api: PluginAPI): string {
+  return fileId(api, false) ?? nameId(api);
 }
 
 function cleanSettings(raw: unknown): Settings {
@@ -62,8 +68,7 @@ export async function saveToken(api: PluginAPI, token: string | null): Promise<v
 }
 
 export async function loadStudies(api: PluginAPI): Promise<{ studies: StudyRecord[]; lastStudyId: string | null }> {
-  const id = fileId(api, false);
-  if (!id) return { studies: [], lastStudyId: null };
+  const id = readId(api);
   const studies = await api.clientStorage.getAsync(KEYS.studies(id));
   const last = await api.clientStorage.getAsync(KEYS.last(id));
   return {
@@ -84,14 +89,11 @@ export async function saveStudy(api: PluginAPI, record: StudyRecord): Promise<{ 
 }
 
 export async function forgetLast(api: PluginAPI): Promise<void> {
-  const id = fileId(api, false);
-  if (id) await api.clientStorage.deleteAsync(KEYS.last(id));
+  await api.clientStorage.deleteAsync(KEYS.last(readId(api)));
 }
 
 export async function loadDraft(api: PluginAPI): Promise<Partial<Draft> | null> {
-  const id = fileId(api, false);
-  if (!id) return null;
-  const d = await api.clientStorage.getAsync(KEYS.draft(id));
+  const d = await api.clientStorage.getAsync(KEYS.draft(readId(api)));
   return d && typeof d === 'object' ? (d as Partial<Draft>) : null;
 }
 

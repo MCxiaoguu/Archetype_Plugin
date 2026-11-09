@@ -3,11 +3,33 @@
  * place with network access) and knows nothing about Figma.
  */
 
+/**
+ * The error bodies the panel meets: the studies and plugin routes answer
+ * `{error, message}` (error is a slug); framework errors are RFC 9457
+ * problem documents (`detail` is the sentence; the slug is in `error`, or in
+ * `code` on backends where `error` repeats `detail`); the device flow passes
+ * Auth0's `{error, error_description}` through.
+ */
 export interface ApiErrorBody {
   error?: string;
   message?: string;
+  code?: string;
+  detail?: string;
+  error_description?: string;
   request_id?: string;
   fields?: Record<string, string>;
+}
+
+function errorCode(body: ApiErrorBody | null): string | null {
+  if (typeof body?.code === 'string' && body.code) return body.code;
+  return typeof body?.error === 'string' && body.error ? body.error : null;
+}
+
+function errorText(body: ApiErrorBody | null): string | null {
+  for (const text of [body?.message, body?.detail, body?.error_description]) {
+    if (typeof text === 'string' && text.trim()) return text;
+  }
+  return null;
 }
 
 export class ApiError extends Error {
@@ -59,6 +81,9 @@ export type DevicePoll =
   | { kind: 'token'; token: TokenSet }
   | { kind: 'failed'; code: string; message: string };
 
+/** Gateway answers while the device flow polls: the backend could not reach Auth0 this time. */
+const TRANSIENT_STATUS = new Set([502, 503, 504]);
+
 export const DEFAULT_TIMEOUT_MS = 30_000;
 /** Building personas can take about 90 s on the backend. */
 export const ARCHETYPE_TIMEOUT_MS = 180_000;
@@ -68,7 +93,11 @@ export function normaliseBase(url: string): string {
 }
 
 function friendlyMessage(status: number, body: ApiErrorBody | null, fallback: string): string {
-  if (body?.message) return body.message;
+  const text = errorText(body);
+  if (text) return text;
+  // 503 auth_unavailable: the backend could not reach its sign in service.
+  // The token may be fine, so it is kept (only a 401 signs out).
+  if (errorCode(body) === 'auth_unavailable') return 'Archetype cannot check sign ins right now. You are still signed in; try again in a minute.';
   if (status >= 500) return 'Archetype had a problem on its side. Try again in a moment.';
   return fallback;
 }
@@ -105,6 +134,7 @@ export class ApiClient {
     const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
     const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
     let res: Response;
+    let text: string;
     try {
       res = await this.doFetch(`${this.base}${path}`, {
         method,
@@ -112,6 +142,8 @@ export class ApiClient {
         body: body === undefined ? undefined : JSON.stringify(body),
         signal: controller?.signal,
       });
+      // The timeout covers the body too: headers can arrive and the body stall.
+      text = await res.text();
     } catch (err) {
       const aborted = controller?.signal.aborted;
       throw new ApiError(
@@ -124,14 +156,20 @@ export class ApiClient {
     } finally {
       if (timer) clearTimeout(timer);
     }
-    const text = await res.text();
     let data: unknown = null;
+    let readable = false;
     if (text) {
       try {
         data = JSON.parse(text);
+        readable = true;
       } catch {
         data = null;
       }
+    }
+    if (res.ok && !readable) {
+      // Every route the panel calls answers JSON; anything else (a proxy's
+      // login page, an empty body) is not a result to act on.
+      throw new ApiError(res.status, 'bad_response', `Archetype at ${this.base} sent an answer the panel could not read (HTTP ${res.status}).`);
     }
     if (res.status === 401 && auth) {
       this.opts.onUnauthorized?.();
@@ -139,7 +177,7 @@ export class ApiClient {
     }
     if (!res.ok) {
       const errBody = (data && typeof data === 'object' ? data : null) as ApiErrorBody | null;
-      throw new ApiError(res.status, errBody?.error ?? `http_${res.status}`, friendlyMessage(res.status, errBody, `Request failed (${res.status}).`), {
+      throw new ApiError(res.status, errorCode(errBody) ?? `http_${res.status}`, friendlyMessage(res.status, errBody, `Request failed (${res.status}).`), {
         requestId: errBody?.request_id ?? null,
         fields: errBody?.fields ?? null,
       });
@@ -181,11 +219,6 @@ export class ApiClient {
     return this.request<T>('GET', `/api/studies/${encodeURIComponent(id)}/report`, undefined, { timeoutMs: 90_000 });
   }
 
-  /** One run's steps (for the screen a persona is on right now). */
-  getRunReport<T = RunReport>(runId: string): Promise<T> {
-    return this.request<T>('GET', `/api/plugin/runs/${encodeURIComponent(runId)}/report`);
-  }
-
   // Device flow (no bearer token)
 
   startDeviceFlow(): Promise<DeviceCode> {
@@ -200,18 +233,20 @@ export class ApiClient {
       }
       return { kind: 'token', token };
     } catch (err) {
-      if (err instanceof ApiError && (err.status === 403 || err.status === 400 || err.status === 428)) {
-        if (err.code === 'authorization_pending') return { kind: 'pending' };
-        if (err.code === 'slow_down') return { kind: 'slow_down' };
-        if (err.code === 'expired_token') return { kind: 'failed', code: err.code, message: 'The sign in code expired. Start again.' };
-        if (err.code === 'access_denied') return { kind: 'failed', code: err.code, message: 'Sign in was cancelled in the browser.' };
-        return { kind: 'failed', code: err.code, message: err.message };
-      }
-      if (err instanceof ApiError && (err.code === 'network' || err.code === 'timeout' || err.status >= 500)) {
+      if (!(err instanceof ApiError)) throw err;
+      // Auth0 answers 403 while pending and 429 for slow_down, other servers
+      // 400: the OAuth error code decides, not the status.
+      if (err.code === 'authorization_pending') return { kind: 'pending' };
+      if (err.code === 'slow_down' || err.status === 429) return { kind: 'slow_down' };
+      if (err.code === 'expired_token') return { kind: 'failed', code: err.code, message: 'The sign in code expired. Start again.' };
+      if (err.code === 'access_denied') return { kind: 'failed', code: err.code, message: 'Sign in was cancelled in the browser.' };
+      if (err.code === 'network' || err.code === 'timeout' || TRANSIENT_STATUS.has(err.status)) {
         // Transient: keep polling, the code is still valid.
         return { kind: 'pending' };
       }
-      throw err;
+      // Anything else (invalid_grant, a 500 from a backend without Auth0
+      // settings) does not get better by polling until the code expires.
+      return { kind: 'failed', code: err.code, message: err.message };
     }
   }
 }
@@ -279,10 +314,8 @@ export interface RunRowApi {
   repeatIndex?: number;
   metrics?: { steps?: number | null; frustrationScore?: number | null } | null;
   outcome?: { completed?: boolean | null; quitReason?: string | null; abandonedAtStep?: number | null } | null;
-  /** Newer backends add the latest step's URL; older ones do not. */
-  lastUrl?: string | null;
-  lastStep?: { seq?: number; url?: string | null } | null;
-  currentUrl?: string | null;
+  /** The newest step the runner posted (null until the first one), for the screen a persona is on. */
+  lastStep?: { seq?: number | null; url?: string | null } | null;
 }
 
 export interface StudyRuns {
@@ -290,9 +323,4 @@ export interface StudyRuns {
   status: StudyStatusValue;
   currentWave?: number;
   runs: RunRowApi[];
-}
-
-export interface RunReport {
-  status?: string;
-  steps?: { seq?: number; url?: string | null }[];
 }

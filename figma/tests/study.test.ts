@@ -97,6 +97,16 @@ describe('form validation', () => {
     const errs = validateForm({ ...form, goalId: '4:1' }, runPreflight(doc, '1:2', '4:1'), 'SomeOtherKey12345');
     expect(errs.flow).toBeDefined();
     expect(errs.link).toMatch(/different file/);
+    expect(validateForm({ ...form, goalId: '3:1' }, runPreflight(doc, '1:2', '3:1'), null).flow).toMatch(/overlay/);
+  });
+
+  it('puts a component set start or goal on its own field', () => {
+    const d = fixtureDoc();
+    d.frames.push({ id: '8:1', name: 'Button', notAScreen: 'component_set' });
+    const errs = validateForm({ ...form, goalId: '8:1' }, runPreflight(d, '1:2', '8:1'), null);
+    expect(errs.goal).toMatch(/component set/);
+    expect(errs.flow).toBeUndefined();
+    expect(validateForm({ ...form, startId: '8:1' }, runPreflight(d, '8:1', '2:50'), null).start).toMatch(/component set/);
   });
 
   it('limits long text', () => {

@@ -19,28 +19,25 @@ export interface PersonaRow {
   steps: number | null;
 }
 
-export interface LatestStep {
-  url: string | null;
-  seq: number | null;
+/**
+ * The persona outcome of a finished run, as the backend's report scores it:
+ * an aborted run, or one without a recorded outcome, is none.
+ */
+function personaOutcome(r: RunRowApi): boolean | null {
+  if (!isTerminalRun(r.status) || r.status === 'aborted') return null;
+  const completed = r.outcome?.completed;
+  return typeof completed === 'boolean' ? completed : null;
 }
 
-/** The URL a run row carries for its latest step, on backends that send one. */
+/** The URL of a run's newest step, or null before its first step. */
 export function rowUrl(row: RunRowApi): string | null {
-  return row.lastUrl ?? row.lastStep?.url ?? row.currentUrl ?? null;
-}
-
-/** The latest step of a run report, by sequence number. */
-export function latestStepOf(steps: { seq?: number; url?: string | null }[] | undefined | null): LatestStep | null {
-  if (!steps || steps.length === 0) return null;
-  let best = steps[0];
-  for (const s of steps) if ((s.seq ?? 0) >= (best?.seq ?? 0)) best = s;
-  return { url: best?.url ?? null, seq: best?.seq ?? null };
+  return row.lastStep?.url ?? null;
 }
 
 const ROLE_ORDER: Record<string, number> = { baseline: 0, variant: 1, stress: 2 };
 
 /** One row per persona (archetype), in the order the study runs them. */
-export function personaRows(runs: RunRowApi[], latest: Record<string, LatestStep>, frames: FrameIndex): PersonaRow[] {
+export function personaRows(runs: RunRowApi[], frames: FrameIndex): PersonaRow[] {
   const groups = new Map<string, RunRowApi[]>();
   for (const r of runs) {
     const list = groups.get(r.archetypeId) ?? [];
@@ -51,19 +48,17 @@ export function personaRows(runs: RunRowApi[], latest: Record<string, LatestStep
   for (const [archetypeId, list] of groups) {
     const first = list[0] as RunRowApi;
     const finished = list.filter((r) => isTerminalRun(r.status)).length;
-    const completed = list.filter((r) => isTerminalRun(r.status) && (r.outcome?.completed ?? r.status === 'completed')).length;
-    const gaveUp = finished - completed;
+    const completed = list.filter((r) => personaOutcome(r) === true).length;
+    const gaveUp = list.filter((r) => personaOutcome(r) === false).length;
     const live = list.find((r) => r.status === 'running');
     const phase: PersonaPhase = live ? 'running' : finished === list.length ? 'done' : 'waiting';
     const focus = live ?? [...list].reverse().find((r) => isTerminalRun(r.status)) ?? first;
-    const step = latest[focus.runId];
-    const url = rowUrl(focus) ?? step?.url ?? null;
-    const frame = frameForUrl(url, frames);
-    const steps = focus.metrics?.steps ?? step?.seq ?? null;
+    const frame = frameForUrl(rowUrl(focus), frames);
+    const steps = focus.metrics?.steps ?? focus.lastStep?.seq ?? null;
     let statusText: string;
     if (phase === 'running') statusText = frame ? `On ${frame.name}` : 'Clicking through';
     else if (phase === 'waiting') statusText = finished > 0 ? `${finished} of ${list.length} tries done` : 'Waiting to start';
-    else if (list.length === 1) statusText = completed === 1 ? 'Reached the goal' : 'Gave up';
+    else if (list.length === 1) statusText = completed === 1 ? 'Reached the goal' : gaveUp === 1 ? 'Gave up' : 'Stopped before the end';
     else statusText = `Reached the goal ${completed} of ${list.length} times`;
     rows.push({
       archetypeId,
@@ -80,9 +75,4 @@ export function personaRows(runs: RunRowApi[], latest: Record<string, LatestStep
     });
   }
   return rows.sort((a, b) => (ROLE_ORDER[a.role] ?? 1) - (ROLE_ORDER[b.role] ?? 1));
-}
-
-/** Runs worth asking for their latest step: running now, and not too many. */
-export function runsToPeek(runs: RunRowApi[], max = 6): string[] {
-  return runs.filter((r) => r.status === 'running' && !rowUrl(r)).slice(0, max).map((r) => r.runId);
 }

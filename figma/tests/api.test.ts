@@ -30,7 +30,7 @@ describe('api client', () => {
   });
 
   it('hits every study route', async () => {
-    const { fetch, calls } = mockFetch(Array.from({ length: 8 }, () => ({ status: 200, body: {} })));
+    const { fetch, calls } = mockFetch(Array.from({ length: 7 }, () => ({ status: 200, body: {} })));
     const api = new ApiClient({ baseUrl: 'https://api.x.com', getToken: () => 't', fetch });
     await api.identifyFactors('s1');
     await api.buildArchetypes('s1');
@@ -39,7 +39,6 @@ describe('api client', () => {
     await api.getRuns('s1');
     await api.getReport('s1');
     await api.getStudy('s1');
-    await api.getRunReport('r1');
     expect(calls.map((c) => `${c.init.method} ${c.url.replace('https://api.x.com', '')}`)).toEqual([
       'POST /api/studies/s1/factors',
       'POST /api/studies/s1/archetypes',
@@ -48,7 +47,6 @@ describe('api client', () => {
       'GET /api/studies/s1/runs',
       'GET /api/studies/s1/report',
       'GET /api/studies/s1',
-      'GET /api/plugin/runs/r1/report',
     ]);
     expect(calls[0]?.init.body).toBe('{}');
   });
@@ -87,6 +85,46 @@ describe('api client', () => {
     expect(e3.message).toMatch(/problem on its side/);
   });
 
+  it('reads RFC 9457 problem documents and OAuth error bodies', async () => {
+    const { fetch } = mockFetch([
+      {
+        status: 404,
+        body: { type: 'https://docs.syntheticarchetype.com/api#errors', title: 'Not Found', status: 404, detail: 'No route matches POST /api/studies.', code: 'not_found', error: 'No route matches POST /api/studies.' },
+      },
+      { status: 403, body: { error: 'unauthorized_client', error_description: 'Grant type device_code not allowed for the client.' } },
+    ]);
+    const api = new ApiClient({ baseUrl: 'http://x', getToken: () => 't', fetch });
+    const e1 = (await api.createStudy({}).catch((e) => e)) as ApiError;
+    expect(e1).toMatchObject({ status: 404, code: 'not_found', message: 'No route matches POST /api/studies.' });
+    const e2 = (await api.startDeviceFlow().catch((e) => e)) as ApiError;
+    expect(e2).toMatchObject({ status: 403, code: 'unauthorized_client', message: 'Grant type device_code not allowed for the client.' });
+  });
+
+  it('reads problem documents that carry error and message', async () => {
+    const { fetch } = mockFetch([
+      { status: 405, body: { type: 'https://docs.syntheticarchetype.com/api#errors', title: 'Method Not Allowed', status: 405, detail: '/api/studies does not accept PUT; it accepts GET, POST.', error: 'method_not_allowed', message: '/api/studies does not accept PUT; it accepts GET, POST.' } },
+    ]);
+    const api = new ApiClient({ baseUrl: 'http://x', getToken: () => 't', fetch });
+    const e = (await api.createStudy({}).catch((err) => err)) as ApiError;
+    expect(e).toMatchObject({ status: 405, code: 'method_not_allowed', message: '/api/studies does not accept PUT; it accepts GET, POST.' });
+  });
+
+  it('keeps the session when the sign in service is down', async () => {
+    const onUnauthorized = vi.fn();
+    const { fetch } = mockFetch([{ status: 503, body: { error: 'auth_unavailable' } }]);
+    const api = new ApiClient({ baseUrl: 'http://x', getToken: () => 't', fetch, onUnauthorized });
+    const e = (await api.getStatus('s').catch((err) => err)) as ApiError;
+    expect(e).toMatchObject({ status: 503, code: 'auth_unavailable' });
+    expect(e.message).toMatch(/still signed in/);
+    expect(onUnauthorized).not.toHaveBeenCalled();
+  });
+
+  it('refuses a success answer it cannot read', async () => {
+    const fetch: FetchLike = async () => new Response('<html>Gateway login</html>', { status: 200 });
+    const api = new ApiClient({ baseUrl: 'http://x', getToken: () => 't', fetch });
+    await expect(api.getStatus('s')).rejects.toMatchObject({ status: 200, code: 'bad_response' });
+  });
+
   it('turns network failures into a plain message', async () => {
     const { fetch } = mockFetch([new TypeError('Failed to fetch')]);
     const api = new ApiClient({ baseUrl: 'http://localhost:5013', getToken: () => 't', fetch });
@@ -96,6 +134,18 @@ describe('api client', () => {
   it('times out slow calls', async () => {
     const fetch: FetchLike = (_url, init) =>
       new Promise((_res, rej) => init?.signal?.addEventListener('abort', () => rej(new DOMException('aborted', 'AbortError'))));
+    const api = new ApiClient({ baseUrl: 'http://x', getToken: () => 't', fetch, timeoutMs: 10 });
+    await expect(api.getStatus('s')).rejects.toMatchObject({ code: 'timeout' });
+  });
+
+  it('times out a body that stops arriving after the headers', async () => {
+    // A real fetch aborts the body stream with the signal; this fake does the same.
+    const fetch: FetchLike = async (_url, init) =>
+      ({
+        ok: true,
+        status: 200,
+        text: () => new Promise<string>((_res, rej) => init?.signal?.addEventListener('abort', () => rej(new DOMException('aborted', 'AbortError')))),
+      }) as unknown as Response;
     const api = new ApiClient({ baseUrl: 'http://x', getToken: () => 't', fetch, timeoutMs: 10 });
     await expect(api.getStatus('s')).rejects.toMatchObject({ code: 'timeout' });
   });
@@ -125,9 +175,11 @@ describe('device flow', () => {
   });
 
   it('polls through pending and slow_down until a token arrives', async () => {
+    // Status codes as Auth0 sends them through the backend: 403 while
+    // pending, 429 Too Many Requests for slow_down.
     const { fetch, calls } = mockFetch([
       { status: 403, body: { error: 'authorization_pending', error_description: 'waiting' } },
-      { status: 403, body: { error: 'slow_down' } },
+      { status: 429, body: { error: 'slow_down', error_description: 'You are polling faster than allowed. Try again in 10 seconds.' } },
       { status: 403, body: { error: 'authorization_pending' } },
       { status: 200, body: { access_token: 'jwt', refresh_token: 'r', expires_in: 86400 } },
     ]);
@@ -168,11 +220,21 @@ describe('device flow', () => {
     expect(r).toMatchObject({ kind: 'failed', code: 'expired_token' });
   });
 
-  it('keeps polling through network blips and 5xx', async () => {
+  it('keeps polling through network blips and gateway errors', async () => {
     const { fetch } = mockFetch([new TypeError('offline'), { status: 502, body: { error: 'auth0_unreachable' } }, { status: 200, body: { access_token: 'ok' } }]);
     const api = new ApiClient({ baseUrl: 'http://x', getToken: () => null, fetch });
     const r = await pollDeviceFlow(api, code, { sleep: async () => undefined, now: () => 0 });
     expect(r).toMatchObject({ kind: 'token', token: { access_token: 'ok' } });
+  });
+
+  it('stops on errors that polling cannot fix, with the reason', async () => {
+    const { fetch } = mockFetch([
+      { status: 500, body: { error: 'auth0_not_configured', message: 'AUTH0_DOMAIN and AUTH0_CLIENTID must be set in the backend env' } },
+      { status: 403, body: { error: 'invalid_grant', error_description: 'Invalid or expired device code.' } },
+    ]);
+    const api = new ApiClient({ baseUrl: 'http://x', getToken: () => null, fetch });
+    expect(await api.pollDeviceToken('d')).toEqual({ kind: 'failed', code: 'auth0_not_configured', message: 'AUTH0_DOMAIN and AUTH0_CLIENTID must be set in the backend env' });
+    expect(await api.pollDeviceToken('d')).toEqual({ kind: 'failed', code: 'invalid_grant', message: 'Invalid or expired device code.' });
   });
 
   it('fails on a 200 without a token', async () => {
