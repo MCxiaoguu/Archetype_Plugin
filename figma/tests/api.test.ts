@@ -140,9 +140,11 @@ describe('device flow', () => {
   });
 
   it('polls through pending and slow_down until a token arrives', async () => {
+    // Status codes as Auth0 sends them through the backend: 403 while
+    // pending, 429 Too Many Requests for slow_down.
     const { fetch, calls } = mockFetch([
       { status: 403, body: { error: 'authorization_pending', error_description: 'waiting' } },
-      { status: 403, body: { error: 'slow_down' } },
+      { status: 429, body: { error: 'slow_down', error_description: 'You are polling faster than allowed. Try again in 10 seconds.' } },
       { status: 403, body: { error: 'authorization_pending' } },
       { status: 200, body: { access_token: 'jwt', refresh_token: 'r', expires_in: 86400 } },
     ]);
@@ -183,11 +185,21 @@ describe('device flow', () => {
     expect(r).toMatchObject({ kind: 'failed', code: 'expired_token' });
   });
 
-  it('keeps polling through network blips and 5xx', async () => {
+  it('keeps polling through network blips and gateway errors', async () => {
     const { fetch } = mockFetch([new TypeError('offline'), { status: 502, body: { error: 'auth0_unreachable' } }, { status: 200, body: { access_token: 'ok' } }]);
     const api = new ApiClient({ baseUrl: 'http://x', getToken: () => null, fetch });
     const r = await pollDeviceFlow(api, code, { sleep: async () => undefined, now: () => 0 });
     expect(r).toMatchObject({ kind: 'token', token: { access_token: 'ok' } });
+  });
+
+  it('stops on errors that polling cannot fix, with the reason', async () => {
+    const { fetch } = mockFetch([
+      { status: 500, body: { error: 'auth0_not_configured', message: 'AUTH0_DOMAIN and AUTH0_CLIENTID must be set in the backend env' } },
+      { status: 403, body: { error: 'invalid_grant', error_description: 'Invalid or expired device code.' } },
+    ]);
+    const api = new ApiClient({ baseUrl: 'http://x', getToken: () => null, fetch });
+    expect(await api.pollDeviceToken('d')).toEqual({ kind: 'failed', code: 'auth0_not_configured', message: 'AUTH0_DOMAIN and AUTH0_CLIENTID must be set in the backend env' });
+    expect(await api.pollDeviceToken('d')).toEqual({ kind: 'failed', code: 'invalid_grant', message: 'Invalid or expired device code.' });
   });
 
   it('fails on a 200 without a token', async () => {

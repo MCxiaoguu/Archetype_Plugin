@@ -81,6 +81,9 @@ export type DevicePoll =
   | { kind: 'token'; token: TokenSet }
   | { kind: 'failed'; code: string; message: string };
 
+/** Gateway answers while the device flow polls: the backend could not reach Auth0 this time. */
+const TRANSIENT_STATUS = new Set([502, 503, 504]);
+
 export const DEFAULT_TIMEOUT_MS = 30_000;
 /** Building personas can take about 90 s on the backend. */
 export const ARCHETYPE_TIMEOUT_MS = 180_000;
@@ -223,18 +226,20 @@ export class ApiClient {
       }
       return { kind: 'token', token };
     } catch (err) {
-      if (err instanceof ApiError && (err.status === 403 || err.status === 400 || err.status === 428)) {
-        if (err.code === 'authorization_pending') return { kind: 'pending' };
-        if (err.code === 'slow_down') return { kind: 'slow_down' };
-        if (err.code === 'expired_token') return { kind: 'failed', code: err.code, message: 'The sign in code expired. Start again.' };
-        if (err.code === 'access_denied') return { kind: 'failed', code: err.code, message: 'Sign in was cancelled in the browser.' };
-        return { kind: 'failed', code: err.code, message: err.message };
-      }
-      if (err instanceof ApiError && (err.code === 'network' || err.code === 'timeout' || err.status >= 500)) {
+      if (!(err instanceof ApiError)) throw err;
+      // Auth0 answers 403 while pending and 429 for slow_down, other servers
+      // 400: the OAuth error code decides, not the status.
+      if (err.code === 'authorization_pending') return { kind: 'pending' };
+      if (err.code === 'slow_down' || err.status === 429) return { kind: 'slow_down' };
+      if (err.code === 'expired_token') return { kind: 'failed', code: err.code, message: 'The sign in code expired. Start again.' };
+      if (err.code === 'access_denied') return { kind: 'failed', code: err.code, message: 'Sign in was cancelled in the browser.' };
+      if (err.code === 'network' || err.code === 'timeout' || TRANSIENT_STATUS.has(err.status)) {
         // Transient: keep polling, the code is still valid.
         return { kind: 'pending' };
       }
-      throw err;
+      // Anything else (invalid_grant, a 500 from a backend without Auth0
+      // settings) does not get better by polling until the code expires.
+      return { kind: 'failed', code: err.code, message: err.message };
     }
   }
 }
