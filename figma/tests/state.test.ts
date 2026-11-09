@@ -92,8 +92,6 @@ describe('panel state machine', () => {
     const runs: RunRowApi[] = [{ runId: 'r', archetypeId: 'a', archetypeName: 'A', status: 'queued' }];
     s = reducer(s, { type: 'poll', status: 'running', runs, now: 50 });
     expect(s.study).toMatchObject({ status: 'running', runs, lastPolledAt: 50, queuedSince: 1000 });
-    s = reducer(s, { type: 'peek', runId: 'r', step: { url: 'u', seq: 2 } });
-    expect(s.study?.latest.r).toEqual({ url: 'u', seq: 2 });
     s = reducer(s, { type: 'report', report: fixtureReport(), now: 60 });
     expect(s.screen).toBe('report');
     expect(s.study?.stage).toBe('done');

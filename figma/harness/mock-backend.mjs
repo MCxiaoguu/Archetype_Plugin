@@ -29,7 +29,7 @@ function runRow(a, i, status, extra = {}) {
     status,
     metrics: done || status === 'running' ? { steps: extra.steps ?? report?.steps ?? 3, frustrationScore: report?.frustrationScore ?? 0 } : null,
     outcome: done ? { completed: status === 'completed', quitReason: status === 'completed' ? null : report?.quitReason ?? 'frustration', abandonedAtStep: null } : null,
-    ...(extra.lastUrl ? { lastUrl: extra.lastUrl } : {}),
+    lastStep: extra.lastUrl ? { seq: extra.steps ?? 1, url: extra.lastUrl } : null,
   };
 }
 
@@ -145,11 +145,6 @@ export function createMockBackend({ log = () => {} } = {}) {
       }
       if (sub === '/report' && method === 'GET') return [200, { ...REPORT, studyId: s.id, title: s.title, cached: false }];
       if (sub === '' && method === 'GET') return [200, { studyId: s.id, title: s.title, status: simulated(s).status }];
-    }
-    const run = /^\/api\/plugin\/runs\/([^/]+)\/report$/.exec(path);
-    if (run && method === 'GET') {
-      const step = 1 + (Math.floor(Date.now() / 4000) % 3);
-      return [200, { status: 'running', steps: Array.from({ length: step }, (_, i) => ({ seq: i + 1, url: at(['1-2', '2-10', '2-20'][i]) })) }];
     }
     return [404, { error: 'not_found', message: `${method} ${path} is not part of the mock.` }];
   }

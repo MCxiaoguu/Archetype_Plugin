@@ -216,11 +216,6 @@ export class ApiClient {
     return this.request<T>('GET', `/api/studies/${encodeURIComponent(id)}/report`, undefined, { timeoutMs: 90_000 });
   }
 
-  /** One run's steps (for the screen a persona is on right now). */
-  getRunReport<T = RunReport>(runId: string): Promise<T> {
-    return this.request<T>('GET', `/api/plugin/runs/${encodeURIComponent(runId)}/report`);
-  }
-
   // Device flow (no bearer token)
 
   startDeviceFlow(): Promise<DeviceCode> {
@@ -316,10 +311,8 @@ export interface RunRowApi {
   repeatIndex?: number;
   metrics?: { steps?: number | null; frustrationScore?: number | null } | null;
   outcome?: { completed?: boolean | null; quitReason?: string | null; abandonedAtStep?: number | null } | null;
-  /** Newer backends add the latest step's URL; older ones do not. */
-  lastUrl?: string | null;
-  lastStep?: { seq?: number; url?: string | null } | null;
-  currentUrl?: string | null;
+  /** The newest step the runner posted (null until the first one), for the screen a persona is on. */
+  lastStep?: { seq?: number | null; url?: string | null } | null;
 }
 
 export interface StudyRuns {
@@ -327,9 +320,4 @@ export interface StudyRuns {
   status: StudyStatusValue;
   currentWave?: number;
   runs: RunRowApi[];
-}
-
-export interface RunReport {
-  status?: string;
-  steps?: { seq?: number; url?: string | null }[];
 }

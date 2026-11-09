@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { UiToMain } from '../src/lib/messages';
 import { DEFAULT_SETTINGS } from '../src/lib/messages';
-import { fixtureDoc, fixtureReport } from './helpers';
+import { indexFrames } from '../src/lib/frames';
+import { personaRows } from '../src/lib/runs';
+import { fixtureDoc, fixtureReport, protoAt } from './helpers';
 
 const sent: UiToMain[] = [];
 vi.mock('../src/ui/bridge', () => ({ toMain: (m: UiToMain) => sent.push(m), onMain: () => () => undefined }));
@@ -173,6 +175,39 @@ describe('panel effects', () => {
     await vi.advanceTimersByTimeAsync(60_000);
     vi.useRealTimers();
     expect(calls.length).toBe(before);
+  });
+
+  it('reads the screen each persona is on from the runs list alone', async () => {
+    const calls = installFetch((_m, path) => {
+      if (path === '/api/studies/s6/status') return [200, { studyId: 's6', status: 'running' }];
+      if (path === '/api/studies/s6/runs') {
+        return [
+          200,
+          {
+            studyId: 's6',
+            status: 'running',
+            runs: [
+              { runId: 'r1', archetypeId: 'a', archetypeName: 'Baseline founder', role: 'baseline', status: 'running', lastStep: null },
+              { runId: 'r2', archetypeId: 'v', archetypeName: 'Low trust founder', role: 'variant', status: 'running', lastStep: { seq: 3, url: protoAt('2-20') } },
+            ],
+          },
+        ];
+      }
+      return [404, { error: 'not_found', message: path }];
+    });
+    const { store, fx } = initStore('tok');
+    store.dispatch({ type: 'open-study', record: { studyId: 's6', title: 't', startName: 'a', goalName: 'b', size: 'quick', launchedAt: 0, status: 'running' }, now: 0 });
+    fx.watch();
+    await until(() => (store.get().study?.runs.length ?? 0) === 2);
+    await new Promise((r) => setTimeout(r, 20));
+    const st = store.get();
+    fx.newTest();
+    expect(calls.filter((c) => !c.startsWith('GET /api/studies/s6/'))).toEqual([]);
+    const rows = personaRows(st.study?.runs ?? [], indexFrames(st.doc));
+    expect(rows.map((r) => [r.name, r.statusText, r.steps])).toEqual([
+      ['Baseline founder', 'Clicking through', null],
+      ['Low trust founder', 'On Connect bank', 3],
+    ]);
   });
 
   it('a 401 while watching signs out and clears the stored token', async () => {

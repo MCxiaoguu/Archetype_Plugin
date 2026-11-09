@@ -4,13 +4,10 @@ import { studyWebUrl, type MainToUi, type Settings, type StudyRecord } from '../
 import { isStudyDone, pollDelay } from '../lib/poll';
 import { runPreflight } from '../lib/preflight';
 import { buildReportView, type StudyReport } from '../lib/report';
-import { latestStepOf, runsToPeek } from '../lib/runs';
 import { indexFrames } from '../lib/frames';
 import { buildStudyRequest, validateForm } from '../lib/study';
 import { toMain } from './bridge';
 import type { Store } from './store';
-
-const PEEK_EVERY_MS = 15_000;
 
 function message(err: unknown): string {
   if (err instanceof ApiError) {
@@ -32,7 +29,6 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 export function createEffects(store: Store) {
   let watchGen = 0;
   let signinGen = 0;
-  const lastPeek = new Map<string, number>();
 
   const api = () => {
     const s = store.get();
@@ -183,7 +179,6 @@ export function createEffects(store: Store) {
         if (gen !== watchGen) return;
         store.dispatch({ type: 'poll', status: status.status, runs: runs.runs ?? [], now: Date.now() });
         toMain({ type: 'save-study', record: store.get().study?.record as StudyRecord });
-        await peek(gen, runs);
         if (isStudyDone(status.status)) {
           await loadReport(gen);
           return;
@@ -201,24 +196,6 @@ export function createEffects(store: Store) {
       const since = store.get().study?.watchingSince ?? Date.now();
       await sleep(pollDelay(Date.now() - since));
     }
-  }
-
-  async function peek(gen: number, runs: StudyRuns) {
-    const now = Date.now();
-    const ids = runsToPeek(runs.runs ?? []).filter((id) => now - (lastPeek.get(id) ?? 0) >= PEEK_EVERY_MS);
-    const client = api();
-    await Promise.all(
-      ids.map(async (id) => {
-        lastPeek.set(id, now);
-        try {
-          const r = await client.getRunReport(id);
-          const step = latestStepOf(r.steps);
-          if (step && gen === watchGen) store.dispatch({ type: 'peek', runId: id, step });
-        } catch {
-          // The screen name is a nicety; the status rows still update.
-        }
-      }),
-    );
   }
 
   async function loadReport(gen: number) {

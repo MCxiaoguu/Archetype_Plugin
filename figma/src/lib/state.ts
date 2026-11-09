@@ -2,7 +2,6 @@ import type { DeviceCode, RunRowApi, StudyStatusValue } from './api';
 import { DEFAULT_SETTINGS, type Draft, type InitPayload, type Settings, type StudyRecord } from './messages';
 import { nextQueuedSince } from './poll';
 import type { StudyReport } from './report';
-import type { LatestStep } from './runs';
 import { EMPTY_FORM, type RunSize, type StudyForm } from './study';
 import type { DocSnapshot, NodeRef } from './types';
 
@@ -21,7 +20,6 @@ export interface ActiveStudy {
   error: string | null;
   status: StudyStatusValue | null;
   runs: RunRowApi[];
-  latest: Record<string, LatestStep>;
   queuedSince: number | null;
   watchingSince: number | null;
   lastPolledAt: number | null;
@@ -93,7 +91,6 @@ export type Action =
   | { type: 'launch-failed'; message: string }
   | { type: 'retry'; now: number }
   | { type: 'poll'; status: StudyStatusValue; runs: RunRowApi[]; now: number }
-  | { type: 'peek'; runId: string; step: LatestStep }
   | { type: 'poll-failed'; message: string }
   | { type: 'report'; report: StudyReport; now: number }
   | { type: 'report-failed'; message: string }
@@ -119,7 +116,6 @@ function emptyStudy(now: number, record: StudyRecord | null, stage: Stage): Acti
     error: null,
     status: null,
     runs: [],
-    latest: {},
     queuedSince: null,
     watchingSince: stage === 'watching' ? now : null,
     lastPolledAt: null,
@@ -241,8 +237,6 @@ export function reducer(state: AppState, action: Action): AppState {
         },
       };
     }
-    case 'peek':
-      return patchStudy(state, { latest: { ...(state.study?.latest ?? {}), [action.runId]: action.step } });
     case 'poll-failed':
       return patchStudy(state, { pollError: action.message });
     case 'report': {

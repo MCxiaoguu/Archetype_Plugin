@@ -121,7 +121,7 @@ random id in the file's plugin data so the history follows the file.
 └──────────────────────────────┬───────────────────────────────┘
                                │ fetch, Bearer token
                                ▼
-     Archetype API: /api/oauth/device/*, /api/studies/*, /api/plugin/runs/*/report
+     Archetype API: /api/oauth/device/code, /api/oauth/device/token, /api/studies/*
                                ▲
                                │ claims queued runs
                      runner (study_runner.py) ──▶ figma.com/proto/<key>/...
@@ -204,8 +204,8 @@ to go through the real device flow; the verification page opens in a new tab.
 ## Backend contract notes
 
 - The plugin sends `source`, `execution` and `figma` on study creation (new fields on `feat/figma-channel`).
-- "The screen a persona is on" reads `lastUrl` on `GET /api/studies/<id>/runs` rows when the backend sends it,
-  and otherwise peeks at `GET /api/plugin/runs/<runId>/report` for running runs, at most every 15 s each.
+- "The screen a persona is on" reads `lastStep.url` on `GET /api/studies/<id>/runs` rows (null until the
+  run's first step). The panel calls no `/api/plugin/*` route.
 - The panel's iframe has a `null` origin: the API's CORS list must include it.
 
 ## Publishing to the Figma Community

@@ -30,7 +30,7 @@ describe('api client', () => {
   });
 
   it('hits every study route', async () => {
-    const { fetch, calls } = mockFetch(Array.from({ length: 8 }, () => ({ status: 200, body: {} })));
+    const { fetch, calls } = mockFetch(Array.from({ length: 7 }, () => ({ status: 200, body: {} })));
     const api = new ApiClient({ baseUrl: 'https://api.x.com', getToken: () => 't', fetch });
     await api.identifyFactors('s1');
     await api.buildArchetypes('s1');
@@ -39,7 +39,6 @@ describe('api client', () => {
     await api.getRuns('s1');
     await api.getReport('s1');
     await api.getStudy('s1');
-    await api.getRunReport('r1');
     expect(calls.map((c) => `${c.init.method} ${c.url.replace('https://api.x.com', '')}`)).toEqual([
       'POST /api/studies/s1/factors',
       'POST /api/studies/s1/archetypes',
@@ -48,7 +47,6 @@ describe('api client', () => {
       'GET /api/studies/s1/runs',
       'GET /api/studies/s1/report',
       'GET /api/studies/s1',
-      'GET /api/plugin/runs/r1/report',
     ]);
     expect(calls[0]?.init.body).toBe('{}');
   });
