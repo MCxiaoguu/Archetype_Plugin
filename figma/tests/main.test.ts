@@ -162,6 +162,17 @@ describe('storage', () => {
     expect(store.fileId(c.api, true)).toBe('name:Farside billing');
   });
 
+  it('reads back what it saved in a view only file', async () => {
+    const { api } = makeFigma({ readOnlyRoot: true });
+    await store.saveStudy(api, rec('s1', 1));
+    await store.saveStudy(api, rec('s2', 2));
+    expect(await store.loadStudies(api)).toEqual({ studies: [rec('s2', 2), rec('s1', 1)], lastStudyId: 's2' });
+    await store.forgetLast(api);
+    expect((await store.loadStudies(api)).lastStudyId).toBeNull();
+    await store.saveDraft(api, { who: 'Nurses' });
+    expect(await store.loadDraft(api)).toEqual({ who: 'Nurses' });
+  });
+
   it('saves the draft per file', async () => {
     const { api } = makeFigma();
     expect(await store.loadDraft(api)).toBeNull();
