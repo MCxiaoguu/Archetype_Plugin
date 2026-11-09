@@ -1,6 +1,6 @@
 import { ApiClient, ApiError, pollDeviceFlow, type StudyLike, type StudyRuns, type StudyStatus } from '../lib/api';
 import { continueLaunch } from '../lib/launch';
-import { studyWebUrl, type MainToUi, type Settings, type StudyRecord } from '../lib/messages';
+import { isSafeWebUrl, studyWebUrl, type MainToUi, type Settings, type StudyRecord } from '../lib/messages';
 import { isStudyDone, pollDelay } from '../lib/poll';
 import { runPreflight } from '../lib/preflight';
 import { buildReportView, type StudyReport } from '../lib/report';
@@ -51,8 +51,12 @@ export function createEffects(store: Store) {
       const client = api();
       const code = await client.startDeviceFlow();
       if (gen !== signinGen) return;
+      const page = code.verification_uri_complete || code.verification_uri;
+      if (!isSafeWebUrl(page ?? '')) {
+        throw new Error('Archetype sent a sign in page that is not https, so the panel will not open it. Check the backend address in settings.');
+      }
       store.dispatch({ type: 'signin-code', code, now: Date.now() });
-      toMain({ type: 'open-url', url: code.verification_uri_complete || code.verification_uri });
+      toMain({ type: 'open-url', url: page });
       const result = await pollDeviceFlow(client, code, { sleep, now: Date.now, cancelled: () => gen !== signinGen });
       if (gen !== signinGen || result.kind === 'cancelled') return;
       if (result.kind === 'failed') {

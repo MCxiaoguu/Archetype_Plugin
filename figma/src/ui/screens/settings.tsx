@@ -1,5 +1,5 @@
 import { useState } from 'preact/hooks';
-import { DEFAULT_SETTINGS } from '../../lib/messages';
+import { DEFAULT_SETTINGS, isSafeWebUrl } from '../../lib/messages';
 import type { AppState } from '../../lib/state';
 import type { Effects } from '../effects';
 import { Banner, Field } from '../parts';
@@ -8,7 +8,7 @@ export function SettingsScreen({ state, fx }: { state: AppState; fx: Effects }) 
   const [apiBase, setApi] = useState(state.settings.apiBase);
   const [webBase, setWeb] = useState(state.settings.webBase);
   const [token, setToken] = useState('');
-  const valid = (u: string) => /^https?:\/\/[^\s]+$/i.test(u.trim());
+  const valid = (u: string) => isSafeWebUrl(u.trim());
   return (
     <form
       class="screen settings"
@@ -21,10 +21,10 @@ export function SettingsScreen({ state, fx }: { state: AppState; fx: Effects }) 
       <div class="scroll">
         <h1 class="screen-title">Settings</h1>
         {state.notice && <Banner kind={state.notice.kind}>{state.notice.text}</Banner>}
-        <Field id="api" label="Archetype API" error={valid(apiBase) ? undefined : 'Use a full http or https address.'} hint={`Default ${DEFAULT_SETTINGS.apiBase}`}>
+        <Field id="api" label="Archetype API" error={valid(apiBase) ? undefined : 'Use a full https address (http only for localhost).'} hint={`Default ${DEFAULT_SETTINGS.apiBase}`}>
           {(aria) => <input {...aria} type="url" value={apiBase} onInput={(e) => setApi((e.currentTarget as HTMLInputElement).value)} />}
         </Field>
-        <Field id="web" label="Archetype web app" error={valid(webBase) ? undefined : 'Use a full http or https address.'} hint="Where Open in Archetype goes.">
+        <Field id="web" label="Archetype web app" error={valid(webBase) ? undefined : 'Use a full https address (http only for localhost).'} hint="Where Open in Archetype goes.">
           {(aria) => <input {...aria} type="url" value={webBase} onInput={(e) => setWeb((e.currentTarget as HTMLInputElement).value)} />}
         </Field>
         <div class="row gap-s">

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { StudyRecord } from '../src/lib/messages';
+import type { StudyRecord, UiToMain } from '../src/lib/messages';
 import { runPreflight } from '../src/lib/preflight';
 import { clearPins, pinFindings, showNode } from '../src/main/canvas';
 import { createController } from '../src/main/controller';
@@ -199,7 +199,7 @@ describe('main thread controller', () => {
     const c = createController(api, '0.1.0');
     await c.handle({ type: 'resize', width: 100, height: 5000 });
     expect(api.ui.resize).toHaveBeenCalledWith(320, 1200);
-    await c.handle({ type: 'open-url', url: 'javascript:alert(1)' });
+    await expect(c.handle({ type: 'open-url', url: 'javascript:alert(1)' })).rejects.toThrow(/link/);
     await c.handle({ type: 'open-url', url: 'https://www.syntheticarchetype.com/workspace/studies/s1' });
     expect(api.openExternal).toHaveBeenCalledTimes(1);
     await c.handle({ type: 'show-node', nodeId: '2:20' });
@@ -209,6 +209,40 @@ describe('main thread controller', () => {
     expect(api.notify).toHaveBeenCalled();
     await c.handle({ type: 'clear-pins' });
     expect(api.ui.postMessage).toHaveBeenLastCalledWith({ type: 'pin-result', ok: true, count: 1, message: 'Cleared pins from 1 frame.' });
+  });
+
+  it('refuses panel messages it cannot act on safely, and says so', async () => {
+    const { api, nodes, storage } = makeFigma();
+    const c = createController(api, '0.1.0');
+    const bad: unknown[] = [
+      { type: 'open-url', url: 'http://evil.example/activate?user_code=WDJB' },
+      { type: 'open-url', url: 42 },
+      { type: 'save-settings', settings: { apiBase: 'ftp://api.example.com', webBase: 'https://www.syntheticarchetype.com' } },
+      { type: 'save-settings', settings: { apiBase: 'http://api.example.com', webBase: 'https://www.syntheticarchetype.com' } },
+      { type: 'save-token', token: 42 },
+      { type: 'save-study', record: null },
+      { type: 'save-study', record: { ...rec('', 1) } },
+      { type: 'save-draft', draft: 'x' },
+      { type: 'resize', width: Number.NaN, height: 400 },
+      { type: 'show-node', nodeId: null },
+      // Clear pins removes only labels with the prefix, so a pin without it could never be cleared.
+      { type: 'pin', pins: [{ frameId: '2:20', frameName: 'Connect bank', label: 'F1 Bank sign in fails' }] },
+      { type: 'pin', pins: 'all' },
+      { type: 'notify', text: { html: '<b>' } },
+      { type: 'rename-frames' },
+    ];
+    for (const msg of bad) {
+      await expect(c.handle(msg as UiToMain), JSON.stringify(msg)).rejects.toThrow(/^The panel sent/);
+    }
+    expect(api.openExternal).not.toHaveBeenCalled();
+    expect(api.ui.resize).not.toHaveBeenCalled();
+    expect(storage.size).toBe(0);
+    expect((nodes.get('2:20') as FakeNode).annotations).toEqual([]);
+
+    await c.handle({ type: 'open-url', url: 'http://localhost:5173/workspace/studies/s1' });
+    await c.handle({ type: 'save-settings', settings: { apiBase: 'http://127.0.0.1:5013', webBase: 'http://localhost:5173' } });
+    expect(api.openExternal).toHaveBeenCalledWith('http://localhost:5173/workspace/studies/s1');
+    expect((await store.loadSettings(api)).apiBase).toBe('http://127.0.0.1:5013');
   });
 
   it('stores what the panel saves and echoes the history', async () => {

@@ -233,6 +233,15 @@ describe('panel effects', () => {
     expect(store.get()).toMatchObject({ screen: 'new', study: null, form: { goal: 'Pay', goalId: '2:50' } });
   });
 
+  it('refuses a sign in page that is not https', async () => {
+    const calls = installFetch(() => [200, { device_code: 'd', user_code: 'WDJB-MJHT', verification_uri: 'http://auth.example/activate', verification_uri_complete: 'http://auth.example/activate?user_code=WDJB-MJHT', expires_in: 600, interval: 1 }]);
+    const { store, fx } = initStore(null);
+    await fx.signIn();
+    expect(store.get().auth).toMatchObject({ phase: 'error', error: expect.stringMatching(/not https/) });
+    expect(sent.map((m) => m.type)).not.toContain('open-url');
+    expect(calls).toEqual(['POST /api/oauth/device/code']);
+  });
+
   it('signs in with the device flow and opens the verification page', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     let polls = 0;
