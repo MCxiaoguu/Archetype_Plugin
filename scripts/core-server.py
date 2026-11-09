@@ -1287,6 +1287,7 @@ _CHECK_WORDS = {
     "text_visible": "you can read the text",
     "element_present": "you can see the element",
     "page_type_reached": "you reach a page of type",
+    "frame_reached": "you reach the prototype screen",
     "actor_confirms": "you yourself confirm",
 }
 
@@ -3052,8 +3053,10 @@ STATUS_MAX_WAIT = 300
 STATUS_POLL = _env_seconds("ARCHETYPE_STATUS_POLL", 10)
 
 DESIGN_MODES = ("ofat_stress", "ofat", "factorial", "half_fraction", "composites")
+EIGHT_ARCHETYPE_MODES = ("factorial", "half_fraction")
 REPEAT_POLICIES = ("confirm", "explore", "decide")
-CHECK_TYPES = ("url_matches", "text_visible", "element_present", "page_type_reached", "actor_confirms")
+CHECK_TYPES = ("url_matches", "text_visible", "element_present", "page_type_reached", "frame_reached",
+               "actor_confirms")
 
 # What one run costs, for the estimate shown before runs are created or
 # dispatched (plan 8): 15 to 40 steps, about 8 to 15 minutes of wall time
@@ -3136,18 +3139,24 @@ def _study_dir(study_id: str) -> Path | None:
     return Path(plugin_data) / "studies" / study_id if plugin_data else None
 
 
+def _checks_problem(raw: Any) -> str | None:
+    """Why the success_checks argument cannot be sent, or None. Everything
+    else about a check (known type, value, required as a boolean) is the
+    backend's to validate: it names the field, where a quiet fix here would
+    send a check the user did not write, or none at all."""
+    if raw is None:
+        return None
+    for i, item in enumerate(raw if isinstance(raw, list) else [raw]):
+        if not isinstance(item, dict) or not item.get("type"):
+            return f"success_checks[{i}] needs a type ({', '.join(CHECK_TYPES)}) and a value; got {item!r}."
+    return None
+
+
 def _checks_from_args(raw: Any) -> list[dict[str, Any]] | None:
     if raw is None:
         return None
     items = raw if isinstance(raw, list) else [raw]
-    checks = []
-    for item in items:
-        if isinstance(item, dict) and item.get("type"):
-            check = {"type": item["type"], "value": item.get("value")}
-            if "required" in item:
-                check["required"] = bool(item["required"])
-            checks.append(check)
-    return checks
+    return [{k: item[k] for k in ("type", "value", "required", "rationale") if k in item} for item in items]
 
 
 def _study_body(arguments: dict[str, Any], creating: bool) -> dict[str, Any]:
@@ -3195,9 +3204,14 @@ def _study_body(arguments: dict[str, Any], creating: bool) -> dict[str, Any]:
     design: dict[str, Any] = {}
     put(design, "mode", arguments.get("design_mode") or ("ofat_stress" if creating else None))
     put(design, "repeatPolicy", arguments.get("repeat_policy") or ("confirm" if creating else None))
-    put(design, "archetypeBudget", arguments.get("archetype_budget"))
+    budget = arguments.get("archetype_budget")
+    if budget is None and design.get("mode") in EIGHT_ARCHETYPE_MODES:
+        # A PATCH merges into the stored design, whose budget is the old
+        # mode's; these designs take exactly 8 and the backend refuses less.
+        budget = 8
+    put(design, "archetypeBudget", budget)
     if arguments.get("include_opposite_poles") is not None:
-        design["includeOppositePoles"] = bool(arguments["include_opposite_poles"])
+        design["includeOppositePoles"] = arguments["include_opposite_poles"]
     if design:
         body["design"] = design
     return body
@@ -3250,6 +3264,9 @@ def _render_study(study: dict[str, Any], lead: str) -> str:
 
 def handle_create_study(arguments: dict[str, Any]) -> dict[str, Any]:
     study_id = arguments.get("study_id")
+    problem = _checks_problem(arguments.get("success_checks"))
+    if problem:
+        return tool_text(problem, is_error=True)
     if study_id:
         bad = _bad_study_id(study_id)
         if bad:

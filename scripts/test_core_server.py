@@ -2706,6 +2706,36 @@ def case_60b_update_study_confirms_checks(srv: ServerProc, data_dir: Path) -> No
     expect("not confirmed yet" not in text, "confirmed check no longer flagged")
 
 
+def case_60c_study_design_and_checks_reach_the_backend_whole(srv: ServerProc, data_dir: Path) -> None:
+    write_auth(data_dir)
+    # PATCH merges into the stored design, whose budget is the old mode's
+    # (7 for ofat_stress); factorial and half fraction take exactly 8.
+    call_tool(srv, "create_study", {"study_id": STUDY_ID, "design_mode": "factorial"})
+    sent = STATE.last_for(f"/api/studies/{STUDY_ID}")["body"]
+    expect(sent["design"] == {"mode": "factorial", "archetypeBudget": 8}, f"8 archetypes for factorial: {sent}")
+    call_tool(srv, "create_study", {"study_id": STUDY_ID, "design_mode": "half_fraction", "archetype_budget": 6,
+                                    "include_opposite_poles": "false"})
+    sent = STATE.last_for(f"/api/studies/{STUDY_ID}")["body"]
+    expect(sent["design"]["archetypeBudget"] == 6, "an explicit budget is the backend's to refuse, not ours to change")
+    expect(sent["design"]["includeOppositePoles"] == "false", "not coerced: bool('false') would turn it on")
+    # Checks go as given: the backend validates them and names the field.
+    call_tool(srv, "create_study", {"study_id": STUDY_ID, "success_checks": [
+        {"type": "frame_reached", "value": "71:616"}, {"type": "text_visible", "value": "Done", "required": "false"}]})
+    checks = STATE.last_for(f"/api/studies/{STUDY_ID}")["body"]["success"]["checks"]
+    expect(checks == [{"type": "frame_reached", "value": "71:616"},
+                      {"type": "text_visible", "value": "Done", "required": "false"}],
+           f"checks untouched, frame_reached included: {checks}")
+    before = len(STATE.requests)
+    bad = call_tool(srv, "create_study", {"study_id": STUDY_ID, "success_checks": [{"value": "/welcome"}]})
+    expect(bad.get("isError") is True and len(STATE.requests) == before, "a check without a type is refused, not dropped")
+    contains(result_text(bad), "success_checks[0]", "names the check")
+    STATE.error_overrides["/api/plugin/runs"] = (201, dict(RUN_V2_RESPONSE, instructions=dict(
+        RUN_V2_RESPONSE["instructions"], success={"criterion": "Reach the plan screen",
+                                                  "checks": [{"type": "frame_reached", "value": "71:616"}]})))
+    text = result_text(call_tool(srv, "start_run", {"goal": "g", "url": "https://www.figma.com/proto/abc"}))
+    contains(text, "you reach the prototype screen: 71:616", "frame_reached in words in the briefing")
+
+
 def case_61_generate_factors(srv: ServerProc, data_dir: Path) -> None:
     write_auth(data_dir)
     text = result_text(call_tool(srv, "generate_factors", {"study_id": STUDY_ID}))
@@ -3143,6 +3173,7 @@ CASES = [
     ("dispatch_study runs the swarm: workers, browsers, waves, status", case_71_dispatch_study_runs_the_swarm),
     ("get_study resumes a study at every stage", case_69_get_study_resumes_at_every_stage),
     ("get_study: a failed run listing is an error, a missing route is not", case_69b_get_study_without_its_run_listing),
+    ("study design and checks reach the backend whole", case_60c_study_design_and_checks_reach_the_backend_whole),
     ("update_factors only: exactly these factors in one PATCH", case_62b_update_factors_only),
 ]
 
