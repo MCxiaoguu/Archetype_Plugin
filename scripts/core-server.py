@@ -3668,15 +3668,21 @@ def _queued_runs(study_id: str, listing: dict[str, Any]) -> list[str]:
     return [str(r.get("runId")) for r in last if isinstance(r, dict) and _RUN_ID_RE.match(str(r.get("runId")))]
 
 
+def _pid_alive(pid: Any) -> bool:
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
 def _runner_alive(study_id: str) -> int | None:
     folder = _study_dir(study_id)
     status = _read_json_file(folder / "runner.json" if folder else None)
     pid = status.get("pid")
-    if status.get("state") not in ("starting", "running") or not isinstance(pid, int):
-        return None
-    try:
-        os.kill(pid, 0)
-    except OSError:
+    if status.get("state") not in ("starting", "running") or not _pid_alive(pid):
         return None
     return pid
 
@@ -3768,7 +3774,10 @@ def handle_study_status(arguments: dict[str, Any]) -> dict[str, Any]:
             folder = _study_dir(study_id)
             runner = _read_json_file(folder / "runner.json" if folder else None)
             counts = r.get("runs") or {}
-            return (r.get("status"), counts.get("terminal"), counts.get("total"), runner.get("state"))
+            state = runner.get("state")
+            if state in ("starting", "running") and not _pid_alive(runner.get("pid")):
+                state = "stopped"  # died without finishing: a change worth waking for
+            return (r.get("status"), counts.get("terminal"), counts.get("total"), state)
 
         start, deadline = key(resp), time.monotonic() + wait
         while time.monotonic() < deadline and key(resp) == start:
@@ -3911,9 +3920,21 @@ def _swarm_lines(study_id: str) -> list[str]:
     workers = status.get("workers") or {}
     done = sum(1 for w in workers.values() if w.get("state") == "finished")
     active = [rid for rid, w in workers.items() if w.get("state") == "running"]
-    line = (f"Swarm runner: {status.get('state', '?')} · {done} of {len(workers)} worker(s) finished"
+    state = status.get("state", "?")
+    if state in ("starting", "running") and not _pid_alive(status.get("pid")):
+        # Its file still says running, but the process is gone (killed, or
+        # crashed before it could write "finished").
+        state = f"stopped without finishing (pid {status.get('pid')} is gone; see {folder}/runner.log)"
+        active = []
+    line = (f"Swarm runner: {state} · {done} of {len(workers)} worker(s) finished"
             + (f" · running: {', '.join(active)}" if active else ""))
-    return [line, f"Worker logs: {folder}"]
+    lines = [line]
+    # The runner runs detached, so its exit code reaches nobody: what went
+    # wrong is what it recorded here.
+    problems = [str(p) for p in (status.get("problems") or []) if str(p).strip()]
+    if problems:
+        lines.append("Swarm runner problems:\n" + "\n".join(f"- {_clip(p, 300)}" for p in problems[:10]))
+    return lines + [f"Worker logs: {folder}"]
 
 
 def _pct(value: Any) -> str:
