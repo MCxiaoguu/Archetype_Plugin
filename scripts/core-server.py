@@ -1635,6 +1635,17 @@ def handle_claim_run(arguments: dict[str, Any]) -> dict[str, Any]:
 
 
 def handle_start_run(arguments: dict[str, Any]) -> dict[str, Any]:
+    name = arguments.get("browser")
+    if name not in (None, "") and browser_config(name) is None:
+        # Unknown, the run would be recorded with no browser config and a
+        # study could no longer tell which of its runs compare.
+        return tool_text(
+            f"{name!r} is not a browser this plugin knows. Pass the server name "
+            "the dispatch prompt gave (archetype-browser-1 to 4, "
+            "archetype-watch-1 or 2), chrome for Claude in Chrome, or playwright "
+            "for a self-registered Playwright server. Nothing was started.",
+            is_error=True,
+        )
     if arguments.get("run_id"):
         return handle_claim_run(arguments)
     if not arguments.get("url") and not arguments.get("feature_id"):

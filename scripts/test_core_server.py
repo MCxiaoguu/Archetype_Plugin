@@ -2304,6 +2304,14 @@ def case_52_claim(srv: ServerProc, data_dir: Path) -> None:
     expect((data_dir / "runs" / "queued0001.state.json").exists(), "claimed run state saved")
     bad = call_tool(srv, "start_run", {"run_id": "../features"})
     expect(bad.get("isError") and count_requests("/claim") == 1, "a bad run id never reaches the backend")
+    # A browser name nobody knows would claim the run with no browser config,
+    # and the study could no longer compare it with its other runs.
+    for args in ({"run_id": "queued0002", "browser": "firefox"},
+                 {"goal": "g", "url": "http://localhost:8321", "browser": "archetype-brower-2"}):
+        before = len(STATE.requests)
+        bad = call_tool(srv, "start_run", args)
+        expect(bad.get("isError") is True and len(STATE.requests) == before, f"unknown browser refused locally: {args}")
+        contains(result_text(bad), "archetype-browser-", "the names it takes")
 
 
 def case_52b_claimed_briefing_from_a_study(srv: ServerProc, data_dir: Path) -> None:
