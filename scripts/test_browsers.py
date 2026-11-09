@@ -74,7 +74,8 @@ class Proxy:
         fake = tmp / "fake_child.py"
         fake.write_text(FAKE_CHILD)
         env = dict(os.environ, CLAUDE_PLUGIN_DATA=str(tmp / "data"), FAKE_LOG=str(self.log),
-                   ARCHETYPE_BROWSER_COMMAND=json.dumps([sys.executable, str(fake)]), **(env_extra or {}))
+                   ARCHETYPE_BROWSER_COMMAND=json.dumps([sys.executable, str(fake)]))
+        env.update(env_extra or {})
         args = [sys.executable, str(PROXY), name] + (["--headed"] if headed else [])
         self.proc = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                      stderr=subprocess.DEVNULL, text=True, bufsize=1, env=env, cwd=tmp)
@@ -199,6 +200,50 @@ def case_proxy_survives_a_crash(tmp: Path) -> None:
         expect(sum(1 for e in proxy.child_events() if "argv" in e) == 2, "restarted once")
     finally:
         expect(proxy.close() == 0, "clean exit when the client goes away")
+
+
+STUBBORN_CHILD = r'''
+import json, os, signal, sys, time
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+with open(os.environ["FAKE_LOG"], "a") as fh:
+    fh.write(json.dumps({"pid": os.getpid()}) + "\n")
+for line in sys.stdin:
+    m = json.loads(line)
+    if m.get("method") == "initialize":
+        sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": m["id"], "result": {"protocolVersion": "2025-06-18",
+                         "capabilities": {"tools": {}}, "serverInfo": {"name": "stubborn", "version": "1"}}}) + "\n")
+    elif m.get("method") == "tools/call":
+        sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": m["id"], "result": {"content": []}}) + "\n")
+    sys.stdout.flush()
+while True:  # a browser that hangs on close: ignores the closed stdin and SIGTERM
+    time.sleep(1)
+'''
+
+
+def case_proxy_never_leaves_a_hung_browser_behind(tmp: Path) -> None:
+    stubborn = tmp / "stubborn.py"
+    stubborn.write_text(STUBBORN_CHILD)
+    proxy = Proxy(tmp, env_extra={"ARCHETYPE_BROWSER_COMMAND": json.dumps([sys.executable, str(stubborn)]),
+                                  "ARCHETYPE_BROWSER_STOP_TIMEOUT": "1"})
+    handshake(proxy)
+    proxy.rpc("tools/call", {"name": "browser_navigate", "arguments": {}})
+    pid = proxy.child_events()[0]["pid"]
+    try:
+        expect(proxy.close() == 0, "the proxy exits")
+        deadline = time.monotonic() + 10
+        alive = True
+        while alive and time.monotonic() < deadline:
+            try:
+                os.kill(pid, 0)
+                time.sleep(0.2)
+            except ProcessLookupError:
+                alive = False
+        expect(not alive, "a browser server that ignores the closed stdin and SIGTERM is killed, not orphaned")
+    finally:
+        try:
+            os.kill(pid, 9)
+        except OSError:
+            pass
 
 
 def case_watch_server_is_headed(tmp: Path) -> None:
@@ -748,6 +793,7 @@ CASES = [
     ("proxy routes the server's own requests through the client", case_proxy_routes_server_requests),
     ("proxy answers a call the crashed server never will, then restarts", case_proxy_survives_a_crash),
     ("watch servers are headed and still isolated", case_watch_server_is_headed),
+    ("proxy kills a browser server that hangs on close", case_proxy_never_leaves_a_hung_browser_behind),
     (".mcp.json declares the six servers on the proxy", case_mcp_json_declares_six_servers),
     ("permission hook allows only actor browser and run tools", case_permission_hook),
     ("runner shadow plugin, scrubbed env and worker command", case_runner_shadow_and_command),

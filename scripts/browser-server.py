@@ -37,6 +37,7 @@ import json
 import os
 import queue
 import re
+import signal
 import subprocess
 import sys
 import tempfile
@@ -55,6 +56,9 @@ CONFIG_TEMPLATE = ROOT / "browser" / "playwright.config.json"
 INIT_SCRIPT = ROOT / "browser" / "figma-proto-init.js"
 HANDSHAKE_ID = "archetype-browser-init"
 START_TIMEOUT = float(os.environ.get("ARCHETYPE_BROWSER_START_TIMEOUT", "180"))
+# How long Playwright gets to close the browser (and write the videos) after
+# its stdin closes, before its process group is terminated, then killed.
+STOP_TIMEOUT = float(os.environ.get("ARCHETYPE_BROWSER_STOP_TIMEOUT", "15"))
 IDLE_STOP = float(os.environ.get("ARCHETYPE_BROWSER_IDLE_MINUTES", PINNED.get("idle_stop_minutes", 15))) * 60
 
 
@@ -221,12 +225,29 @@ class Proxy:
         try:
             if child.stdin:
                 child.stdin.close()  # Playwright closes the browser: videos are written out
-            child.wait(timeout=15)
-        except Exception:
+        except OSError:
+            pass  # it is already gone: the wait below returns at once
+        try:
+            child.wait(timeout=STOP_TIMEOUT)
+            return
+        except subprocess.TimeoutExpired:
+            pass
+        # npx, node and Chrome share the group start_new_session gave them.
+        for sig, wait in ((signal.SIGTERM, 5), (signal.SIGKILL, 5)):
+            log(f"{self.name}: the browser server did not stop; sending {sig.name} to its process group")
             try:
-                os.killpg(child.pid, 15)
-            except Exception:
+                os.killpg(child.pid, sig)
+            except ProcessLookupError:
+                return  # no process left in the group: it is gone and reaped
+            except OSError as exc:
+                log(f"{self.name}: could not signal the browser server: {exc}")
                 child.kill()
+            try:
+                child.wait(timeout=wait)
+                return
+            except subprocess.TimeoutExpired:
+                continue
+        log(f"{self.name}: the browser server (pid {child.pid}) is still running after SIGKILL")
 
     def stop(self) -> None:
         with self.child_lock:
