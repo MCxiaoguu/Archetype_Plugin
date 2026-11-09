@@ -309,7 +309,9 @@ class Runner:
         self.folder = self.data_dir / "studies" / opts.study
         self.folder.mkdir(parents=True, exist_ok=True)
         self.status_file = self.folder / "runner.json"
-        self.lock = threading.Lock()
+        # Reentrant: the signal handler takes it on the main thread, which
+        # may already hold it (saving runner.json) when the signal lands.
+        self.lock = threading.RLock()
         self.queue: list[str] = []
         self.free_slots = list(range(1, opts.parallel + 1))
         self.children: dict[str, subprocess.Popen] = {}
@@ -392,10 +394,13 @@ class Runner:
         """Run ids of the next wave, or None when the study has no more (or
         the backend would not say: a problem)."""
         for _ in range(NEXT_WAVE_TRIES):
+            if self.stop_requested():
+                self.problem("stopped while waiting for the next wave; the study is not finished")
+                return None
             status, body = self.request("POST", f"/api/studies/{self.opts.study}/runs/next", timeout=120)
             if status == 409 or status == 0:
                 log(f"next wave not ready ({body.get('message') or status}); waiting {NEXT_WAVE_WAIT:g} s")
-                time.sleep(NEXT_WAVE_WAIT)
+                self.stop_event.wait(NEXT_WAVE_WAIT)
                 continue
             if not (200 <= status < 300):
                 self.problem(f"next wave failed: {status} {body.get('message') or body.get('error')}")

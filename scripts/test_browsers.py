@@ -478,6 +478,8 @@ class StubStudy:
         self.status = {r: "queued" for r in runs}
         self.aborts: dict[str, str] = {}
         self.wave2 = wave2
+        self.wave_open = False  # answer runs/next with 409, as while a wave is open elsewhere
+        self.next_calls = 0
         self.studies = ["s1"]
         self.listings: list[str] = []
         stub = self
@@ -514,6 +516,9 @@ class StubStudy:
                     stub.status[parts[1]] = "completed"
                     return self.reply(200, {})
                 if self.path.endswith("/runs/next"):
+                    stub.next_calls += 1
+                    if stub.wave_open:
+                        return self.reply(409, {"error": "wave_in_progress", "message": "wave 1 still has open runs"})
                     if stub.wave2 and not any(r in stub.status for r in stub.wave2["runs_ids"]):
                         for r in stub.wave2["runs_ids"]:
                             stub.status[r] = "queued"
@@ -712,6 +717,34 @@ def case_runner_leaves_a_study_to_its_live_runner(tmp: Path) -> None:
         stub.close()
 
 
+def case_runner_stops_waiting_for_a_wave_on_sigterm(tmp: Path) -> None:
+    import signal as sig
+    stub = StubStudy([])
+    stub.wave_open = True
+    try:
+        data = tmp / "data"
+        data.mkdir()
+        (data / "auth.json").write_text(json.dumps({"access_token": "t"}))
+        env = dict(os.environ, ARCHETYPE_RUNNER_WAVE_WAIT="30")
+        proc = subprocess.Popen([sys.executable, str(HERE / "study_runner.py"), "--study", "s1", "--data-dir", str(data),
+                                 "--backend", stub.url, "--claude", "/bin/false"], env=env,
+                                stdout=(tmp / "runner.log").open("w"), stderr=subprocess.STDOUT)
+        try:
+            wait_for(lambda: stub.next_calls >= 1, 30, "the first next wave request")
+            time.sleep(0.3)
+            proc.send_signal(sig.SIGTERM)
+            try:
+                code = proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                raise Fail("SIGTERM did not stop a runner waiting for the next wave")
+            expect(code == 1, f"stopped before the study finished: exit {code}")
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+    finally:
+        stub.close()
+
+
 def case_runner_sends_the_token_only_over_https(tmp: Path) -> None:
     runner = load_runner()
     spec = importlib.util.spec_from_file_location("core_server", HERE / "core-server.py")
@@ -827,6 +860,7 @@ CASES = [
     ("runner --watch on SIGTERM stops its live worker and aborts that run", case_runner_watch_sigterm_stops_its_live_worker),
     ("runner leaves a study to the live runner already serving it here", case_runner_leaves_a_study_to_its_live_runner),
     ("runner refuses options it cannot honor instead of coercing them", case_runner_refuses_options_it_cannot_honor),
+    ("runner stops waiting for the next wave on SIGTERM", case_runner_stops_waiting_for_a_wave_on_sigterm),
 ]
 
 
