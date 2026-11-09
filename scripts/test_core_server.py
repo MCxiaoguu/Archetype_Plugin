@@ -2513,6 +2513,31 @@ def case_57b_local_give_up_when_backend_down(srv: ServerProc, data_dir: Path) ->
     expect(len(buffered) == 3, f"all three steps kept for later, got {len(buffered)}")
 
 
+def case_57h_local_patience_after_a_backend_review(srv: ServerProc, data_dir: Path) -> None:
+    write_auth(data_dir)
+    start_v2_run(srv)
+
+    def failing(seq: int) -> dict:
+        step = v2_step(seq, progress=0, friction={"level": "major", "type": "form"})
+        step["act"] = {"target": "button Next", "result": "failed"}
+        return step
+
+    # The backend asks to decide at step 3 (budget 3 spent) and the persona
+    # goes on. The backend halves the counter on the next step and ends the
+    # run only at the second exhausted budget; the local mirror must agree
+    # when the next steps stay on this machine.
+    STATE.error_overrides["/steps"] = (200, dict(STEPS_RESPONSE, state=dict(
+        STEPS_RESPONSE["state"], seq=3, unproductive=3, progress=0, reviewGiveUp=True)))
+    contains(result_text(call_tool(srv, "log_step", {"run_id": V2_RUN_ID, "step": failing(3)})),
+             "NOTE: Your patience budget is exhausted", "the backend's review")
+    STATE.error_overrides["/steps"] = (502, {"error": "bad_gateway", "message": "proxy"})
+    text = result_text(call_tool(srv, "log_step", {"run_id": V2_RUN_ID, "step": failing(4)}))
+    contains(text, "unproductive 2 of 3", "halved after the review, then one more")
+    expect("NOTE:" not in text, f"no second review yet: {text}")
+    text = result_text(call_tool(srv, "log_step", {"run_id": V2_RUN_ID, "step": failing(5)}))
+    contains(text, "This run has ended (patience budget exhausted twice)", "the second exhausted budget ends it")
+
+
 def case_57c_rejected_step(srv: ServerProc, data_dir: Path) -> None:
     write_auth(data_dir)
     start_v2_run(srv)
@@ -3171,6 +3196,7 @@ CASES = [
     ("log_step give up NOTE, backend note, ended run", case_57_give_up_note),
     ("log_step local give up while the backend is down", case_57b_local_give_up_when_backend_down, STEP_FAST),
     ("log_step relays a rejected step without keeping it", case_57c_rejected_step),
+    ("local patience after a backend review matches the backend", case_57h_local_patience_after_a_backend_review),
     ("log_step refuses an invalid record before buffering it", case_57d_invalid_step_refused_before_buffering, STEP_FAST),
     ("log_step on a closed run: stop, no second report", case_57e_closed_run_is_not_reported_again),
     ("buffered steps the backend refuses are named, not lost silently", case_57f_dropped_buffered_steps_are_named, STEP_FAST),

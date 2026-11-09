@@ -1850,7 +1850,7 @@ def _apply_step_locally(state: dict[str, Any], step: dict[str, Any]) -> dict[str
             ended, ended_reason = True, "patience budget exhausted twice"
         elif seq >= max_steps + 5:
             ended, ended_reason = True, "step limit passed"
-        unproductive = unproductive // 2 if unproductive >= max_unproductive else unproductive
+        unproductive //= 2
 
     local.update(seq=max(seq, _int_or(local.get("seq"), 0)), progress=progress,
                  unproductive=unproductive)
@@ -2072,6 +2072,7 @@ def handle_log_step(arguments: dict[str, Any]) -> dict[str, Any]:
                 "record and call log_step again for this step.",
                 is_error=True,
             )
+        reviews_before = _int_or(state.setdefault("local", {}).get("reviews"), 0)
         local_state = _apply_step_locally(state, prepared)
 
         lead_bits = [shot_note] if shot_note else []
@@ -2145,8 +2146,16 @@ def handle_log_step(arguments: dict[str, Any]) -> dict[str, Any]:
             remote_state = remote.get("state") if isinstance(remote.get("state"), dict) else None
             if remote_state:
                 shown = remote_state
-                state["local"]["unproductive"] = _int_or(
-                    _pick(remote_state, "unproductive"), state["local"].get("unproductive", 0))
+                # Follow the backend's counters, so a later step answered
+                # only locally continues from them: its review count, and
+                # its counter halved after a review the way the backend
+                # halves it on the next step.
+                unproductive = _int_or(_pick(remote_state, "unproductive"), state["local"].get("unproductive", 0))
+                reviewed = bool(_pick(remote_state, "reviewGiveUp", "review_give_up"))
+                if reviewed:
+                    unproductive //= 2
+                state["local"]["unproductive"] = unproductive
+                state["local"]["reviews"] = reviews_before + (1 if reviewed else 0)
                 state["local"]["progress"] = _int_or(
                     _pick(remote_state, "progress"), state["local"].get("progress", 0))
             active = _pick(remote, "activeRules", "active_rules")
