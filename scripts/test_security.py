@@ -4,10 +4,12 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import stat
 import sys
 import tempfile
+import threading
 import urllib.request
 from pathlib import Path
 
@@ -48,6 +50,45 @@ with tempfile.TemporaryDirectory() as tmp:
     mode = stat.S_IMODE(target.stat().st_mode)
     check(mode == 0o600, f"auth file is 0600 (got {oct(mode)})")
     check(not list(target.parent.glob(".*.tmp")), "no temp file left behind")
+
+# Tool calls run on threads: two writes of one file at once must both land
+# whole, and run-log updates must not overwrite each other.
+with tempfile.TemporaryDirectory() as tmp:
+    target = Path(tmp) / "runs.json"
+    errors = []
+
+    def writer(n: int) -> None:
+        for _ in range(40):
+            try:
+                core._write_private(target, json.dumps({"writer": n, "pad": "x" * 20000}) + "\n")
+            except Exception as exc:  # noqa: BLE001
+                errors.append(repr(exc))
+
+    threads = [threading.Thread(target=writer, args=(n,)) for n in range(12)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    check(not errors, f"concurrent private writes never fail ({errors[:1]})")
+    check(json.loads(target.read_text())["writer"] in range(12), "the file holds one whole write")
+    check(not list(Path(tmp).glob(".*.tmp")), "no temp file left behind by concurrent writers")
+
+    os.environ["CLAUDE_PLUGIN_DATA"] = tmp
+    target.unlink()
+    gate = threading.Barrier(12)
+
+    def start(n: int) -> None:
+        gate.wait()
+        core.record_run_start({"runId": f"run{n:02d}", "sessionId": f"s{n}"}, {"goal": "g"})
+
+    threads = [threading.Thread(target=start, args=(n,)) for n in range(12)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    del os.environ["CLAUDE_PLUGIN_DATA"]
+    logged = sorted(e["run_id"] for e in json.loads(target.read_text()))
+    check(logged == [f"run{n:02d}" for n in range(12)], f"every concurrent run start is logged ({len(logged)} of 12)")
 
 print("-" * 60)
 print("ALL PASS" if not failures else f"{failures} FAILED")

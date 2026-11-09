@@ -53,6 +53,7 @@ import queue
 import re
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.error
@@ -162,8 +163,10 @@ def _write_private(path: Path, text: str) -> None:
         os.chmod(path.parent, 0o700)
     except OSError:
         pass
-    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    # mkstemp: 0600 and a name of its own, so two tool-call threads writing
+    # the same file never share (and truncate) one temp file.
+    fd, name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    tmp = Path(name)
     try:
         with os.fdopen(fd, "w") as fh:
             fh.write(text)
@@ -891,8 +894,12 @@ def _save_run_log(entries: list[dict[str, Any]]) -> None:
         log(f"could not write run log: {exc}")
 
 
+# Parallel actors share this process: every read-modify-write of runs.json
+# holds this lock, or one actor's entry overwrites another's.
+_run_log_lock = threading.Lock()
+
+
 def record_run_start(run_body: dict[str, Any], arguments: dict[str, Any]) -> None:
-    entries = load_run_log()
     entry = {
         "run_id": run_body.get("runId"),
         "session_id": run_body.get("sessionId"),
@@ -902,19 +909,22 @@ def record_run_start(run_body: dict[str, Any], arguments: dict[str, Any]) -> Non
         "pool_id": arguments.get("pool_id"),
         "started_at": int(time.time()),
     }
-    entries.append({k: v for k, v in entry.items() if v is not None})
-    _save_run_log(entries)
+    with _run_log_lock:
+        entries = load_run_log()
+        entries.append({k: v for k, v in entry.items() if v is not None})
+        _save_run_log(entries)
 
 
 def record_run_result(run_id: str, status_str: str | None, verdict: str | None) -> None:
-    entries = load_run_log()
-    for entry in reversed(entries):
-        if entry.get("run_id") == run_id:
-            entry["status"] = status_str
-            entry["verdict"] = verdict
-            entry["reported_at"] = int(time.time())
-            break
-    _save_run_log(entries)
+    with _run_log_lock:
+        entries = load_run_log()
+        for entry in reversed(entries):
+            if entry.get("run_id") == run_id:
+                entry["status"] = status_str
+                entry["verdict"] = verdict
+                entry["reported_at"] = int(time.time())
+                break
+        _save_run_log(entries)
 
 
 def backend_error_message(status: int, body: dict[str, Any]) -> str:
