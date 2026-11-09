@@ -2574,6 +2574,20 @@ def case_57h_local_patience_after_a_backend_review(srv: ServerProc, data_dir: Pa
     contains(text, "This run has ended (patience budget exhausted twice)", "the second exhausted budget ends it")
 
 
+def case_57i_no_progress_reported_is_no_signal(srv: ServerProc, data_dir: Path) -> None:
+    write_auth(data_dir)
+    start_v2_run(srv)
+    STATE.error_overrides["/steps"] = (502, {"error": "bad_gateway", "message": "proxy"})
+    # The backend's rule: progress is optional, and a step that does not
+    # report it is no evidence that progress stalled.
+    for seq in (1, 2, 3):
+        step = v2_step(seq)
+        del step["after"]["progress"]
+        text = result_text(call_tool(srv, "log_step", {"run_id": V2_RUN_ID, "step": step}))
+    contains(text, "unproductive 0 of 3", "steps without progress are not unproductive")
+    expect("NOTE:" not in text, f"no give-up review: {text}")
+
+
 def case_57c_rejected_step(srv: ServerProc, data_dir: Path) -> None:
     write_auth(data_dir)
     start_v2_run(srv)
@@ -3235,6 +3249,7 @@ CASES = [
     ("log_step give up NOTE, backend note, ended run", case_57_give_up_note),
     ("log_step local give up while the backend is down", case_57b_local_give_up_when_backend_down, STEP_FAST),
     ("log_step relays a rejected step without keeping it", case_57c_rejected_step),
+    ("a step without progress is no progress signal locally", case_57i_no_progress_reported_is_no_signal),
     ("local patience after a backend review matches the backend", case_57h_local_patience_after_a_backend_review),
     ("log_step refuses an invalid record before buffering it", case_57d_invalid_step_refused_before_buffering, STEP_FAST),
     ("log_step on a closed run: stop, no second report", case_57e_closed_run_is_not_reported_again),

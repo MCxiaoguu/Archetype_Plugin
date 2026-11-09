@@ -1817,8 +1817,8 @@ def _apply_step_locally(state: dict[str, Any], step: dict[str, Any]) -> dict[str
     """Advance the local patience counters with one step and return the
     resulting state, mirroring the backend's rules (plan 5.4):
     unproductive grows when the action failed, friction was major or
-    blocked, progress did not rise, or a trust request was refused; it
-    resets when progress rises by 10 or more. The give-up review fires on an
+    blocked, a reported progress did not rise, or a trust request was
+    refused; it resets when progress rises by 10 or more. The give-up review fires on an
     exhausted budget, the step cap or a repeated error; after a review the
     counter is halved, and a second exhausted budget ends the run."""
     local = state.setdefault("local", {})
@@ -1827,7 +1827,11 @@ def _apply_step_locally(state: dict[str, Any], step: dict[str, Any]) -> dict[str
     trust = after.get("trust_request") if isinstance(after.get("trust_request"), dict) else {}
     seq = _int_or(step.get("seq"), local.get("seq", 0) + 1)
     prev_progress = _int_or(local.get("progress"), 0)
-    progress = max(0, min(100, _int_or(after.get("progress"), prev_progress)))
+    # progress is optional: a step that does not report it is no evidence
+    # that progress stalled (the backend's rule).
+    raw_progress = after.get("progress")
+    reported = isinstance(raw_progress, (int, float)) and not isinstance(raw_progress, bool)
+    progress = max(0, min(100, int(raw_progress))) if reported else prev_progress
     unproductive = _int_or(local.get("unproductive"), 0)
 
     if progress - prev_progress >= 10:
@@ -1835,7 +1839,7 @@ def _apply_step_locally(state: dict[str, Any], step: dict[str, Any]) -> dict[str
     elif (
         str(act.get("result") or "ok") != "ok"
         or str(friction.get("level") or "none") in ("major", "blocked")
-        or progress <= prev_progress
+        or (reported and progress <= prev_progress)
         or str(trust.get("decision") or "") == "refused"
     ):
         unproductive += 1

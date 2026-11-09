@@ -157,7 +157,8 @@ What the server does:
 4. Answers with the backend's `state`, `activeRules`, `recall` and `note`,
    or, when the backend did not answer in time, with local state computed
    from the same rules (unproductive grows on a failed action, major or
-   blocked friction, no progress or a refused trust request, and resets
+   blocked friction, a reported progress that did not rise (a step without
+   progress is no signal) or a refused trust request, and resets
    when progress rises by 10 or more; the review fires on the budget, the
    step cap or a repeated error and halves the counter; a second exhausted
    budget ends the run). The local counters follow the backend's whenever
