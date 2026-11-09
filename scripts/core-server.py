@@ -1048,15 +1048,19 @@ def _write_jsonl(path: Path | None, items: list[dict[str, Any]]) -> None:
         log(f"could not write {path}: {exc}")
 
 
-def _append_jsonl(path: Path | None, item: dict[str, Any]) -> None:
+def _append_jsonl(path: Path | None, item: dict[str, Any]) -> bool:
+    """Append one line; False (logged) when it could not be written."""
     if path is None:
-        return
+        log("CLAUDE_PLUGIN_DATA is not set: nothing can be kept for this run")
+        return False
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a") as fh:
             fh.write(json.dumps(item) + "\n")
     except Exception as exc:
         log(f"could not append to {path}: {exc}")
+        return False
+    return True
 
 
 def _pick(d: Any, *keys: str, default: Any = None) -> Any:
@@ -1911,9 +1915,11 @@ def _post_step(run_id: str, session_id: Any, step: dict[str, Any], token: str | 
                timeout: float) -> tuple[str, int, dict[str, Any]]:
     """One step to the backend: ("ok"|"retry"|"ended"|"rejected", status, body).
 
-    "retry" (timeout, network, 5xx, no token, missing route) keeps the step
-    in the buffer; "rejected" (400, 404 run) is the actor's to fix;
-    "ended" (409) means the backend stopped taking steps for this run."""
+    "retry" (timeout, network, 5xx, a refused login or none, missing route)
+    keeps the step in the buffer; "rejected" (400, 404 run) is the actor's
+    to fix; "ended" (409) means the backend stopped taking steps for this
+    run: error run_ended when the persona's patience ran out, any other
+    error when the run is already closed."""
     if not token or timeout <= 0:
         return "retry", 0, {"error": "no_token" if not token else "deadline_exceeded"}
     status, resp = backend_post(
@@ -1929,29 +1935,53 @@ def _post_step(run_id: str, session_id: Any, step: dict[str, Any], token: str | 
     return "retry", status, resp
 
 
-def flush_step_buffer(run_id: str, state: dict[str, Any], budget: float) -> tuple[int, int, str | None]:
+def _held_back(status: int, resp: dict[str, Any]) -> str:
+    """Why a step stayed on this machine, and when it goes out, for the actor."""
+    later = "it goes out once the user logs in again with /archetype:setup in the main session, at the latest with report_result"
+    if resp.get("error") == "no_token":
+        return f"this session is not logged in; {later}"
+    if status == 401:
+        return f"the backend refused this session's login ({resp.get('message') or resp.get('error') or 401}); {later}"
+    if resp.get("error") == "deadline_exceeded":
+        return "the backend was slow; it goes out with your next step"
+    return f"the backend did not take it ({backend_error_message(status, resp)}); it goes out with your next step"
+
+
+def flush_step_buffer(run_id: str, state: dict[str, Any], budget: float) -> dict[str, Any]:
     """Send buffered steps oldest first within ``budget`` seconds.
-    Returns (sent, left, why the rest stayed). Caller holds the run lock."""
+
+    Returns {sent, left, stuck, dropped}: ``stuck`` is the (status, body)
+    that stopped the flush with ``left`` steps still buffered, and
+    ``dropped`` names, for the actor, each buffered step the backend refused
+    or no longer takes (never resent). Caller holds the run lock."""
     path = _run_file(run_id, "steps.jsonl")
     pending = _read_jsonl(path)
+    out: dict[str, Any] = {"sent": 0, "left": 0, "stuck": None, "dropped": []}
     if not pending:
-        return 0, 0, None
+        return out
     token = load_token()
     deadline = time.monotonic() + budget
-    sent, why = 0, None
     while pending:
         outcome, status, resp = _post_step(
             run_id, state.get("session_id"), pending[0], token,
             min(STEP_TIMEOUT, deadline - time.monotonic()),
         )
         if outcome == "retry":
-            why = resp.get("error") or f"status {status}"
+            out["stuck"] = (status, resp)
             break
-        pending.pop(0)  # sent, ended or rejected: not worth resending
+        step = pending.pop(0)
         if outcome == "ok":
-            sent += 1
+            out["sent"] += 1
+        elif resp.get("error") == "run_ended":
+            out["dropped"].append(f"Buffered step {step.get('seq')} came after this run ended, so the backend did not keep it.")
+        else:
+            out["dropped"].append(
+                f"Buffered step {step.get('seq')} was refused by the backend "
+                f"({backend_error_message(status, resp)}) and is not in the run's record."
+            )
     _write_jsonl(path, pending)
-    return sent, len(pending), why
+    out["left"] = len(pending)
+    return out
 
 
 def handle_log_step(arguments: dict[str, Any]) -> dict[str, Any]:
@@ -1988,34 +2018,51 @@ def handle_log_step(arguments: dict[str, Any]) -> dict[str, Any]:
         local_state = _apply_step_locally(state, prepared)
 
         lead_bits = [shot_note] if shot_note else []
+        seq = prepared.get("seq")
         remote: dict[str, Any] | None = None
-        if _int_or(state.get("protocol_version"), 1) < 2:
+        legacy = _int_or(state.get("protocol_version"), 1) < 2
+        if legacy:
             lead_bits.append(
                 "Saved on this machine: this backend predates live steps, so "
                 "the steps go out with report_result."
             )
         else:
-            _sent, left, _why = flush_step_buffer(run_id, state, STEP_TIMEOUT * 0.5)
+            flushed = flush_step_buffer(run_id, state, STEP_TIMEOUT * 0.5)
+            lead_bits += flushed["dropped"]
             remaining = STEP_TIMEOUT - (time.monotonic() - started)
-            outcome, status, resp = ("retry", 0, {})
-            if left == 0:
+            if flushed["left"]:
+                outcome, (status, resp) = "retry", flushed["stuck"]
+            else:
                 outcome, status, resp = _post_step(
                     run_id, state.get("session_id"), prepared, load_token(), remaining
                 )
             if outcome == "rejected":
                 # Nothing is kept: the state changes above stay in memory.
-                return tool_text(
-                    f"The backend rejected step {prepared.get('seq')}: "
+                return tool_text(" ".join(lead_bits + [
+                    f"The backend rejected step {seq}: "
                     f"{backend_error_message(status, resp)} Fix the record and "
-                    "call log_step again for this step.",
+                    "call log_step again for this step."]),
+                    is_error=True,
+                )
+            if outcome == "ended" and resp.get("error") != "run_ended":
+                # Already closed: reported, or aborted by the swarm runner. A
+                # report now would overwrite that outcome with this actor's.
+                return tool_text(" ".join(lead_bits + [
+                    f"The backend no longer takes steps for this run: "
+                    f"{backend_error_message(status, resp)} Stop: take no further "
+                    "action, close the browser, and do NOT call report_result for "
+                    "this run, which is already closed. Tell the caller why you stopped."]),
                     is_error=True,
                 )
             if outcome == "retry":
-                _append_jsonl(_run_file(run_id, "steps.jsonl"), prepared)
-                lead_bits.append(
-                    f"Step {prepared.get('seq')} saved on this machine (the backend "
-                    "was slow); it goes out with your next step. Keep going."
-                )
+                if not _append_jsonl(_run_file(run_id, "steps.jsonl"), prepared):
+                    return tool_text(" ".join(lead_bits + [
+                        f"Step {seq} was not logged: the backend did not take it "
+                        f"({backend_error_message(status, resp)}) and it could not be "
+                        "saved on this machine. Call log_step again for this step."]),
+                        is_error=True,
+                    )
+                lead_bits.append(f"Step {seq} saved on this machine: {_held_back(status, resp)}. Keep going.")
             elif outcome == "ended":
                 # 409 run_ended carries the backend's state and note.
                 ended_state = dict(resp["state"] if isinstance(resp.get("state"), dict) else local_state)
@@ -2026,7 +2073,13 @@ def handle_log_step(arguments: dict[str, Any]) -> dict[str, Any]:
             else:
                 remote = resp
 
-        _append_jsonl(_run_file(run_id, "journal.jsonl"), prepared)
+        if not _append_jsonl(_run_file(run_id, "journal.jsonl"), prepared) and legacy:
+            # On protocol 1 the journal is the only record of the step.
+            return tool_text(
+                f"Step {seq} could not be saved on this machine, so it is not "
+                "recorded. Keep your own step log and send it with report_result.",
+                is_error=True,
+            )
         rules = list(state.get("rules") or [])[:5]
         recall: list[Any] = list(state.get("last_recall") or [])
         note: str | None = None
@@ -2236,11 +2289,16 @@ def handle_report_result(arguments: dict[str, Any]) -> dict[str, Any]:
         state = load_run_state(run_id)
         version = _int_or(state.get("protocol_version"), 1) if state else 1
         if version >= 2:
-            sent, left, why = flush_step_buffer(run_id, state, RESULT_TIMEOUT * 0.5)
-            if sent:
-                notes.append(f"{sent} buffered step(s) sent first")
-            if left:
-                notes.append(f"{left} step(s) the backend never acknowledged ride along with the results ({why})")
+            flushed = flush_step_buffer(run_id, state, RESULT_TIMEOUT * 0.5)
+            if flushed["sent"]:
+                notes.append(f"{flushed['sent']} buffered step(s) sent first")
+            notes += flushed["dropped"]
+            if flushed["left"]:
+                status, resp = flushed["stuck"]
+                notes.append(
+                    f"{flushed['left']} step(s) the backend never acknowledged ride along "
+                    f"with the results ({backend_error_message(status, resp)})"
+                )
         unsent = _read_jsonl(_run_file(run_id, "steps.jsonl"))
         journal = _read_jsonl(_run_file(run_id, "journal.jsonl"))
         actions = _read_jsonl(_run_file(run_id, "actions.jsonl"), RAW_ACTIONS_LIMIT)

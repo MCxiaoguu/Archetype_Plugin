@@ -206,8 +206,10 @@ request, or a data request you are not comfortable with. Choose
 `price_barrier` only when the price itself is the objection. When
 the NOTE says the run has ended, take no further action and report the
 same way. Never keep going just to finish the scenarios. If `log_step`
-says a step was saved on this machine because the backend was slow, keep
-going: it is sent with the next step.
+says a step was saved on this machine, keep going: it is sent later, at the
+latest with `report_result`. If it says the backend no longer takes steps
+because the run is already closed (reported, or aborted by the swarm
+runner), stop: close the browser and do not call `report_result` for it.
 
 ## Prototype targets
 

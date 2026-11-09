@@ -2539,6 +2539,65 @@ def case_57d_invalid_step_refused_before_buffering(srv: ServerProc, data_dir: Pa
     expect(not (data_dir / "runs" / f"{V2_RUN_ID}.journal.jsonl").exists(), "nothing invalid is journaled")
 
 
+def case_57e_closed_run_is_not_reported_again(srv: ServerProc, data_dir: Path) -> None:
+    write_auth(data_dir)
+    start_v2_run(srv)
+    # Not run_ended (the persona's patience): the run is already closed,
+    # for example aborted by the swarm runner. Reporting it "abandoned"
+    # would overwrite that outcome with a persona quit.
+    STATE.error_overrides["/steps"] = (409, {"error": "conflict",
+                                             "message": "run already aborted; steps are no longer accepted."})
+    result = call_tool(srv, "log_step", {"run_id": V2_RUN_ID, "step": v2_step(1)})
+    text = result_text(result)
+    expect(result.get("isError") is True, "the step was not taken")
+    contains(text, "run already aborted; steps are no longer accepted.", "the backend's reason")
+    contains(text, "do NOT call report_result", "no report for a closed run")
+    expect('status "abandoned"' not in text, f"never told to report abandoned: {text}")
+
+
+def case_57f_dropped_buffered_steps_are_named(srv: ServerProc, data_dir: Path) -> None:
+    write_auth(data_dir)
+    start_v2_run(srv)
+    STATE.delays["/steps"] = 3
+    call_tool(srv, "log_step", {"run_id": V2_RUN_ID, "step": v2_step(1)})
+    time.sleep(2.2)
+    STATE.delays.clear()
+    # The buffered step is refused when it finally goes out; the actor must
+    # hear about it, not lose it silently.
+    STATE.once_overrides["/steps"] = (400, {"error": "bad_request", "message": "session_id does not match this run"})
+    text = result_text(call_tool(srv, "log_step", {"run_id": V2_RUN_ID, "step": v2_step(2, progress=40)}))
+    contains(text, "Buffered step 1 was refused by the backend (session_id does not match this run)", "named")
+    expect(STATE.last_for("/steps")["body"]["step"]["seq"] == 2, "the new step still goes out")
+    expect(not (data_dir / "runs" / f"{V2_RUN_ID}.steps.jsonl").exists(), "a refused step is not resent")
+    # The same at report time.
+    STATE.delays["/steps"] = 3
+    call_tool(srv, "log_step", {"run_id": V2_RUN_ID, "step": v2_step(3, progress=60)})
+    time.sleep(2.2)
+    STATE.delays.clear()
+    STATE.once_overrides["/steps"] = (400, {"error": "bad_request", "message": "session_id does not match this run"})
+    text = result_text(call_tool(srv, "report_result", {"run_id": V2_RUN_ID, "session_id": "plugin-v2-session",
+                                                        "status": "completed", "steps": [],
+                                                        "feedback": {"verdict": "pass", "summary": "ok"}}))
+    contains(text, "Buffered step 3 was refused by the backend (session_id does not match this run)", "named in the report")
+
+
+def case_57g_rejected_login_is_not_a_slow_backend(srv: ServerProc, data_dir: Path) -> None:
+    write_auth(data_dir)
+    start_v2_run(srv)
+    STATE.error_overrides["/steps"] = (401, {"error": "Invalid token", "message": "Token validation failed"})
+    result = call_tool(srv, "log_step", {"run_id": V2_RUN_ID, "step": v2_step(1)})
+    text = result_text(result)
+    expect(not result.get("isError"), "the step is kept, so the actor goes on")
+    contains(text, "Step 1 saved on this machine", "kept")
+    contains(text, "Token validation failed", "the backend's reason")
+    contains(text, "/archetype:setup", "how the login is renewed")
+    expect("slow" not in text, f"a refused login is not a slow backend: {text}")
+    STATE.error_overrides["/steps"] = (503, {"error": "unavailable", "message": "maintenance window"})
+    text = result_text(call_tool(srv, "log_step", {"run_id": V2_RUN_ID, "step": v2_step(2, progress=40)}))
+    contains(text, "Step 2 saved on this machine", "kept")
+    contains(text, "maintenance window", "why the backend did not take it")
+
+
 def case_58_report_abandoned_with_actions_and_video(srv: ServerProc, data_dir: Path) -> None:
     write_auth(data_dir)
     result = call_tool(srv, "start_run", {"run_id": "queued0005", "browser": "archetype-browser-2"})
@@ -3034,6 +3093,9 @@ CASES = [
     ("log_step local give up while the backend is down", case_57b_local_give_up_when_backend_down, STEP_FAST),
     ("log_step relays a rejected step without keeping it", case_57c_rejected_step),
     ("log_step refuses an invalid record before buffering it", case_57d_invalid_step_refused_before_buffering, STEP_FAST),
+    ("log_step on a closed run: stop, no second report", case_57e_closed_run_is_not_reported_again),
+    ("buffered steps the backend refuses are named, not lost silently", case_57f_dropped_buffered_steps_are_named, STEP_FAST),
+    ("log_step says a refused login is not a slow backend", case_57g_rejected_login_is_not_a_slow_backend),
     ("report_result abandoned with raw actions, browser and video", case_58_report_abandoned_with_actions_and_video),
     ("log_step answer stays under 120 words", case_59_step_answer_stays_short),
     ("create_study: camelCase body, defaults, table, field errors", case_60_create_study),
