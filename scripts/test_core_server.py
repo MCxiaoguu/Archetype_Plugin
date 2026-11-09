@@ -2729,6 +2729,61 @@ def case_58_report_abandoned_with_actions_and_video(srv: ServerProc, data_dir: P
     expect(STATE.last_for("/results")["body"]["status"] == "abandoned", "abandoned kept without local state")
 
 
+# A browser the plugin's servers can find (any existing file passes as
+# Chrome), and one where they find none: the recorded engine label comes
+# from the same detection the servers launch with.
+WITH_BROWSER = {"ARCHETYPE_CHROME_PATHS": sys.executable}
+NO_BROWSER = {"ARCHETYPE_CHROME_PATHS": "", "PLAYWRIGHT_BROWSERS_PATH": "/nonexistent-archetype-browsers"}
+
+
+def case_58b_unknown_engine_is_an_error_not_a_guess(srv: ServerProc, data_dir: Path) -> None:
+    write_auth(data_dir)
+    # No engine to name: claiming on a plugin browser would record a label
+    # nobody checked ("chrome channel" used to be guessed).
+    result = call_tool(srv, "start_run", {"run_id": "queued0007", "browser": "archetype-browser-2"})
+    text = result_text(result)
+    expect(result.get("isError") is True, f"refused: {text}")
+    contains(text, "No browser for the plugin's Playwright servers", "the detection's own reason")
+    expect(count_requests("/claim") == 0, "nothing claimed")
+    # A browser that needs no engine detection still works, and a report
+    # whose actions name a plugin browser keeps its results: the config
+    # recorded at the claim goes, with a note saying why.
+    expect(not call_tool(srv, "start_run", {"run_id": "queued0008", "browser": "chrome"}).get("isError"), "chrome claim")
+    action = {"ts": "2026-11-03T10:00:00.000Z", "tool_name": "mcp__plugin_archetype_archetype-browser-2__browser_click",
+              "tool_input": {}, "result_ok": True, "error": None}
+    (data_dir / "runs" / "queued0008.actions.jsonl").write_text(json.dumps(action) + "\n")
+    result = call_tool(srv, "report_result", {"run_id": "queued0008", "session_id": "plugin-v2-session",
+                                               "status": "completed", "steps": [], "feedback": {"verdict": "pass"}})
+    expect(not result.get("isError"), f"the results are stored: {result_text(result)}")
+    contains(result_text(result), "No browser for the plugin's Playwright servers", "the note says why")
+    expect(STATE.last_for("/results")["body"]["browser"]["engine"] == "chrome", "the config recorded at claim")
+
+
+def case_58c_broken_pin_is_an_error(srv: ServerProc, data_dir: Path) -> None:
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("core_pin", SERVER)
+    core = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(core)
+    old = dict(os.environ)
+    os.environ.update(WITH_BROWSER)
+    try:
+        good = core.browser_config("archetype-browser-3")
+        expect(good["user_agent"] and good["viewport"] and "chrome channel" in good["version"], f"pinned config: {good}")
+        for content in ("{not json", json.dumps({"package": "@playwright/mcp@0.0.84"})):
+            core.PINNED_FILE = data_dir / "pinned.json"
+            core.PINNED_FILE.write_text(content)
+            try:
+                got = core.browser_config("archetype-browser-3")
+            except core.BrowserConfigError as exc:
+                expect("pinned.json" in str(exc), f"names the file: {exc}")
+            else:
+                raise CaseFail(f"a broken pin must not give a config: {got}")
+        expect(core.browser_config("chrome")["engine"] == "chrome", "chrome needs no pin")
+    finally:
+        os.environ.clear()
+        os.environ.update(old)
+
+
 def case_59_step_answer_stays_short(srv: ServerProc, data_dir: Path) -> None:
     write_auth(data_dir)
     start_v2_run(srv)
@@ -3255,7 +3310,9 @@ CASES = [
     ("log_step on a closed run: stop, no second report", case_57e_closed_run_is_not_reported_again),
     ("buffered steps the backend refuses are named, not lost silently", case_57f_dropped_buffered_steps_are_named, STEP_FAST),
     ("log_step says a refused login is not a slow backend", case_57g_rejected_login_is_not_a_slow_backend),
-    ("report_result abandoned with raw actions, browser and video", case_58_report_abandoned_with_actions_and_video),
+    ("report_result abandoned with raw actions, browser and video", case_58_report_abandoned_with_actions_and_video, WITH_BROWSER),
+    ("no browser engine to name: start_run refuses, report_result notes it", case_58b_unknown_engine_is_an_error_not_a_guess, NO_BROWSER),
+    ("a broken browser pin is an error, not an empty config", case_58c_broken_pin_is_an_error),
     ("log_step answer stays under 120 words", case_59_step_answer_stays_short),
     ("create_study: camelCase body, defaults, table, field errors", case_60_create_study),
     ("create_study with study_id patches and confirms checks", case_60b_update_study_confirms_checks),

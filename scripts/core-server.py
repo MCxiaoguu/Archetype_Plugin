@@ -1166,16 +1166,29 @@ BROWSER_PROFILES: dict[str, dict[str, Any]] = {
 }
 
 
+PINNED_FILE = Path(__file__).resolve().parent.parent / "browser" / "pinned.json"
+# What the plugin's servers launch with (browser-server.py) and the version
+# a run records: none of it is optional.
+_PINNED_KEYS = ("package", "playwright_version", "user_agent", "viewport")
+
+
+class BrowserConfigError(RuntimeError):
+    """The config of a plugin browser cannot be stated. It is never guessed:
+    a study compares only runs with the same config."""
+
+
 def _pinned_browser() -> dict[str, Any]:
-    """browser/pinned.json: the one source of the plugin browsers' settings."""
+    """browser/pinned.json: the one source of the plugin browsers' settings.
+    Read when a config is needed, so a broken install fails the run that
+    uses a plugin browser, not every tool of this server."""
     try:
-        data = json.loads((Path(__file__).resolve().parent.parent / "browser" / "pinned.json").read_text())
-        return data if isinstance(data, dict) else {}
-    except Exception:
-        return {}
-
-
-PINNED_BROWSER = _pinned_browser()
+        data = json.loads(PINNED_FILE.read_text())
+    except (OSError, ValueError) as exc:
+        raise BrowserConfigError(f"{PINNED_FILE} is unreadable ({exc}); reinstall the plugin.") from None
+    missing = [k for k in _PINNED_KEYS if not (isinstance(data, dict) and data.get(k))]
+    if missing:
+        raise BrowserConfigError(f"{PINNED_FILE} has no {', '.join(missing)}; reinstall the plugin.")
+    return data
 
 
 def _browser_name_from_tool(tool_name: str) -> str | None:
@@ -1192,18 +1205,25 @@ def _browser_name_from_tool(tool_name: str) -> str | None:
 
 def _browser_engine_label() -> str:
     """The engine the plugin's servers launch here (browser_engine.py):
-    "chrome channel", or "bundled chromium <revision>" without Chrome."""
+    "chrome channel", or "bundled chromium <revision>" without Chrome.
+    Raises BrowserConfigError when there is none to name."""
+    here = str(Path(__file__).resolve().parent)
+    if here not in sys.path:
+        sys.path.insert(0, here)
     try:
-        sys.path.insert(0, str(Path(__file__).resolve().parent))
         import browser_engine
-
-        return str(browser_engine.pick().get("label") or "no browser installed")
-    except Exception:
-        return "chrome channel"
+    except ImportError as exc:
+        raise BrowserConfigError(f"scripts/browser_engine.py could not be loaded ({exc}); reinstall the plugin.") from None
+    picked = browser_engine.pick()
+    if picked.get("error"):
+        raise BrowserConfigError(str(picked["error"]))
+    return str(picked["label"])
 
 
 def browser_config(name: Any) -> dict[str, Any] | None:
-    """The recorded browser config for a browser name, or None if unknown."""
+    """The recorded browser config for a browser name, or None if unknown.
+    Raises BrowserConfigError for a plugin browser whose pin or engine
+    cannot be read."""
     if isinstance(name, dict):
         return name or None
     if not isinstance(name, str) or not name.strip():
@@ -1217,13 +1237,11 @@ def browser_config(name: Any) -> dict[str, Any] | None:
         # The plugin's own isolated Playwright servers: headless for
         # archetype-browser-N, headed for archetype-watch-N, all on the
         # pinned package, user agent and viewport (browser/pinned.json).
-        pinned = PINNED_BROWSER
-        version = pinned.get("package")
-        if version and pinned.get("playwright_version"):
-            version = f"{version} (playwright {pinned['playwright_version']}, {_browser_engine_label()})"
+        pinned = _pinned_browser()
+        version = f"{pinned['package']} (playwright {pinned['playwright_version']}, {_browser_engine_label()})"
         profile = dict(
             BROWSER_PROFILES["playwright"], headless=match.group(1) == "browser",
-            version=version, user_agent=pinned.get("user_agent"), viewport=pinned.get("viewport"),
+            version=version, user_agent=pinned["user_agent"], viewport=pinned["viewport"],
         )
     # Unknown values are left out rather than sent as null: the claim route
     # answers 400 for a malformed browser config.
@@ -1598,13 +1616,12 @@ def _deadline_advice(pool: bool) -> str:
     return advice
 
 
-def handle_claim_run(arguments: dict[str, Any]) -> dict[str, Any]:
+def handle_claim_run(arguments: dict[str, Any], browser: dict[str, Any] | None) -> dict[str, Any]:
     """start_run(run_id=...): claim a run a study created in advance."""
     run_id = arguments.get("run_id")
     bad = _bad_run_id(run_id)
     if bad:
         return bad
-    browser = browser_config(arguments.get("browser"))
     claim_body: dict[str, Any] = {"browser": browser} if browser else {}
     result = authed_call(
         lambda token: backend_post(
@@ -1650,7 +1667,14 @@ def handle_claim_run(arguments: dict[str, Any]) -> dict[str, Any]:
 
 def handle_start_run(arguments: dict[str, Any]) -> dict[str, Any]:
     name = arguments.get("browser")
-    if name not in (None, "") and browser_config(name) is None:
+    try:
+        browser = browser_config(name)
+    except BrowserConfigError as exc:
+        return tool_text(
+            f"The config of browser {name} cannot be recorded: {exc} Nothing was started.",
+            is_error=True,
+        )
+    if name not in (None, "") and browser is None:
         # Unknown, the run would be recorded with no browser config and a
         # study could no longer tell which of its runs compare.
         return tool_text(
@@ -1661,7 +1685,7 @@ def handle_start_run(arguments: dict[str, Any]) -> dict[str, Any]:
             is_error=True,
         )
     if arguments.get("run_id"):
-        return handle_claim_run(arguments)
+        return handle_claim_run(arguments, browser)
     if not arguments.get("url") and not arguments.get("feature_id"):
         return tool_text(
             "start_run needs a url, or a feature_id whose feature has a url "
@@ -1714,7 +1738,7 @@ def handle_start_run(arguments: dict[str, Any]) -> dict[str, Any]:
         )
 
     record_run_start(resp, arguments)
-    save_run_state(resp, browser_config(arguments.get("browser")))
+    save_run_state(resp, browser)
     return tool_text(_render_run(resp, preconditions))
 
 
@@ -2431,10 +2455,17 @@ def handle_report_result(arguments: dict[str, Any]) -> dict[str, Any]:
 
     if version >= 2:
         used = _browser_used(actions)
-        browser = (
-            browser_config(used) or state.get("browser")
-            or browser_config(arguments.get("browser"))
-        )
+        try:
+            browser = (
+                browser_config(used) or state.get("browser")
+                or browser_config(arguments.get("browser"))
+            )
+        except BrowserConfigError as exc:
+            # The results must still be stored: the config recorded when the
+            # run started goes, and the note says why it was not recomputed.
+            browser = state.get("browser")
+            notes.append(f"the browser config was not recomputed ({exc}); "
+                         + ("the one recorded at the start was sent" if browser else "none was sent"))
         if browser:
             body["browser"] = browser
         body["rawActions"] = actions
