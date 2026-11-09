@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -145,6 +147,48 @@ REPORT_RESPONSE = {
     "counts": {"scenarios": {"pass": 1, "fail": 0, "blocked": 1, "not_reported": 0},
                "findingsBySeverity": {"critical": 1, "high": 0, "medium": 0, "low": 1}},
     "analyticsReady": False,
+}
+
+# Protocol v2 briefing (addendum section 2): behavior block, success
+# criterion and checks, protocol_version 2, stepsEndpoint.
+V2_RUN_ID = "5a5a0a1b2c3d4e5f60718299"
+RUN_V2_RESPONSE = dict(
+    RUN_RESPONSE,
+    runId=V2_RUN_ID,
+    sessionId="plugin-v2-session",
+    instructions=dict(
+        RUN_RESPONSE["instructions"],
+        protocol_version=2,
+        behavior={
+            "rules": [
+                "You give up after 3 steps in a row that get you nowhere.",
+                "You never enter card details before you have seen the refund terms.",
+                "You read only the first screen of a page.",
+            ],
+            "patience_budget": {"max_unproductive_steps": 3, "max_steps": 16, "max_waits": 1},
+            "trust_gates": {"card": "share_after_terms", "phone": "refuse"},
+            "reading_policy": {"viewport_reads_per_page": 1},
+        },
+        success={
+            "criterion": "The account shows as created on the welcome page",
+            "checks": [
+                {"type": "url_matches", "value": "*/welcome*", "required": True},
+                {"type": "text_visible", "value": "Welcome aboard", "required": False},
+            ],
+        },
+    ),
+    reporting=dict(RUN_RESPONSE["reporting"], stepsEndpoint=f"/api/plugin/runs/{V2_RUN_ID}/steps"),
+)
+
+STEPS_RESPONSE = {
+    "ok": True,
+    "state": {"seq": 1, "maxSteps": 16, "unproductive": 0, "maxUnproductiveSteps": 3,
+              "progress": 20, "sentimentTrend": "steady", "reviewGiveUp": False,
+              "ended": False, "endedReason": None},
+    "recall": [{"text": "I once abandoned a signup that asked for my phone first", "source": "seed belief"}],
+    "activeRules": ["You give up after 3 steps in a row that get you nowhere.",
+                    "You refuse to give a phone number."],
+    "note": None,
 }
 
 FEATURES_RESPONSE = {
@@ -397,6 +441,12 @@ class Handler(BaseHTTPRequestHandler):
             return 200, POOL_PATCH_RESPONSE
         if path.startswith("/api/persona/pools"):
             return 200, POOLS_RESPONSE
+        if path.endswith("/steps") and method == "POST":
+            seq = ((body or {}).get("step") or {}).get("seq") or 1
+            return 200, dict(STEPS_RESPONSE, state=dict(STEPS_RESPONSE["state"], seq=seq))
+        if path.endswith("/claim") and method == "POST":
+            run_id = path.split("/")[-2]
+            return 200, dict(RUN_V2_RESPONSE, runId=run_id)
         if path.endswith("/results"):
             return 200, RESULTS_RESPONSE
         if path.startswith("/api/plugin/runs") and method == "POST":
@@ -440,7 +490,10 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(raw)))
         self.end_headers()
-        self.wfile.write(raw)
+        try:
+            self.wfile.write(raw)
+        except (BrokenPipeError, ConnectionResetError):
+            pass  # the client gave up first (deadline cases): expected
 
     def do_POST(self):  # noqa: N802
         self._dispatch("POST")
@@ -696,11 +749,15 @@ def case_1_tools_list(srv: ServerProc, data_dir: Path) -> None:
                 "create_pool",
                 "create_feature",
                 "logout",
+                "log_step",
             ]
         ),
-        f"tools/list should show exactly the 10 tools, got {names}",
+        f"tools/list should show exactly the 11 tools, got {names}",
     )
     report = next(t for t in tools if t["name"] == "report_result")
+    quit_enum = report["inputSchema"]["properties"]["feedback"]["properties"]["outcome"]["properties"]["quit_reason"]["enum"]
+    expect(quit_enum == ["price_barrier", "trust_refused", "confusion", "feature_not_found", "goal_completed",
+                         "frustration", "technical_error", "distraction", "other"], f"the backend's quit reasons, got {quit_enum}")
     finding = report["inputSchema"]["properties"]["feedback"]["properties"]["findings"]["items"]
     evidence = finding["properties"]["evidence"]
     expect(evidence["type"] == "object", f"evidence must be an object, got {evidence}")
@@ -1786,9 +1843,10 @@ PENDING = (400, {"error": "authorization_pending", "error_description": "not yet
 LOGIN_FAST = {"ARCHETYPE_ELICIT_TIMEOUT": "1", "ARCHETYPE_APPROVAL_POLL_WINDOW": "1"}
 
 
-def count_requests(needle: str) -> int:
+def count_requests(needle: str, method: str | None = None) -> int:
     with STATE.lock:
-        return sum(1 for r in STATE.requests if needle in r["path"])
+        return sum(1 for r in STATE.requests
+                   if needle in r["path"] and (method is None or r["method"] == method))
 
 
 def case_34_login_modal_leads_with_code_and_url(srv: ServerProc, data_dir: Path) -> None:
@@ -1978,8 +2036,360 @@ def case_43_no_browser_env(srv: ServerProc, data_dir: Path) -> None:
         own.close()
 
 
+
+# ---------------------------------------------------------------------------
+# Protocol v2: log_step, claim, abandonment, raw actions (plan 5.4, 5.5)
+# ---------------------------------------------------------------------------
+
+STEP_FAST = {"ARCHETYPE_STEP_TIMEOUT": "1"}
+
+
+def requests_for(needle: str) -> list[dict]:
+    with STATE.lock:
+        return [r for r in STATE.requests if needle in r["path"]]
+
+
+def v2_step(seq: int, **after) -> dict:
+    step = {
+        "seq": seq,
+        "scenario_id": "SC-1",
+        "observe": {"page_type": "landing", "summary": "The home page.", "stood_out": "A big button",
+                    "visible_text_excerpt": "Start free trial", "url": "http://localhost:8321/", "title": "Lumina"},
+        "recall": {"applied": None},
+        "decide": {"monologue": "I want to try it. The button is right there.", "intent": "start a trial",
+                   "action_text": "click Start free trial", "confidence": 4},
+        "act": {"target": "button Start free trial", "result": "ok"},
+        "after": {"friction": {"level": "none"}, "sentiment": 1, "progress": 20, "hesitation": False},
+    }
+    step["after"].update(after)
+    return step
+
+
+def start_v2_run(srv: ServerProc) -> str:
+    STATE.error_overrides["/api/plugin/runs"] = (201, RUN_V2_RESPONSE)
+    text = result_text(call_tool(srv, "start_run", {"goal": "test signup", "url": "http://localhost:8321",
+                                                     "browser": "chrome"}))
+    del STATE.error_overrides["/api/plugin/runs"]
+    return text
+
+
+def state_words(text: str) -> int:
+    """Words outside the fenced STATE block."""
+    expect(text.startswith("```\nSTATE step "), f"answer starts with the fenced STATE line: {text[:60]!r}")
+    rest = text.split("```", 2)[2]
+    return len(rest.split())
+
+
+def case_50_start_run_v2_briefing(srv: ServerProc, data_dir: Path) -> None:
+    write_auth(data_dir)
+    text = start_v2_run(srv)
+    contains(text, "HOW YOU BEHAVE\n- You give up after 3 steps", "behavior rules rendered")
+    contains(text, "You never enter card details before you have seen the refund terms.", "every rule")
+    contains(text, "at most 3 steps in a row that get you nowhere, and 16 steps in all", "patience budget")
+    contains(text, "They override the scenario steps", "rules are hard constraints")
+    contains(text, "Done when: The account shows as created on the welcome page", "criterion under scenarios")
+    contains(text, "the address matches: */welcome*", "required check in words")
+    contains(text, "you can read the text: Welcome aboard (optional)", "optional check marked")
+    expect(text.index("Done when:") > text.index("YOUR SCENARIOS"), "criterion sits under the scenarios header")
+    contains(text, "PROTOCOL 2: after EVERY browser action, call log_step", "per step instruction")
+    contains(text, "status (completed|failed|aborted|abandoned)", "abandoned in the contract")
+    contains(text, "outcome{completed true|false, in_their_words, and only when completed is false: quit_reason", "outcome in the contract")
+    contains(text, "price_barrier|trust_refused|confusion", "trust_refused is offered")
+    contains(text, "Choose trust_refused when you leave because you do not trust the site", "when to choose it")
+    contains(text, "Choose price_barrier only when the price itself is the objection", "price stays price")
+    contains(text, "close the browser", "close before report")
+    expect("PROTOCOL 1" not in text, "no v1 fallback text on a v2 run")
+    expect("very high impatience" not in text, "rules replace the trait phrases")
+    state = json.loads((data_dir / "runs" / f"{V2_RUN_ID}.state.json").read_text())
+    expect(state["protocol_version"] == 2 and state["max_unproductive"] == 3 and state["max_steps"] == 16,
+           f"state remembers protocol and budget, got {state}")
+    expect(state["browser"]["engine"] == "chrome" and state["browser"]["profile"] == "real", "browser config kept")
+    expect(state["criterion"] == "The account shows as created on the welcome page", "criterion kept")
+
+
+def case_51_old_backend_fallback(srv: ServerProc, data_dir: Path) -> None:
+    write_auth(data_dir)
+    text = result_text(call_tool(srv, "start_run", {"goal": "test signup", "url": "http://localhost:8321"}))
+    contains(text, "HOW YOU BEHAVE\nYou are a person with high impatience, moderate skepticism", "traits as words")
+    contains(text, "PROTOCOL 1: this backend predates live step logging", "v1 fallback said")
+    contains(text, "status (completed|failed|aborted), duration_seconds, steps (seq,", "v1 contract unchanged")
+    expect("abandoned" not in text, "no abandonment on an old backend")
+    run_id = RUN_RESPONSE["runId"]
+    answer = result_text(call_tool(srv, "log_step", {"run_id": run_id, "step": v2_step(1)}))
+    expect(count_requests("/steps") == 0, "an old backend gets no step posts")
+    contains(answer, "this backend predates live steps", "local only, said so")
+    call_tool(srv, "report_result", {"run_id": run_id, "session_id": RUN_RESPONSE["sessionId"],
+                                      "status": "abandoned", "steps": [],
+                                      "feedback": {"verdict": "fail", "summary": "gave up",
+                                                   "outcome": {"completed": False, "quit_reason": "frustration"}}})
+    body = STATE.last_for("/results")["body"]
+    expect(body["status"] == "failed", f"abandoned maps to failed for an old backend, got {body['status']}")
+    expect(body["feedback"]["outcome"]["quit_reason"] == "frustration", "the outcome is kept")
+    step = body["steps"][0]
+    expect(step["actionText"] == "click Start free trial" and step["observationPageType"] == "landing"
+           and step["success"] is True and step["narration"].startswith("I want to try it"),
+           f"logged steps reach an old backend in the v1 shape, got {step}")
+    expect("rawActions" not in body and "browser" not in body, "no v2 fields for an old backend")
+
+
+def case_52_claim(srv: ServerProc, data_dir: Path) -> None:
+    write_auth(data_dir)
+    result = call_tool(srv, "start_run", {"run_id": "queued0001", "browser": "chrome"})
+    expect(not result.get("isError"), f"claim succeeds: {result_text(result)[:200]}")
+    req = STATE.last_for("/claim")
+    expect(req and req["method"] == "POST" and req["path"] == "/api/plugin/runs/queued0001/claim",
+           f"claim POSTs to the run, got {req and req['path']}")
+    expect(req["body"]["browser"]["engine"] == "chrome" and req["body"]["browser"]["profile"] == "real",
+           f"claim carries the browser config, got {req['body']}")
+    expect(count_requests("/api/plugin/runs", "POST") == 1, "no new run is created in claim mode")
+    text = result_text(result)
+    contains(text, "runId: queued0001", "the claimed run id is the one to report")
+    contains(text, "HOW YOU BEHAVE", "claimed briefing rendered like a fresh one")
+    expect((data_dir / "runs" / "queued0001.state.json").exists(), "claimed run state saved")
+    bad = call_tool(srv, "start_run", {"run_id": "../features"})
+    expect(bad.get("isError") and count_requests("/claim") == 1, "a bad run id never reaches the backend")
+
+
+def case_52b_claimed_briefing_from_a_study(srv: ServerProc, data_dir: Path) -> None:
+    write_auth(data_dir)
+    instructions = dict(RUN_V2_RESPONSE["instructions"], preconditions=["Has an account"], archetype={
+        "archetypeId": "a1", "name": "Impatient founder", "role": "variant", "variedFactors": ["patience"],
+        "whatIsDifferent": "Last month I closed a sign up halfway because a page took too long.",
+        "seedBeliefs": ["If something does not work in two tries, I close the tab."],
+        "factorStatements": ["Trust and willingness to share: 3 of 5, the usual level for founders."]})
+    STATE.error_overrides["/claim"] = (200, dict(RUN_V2_RESPONSE, runId="queued0009", instructions=instructions,
+                                                 study={"studyId": "study-7", "wave": 1, "repeatIndex": 0}))
+    result = call_tool(srv, "start_run", {"run_id": "queued0009", "browser": "chrome"})
+    text = result_text(result)
+    contains(text, "WHO YOU ARE TODAY\nLast month I closed a sign up halfway", "what is different")
+    contains(text, "What you believe:\n- If something does not work in two tries", "seed beliefs")
+    contains(text, "Where you stand:\n- Trust and willingness to share: 3 of 5", "factor statements")
+    expect("Impatient founder" not in text and "variant" not in text, "no archetype name or role for the actor")
+    contains(text, "You arrive with:\n- Has an account", "the study's preconditions")
+    state = json.loads((data_dir / "runs" / "queued0009.state.json").read_text())
+    expect(state["study_id"] == "study-7", f"study id from the study block: {state['study_id']}")
+    sent = STATE.last_for("/claim")["body"]["browser"]
+    expect(None not in sent.values() and sent["engine"] == "chrome", f"no null browser fields: {sent}")
+
+
+def case_53_claim_conflict(srv: ServerProc, data_dir: Path) -> None:
+    write_auth(data_dir)
+    STATE.error_overrides["/claim"] = (409, {"error": "run_not_queued", "message": "Run queued0002 is already running."})
+    result = call_tool(srv, "start_run", {"run_id": "queued0002"})
+    expect(result.get("isError") is True, "409 is an error")
+    text = result_text(result)
+    contains(text, "cannot be claimed: Run queued0002 is already running.", "backend reason relayed")
+    contains(text, "Do NOT act on it", "the actor is told to stop")
+    expect(not (data_dir / "runs" / "queued0002.state.json").exists(), "no state for an unclaimed run")
+    STATE.error_overrides["/claim"] = (404, {"error": "not_found", "message": "no route"})
+    contains(result_text(call_tool(srv, "start_run", {"run_id": "queued0003"})),
+             "predates behavioral studies", "a backend without claim is named")
+
+
+def case_54_log_step_success(srv: ServerProc, data_dir: Path) -> None:
+    write_auth(data_dir)
+    start_v2_run(srv)
+    result = call_tool(srv, "log_step", {"run_id": V2_RUN_ID, "step": v2_step(1)})
+    expect(not result.get("isError"), f"log_step ok: {result_text(result)}")
+    req = STATE.last_for("/steps")
+    expect(req["path"] == f"/api/plugin/runs/{V2_RUN_ID}/steps", f"posts to the run, got {req['path']}")
+    sent = req["body"]
+    expect(sent["session_id"] == "plugin-v2-session", "session id from start_run")
+    step = sent["step"]
+    expect(step["decide"]["action_text"] == "click Start free trial", "the record is sent as given (snake_case)")
+    expect(re.match(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$", step["client_ts"]), f"client_ts ISO, got {step['client_ts']}")
+    expect(isinstance(step["elapsed_s"], (int, float)) and step["elapsed_s"] >= 0, "elapsed_s since start_run")
+    text = result_text(result)
+    contains(text, "STATE step 1 of max 16 | unproductive 0 of 3 | progress 20 | sentiment trend: steady", "state line")
+    contains(text, "ACTIVE RULES:\n- You give up after 3 steps", "backend rules rendered")
+    contains(text, "- You refuse to give a phone number.", "every active rule")
+    contains(text, "RECALL:\n- I once abandoned a signup that asked for my phone first (seed belief)", "recall with source")
+    expect("NOTE:" not in text, "no note when nothing triggered")
+    expect(state_words(text) < 120, "under 120 words")
+    # A step without seq gets the next one.
+    step2 = v2_step(2)
+    del step2["seq"]
+    call_tool(srv, "log_step", {"run_id": V2_RUN_ID, "step": step2})
+    expect(STATE.last_for("/steps")["body"]["step"]["seq"] == 2, "missing seq is filled in")
+
+
+def case_55_log_step_buffers_on_timeout(srv: ServerProc, data_dir: Path) -> None:
+    write_auth(data_dir)
+    start_v2_run(srv)
+    STATE.delays["/steps"] = 3
+    began = time.monotonic()
+    result = call_tool(srv, "log_step", {"run_id": V2_RUN_ID, "step": v2_step(1)})
+    took = time.monotonic() - began
+    expect(took < 2.5, f"a slow backend never blocks the actor (took {took:.1f} s)")
+    text = result_text(result)
+    expect(not result.get("isError"), "buffering is not an error")
+    contains(text, "Step 1 saved on this machine", "the actor is told the step is kept")
+    contains(text, "STATE step 1 of max 16 | unproductive 0 of 3 | progress 20", "local state answers")
+    contains(text, "ACTIVE RULES:\n- You give up after 3 steps", "local rules come from the briefing")
+    buffered = (data_dir / "runs" / f"{V2_RUN_ID}.steps.jsonl").read_text().splitlines()
+    expect(len(buffered) == 1 and json.loads(buffered[0])["seq"] == 1, f"one buffered step, got {buffered}")
+    time.sleep(2.2)  # let the stub finish the slow answer
+    STATE.delays.clear()
+    before = count_requests("/steps")
+    text = result_text(call_tool(srv, "log_step", {"run_id": V2_RUN_ID, "step": v2_step(2, progress=40)}))
+    posts = requests_for("/steps")[before:]
+    expect([p["body"]["step"]["seq"] for p in posts] == [1, 2], f"buffer first, then the new step: {[p['body']['step']['seq'] for p in posts]}")
+    expect(not (data_dir / "runs" / f"{V2_RUN_ID}.steps.jsonl").exists(), "buffer emptied")
+    expect("saved on this machine" not in text, "no buffering note once delivered")
+
+
+def case_56_report_flushes_buffer_first(srv: ServerProc, data_dir: Path) -> None:
+    write_auth(data_dir)
+    start_v2_run(srv)
+    STATE.delays["/steps"] = 3
+    call_tool(srv, "log_step", {"run_id": V2_RUN_ID, "step": v2_step(1)})
+    time.sleep(2.2)
+    STATE.delays.clear()
+    mark = len(STATE.requests)
+    result = call_tool(srv, "report_result", {"run_id": V2_RUN_ID, "session_id": "plugin-v2-session",
+                                               "status": "completed", "steps": [],
+                                               "feedback": {"verdict": "pass", "summary": "ok",
+                                                            "outcome": {"completed": True, "in_their_words": "Easy.",
+                                                                        "quit_reason": "other", "abandoned_at_step": 0}}})
+    order = [r["path"].rsplit("/", 1)[-1] for r in STATE.requests[mark:]]
+    expect(order[:2] == ["steps", "results"], f"flush before results, got {order}")
+    body = STATE.last_for("/results")["body"]
+    expect(body["steps"] == [], f"a flushed step is not sent twice, got {body['steps']}")
+    expect(body["feedback"]["outcome"] == {"completed": True, "in_their_words": "Easy."},
+           f"a completed outcome carries no quit placeholders: {body['feedback']['outcome']}")
+    expect(body["browser"]["engine"] == "chrome", "browser config from start_run")
+    expect(body["rawActions"] == [], "rawActions always sent on v2, even empty")
+    contains(result_text(result), "1 buffered step(s) sent first", "the flush is reported")
+    expect(not (data_dir / "runs" / f"{V2_RUN_ID}.state.json").exists(), "run files cleaned after a stored report")
+
+
+def case_56b_unsent_steps_ride_with_results(srv: ServerProc, data_dir: Path) -> None:
+    write_auth(data_dir)
+    start_v2_run(srv)
+    STATE.error_overrides["/steps"] = (503, {"error": "unavailable", "message": "down"})
+    call_tool(srv, "log_step", {"run_id": V2_RUN_ID, "step": v2_step(1)})
+    call_tool(srv, "log_step", {"run_id": V2_RUN_ID, "step": v2_step(2, progress=30)})
+    call_tool(srv, "report_result", {"run_id": V2_RUN_ID, "session_id": "plugin-v2-session",
+                                      "status": "completed", "steps": [], "feedback": {"verdict": "pass"}})
+    steps = STATE.last_for("/results")["body"]["steps"]
+    expect([s["seq"] for s in steps] == [1, 2], f"both unsent steps ride along, got {steps}")
+    expect(steps[0]["actionText"] == "click Start free trial" and steps[0]["protocolV2"]["decide"]["intent"] == "start a trial",
+           "v1 fields plus the full v2 record")
+
+
+def case_57_give_up_note(srv: ServerProc, data_dir: Path) -> None:
+    write_auth(data_dir)
+    start_v2_run(srv)
+    STATE.error_overrides["/steps"] = (200, dict(STEPS_RESPONSE, state=dict(
+        STEPS_RESPONSE["state"], seq=4, unproductive=3, reviewGiveUp=True)))
+    text = result_text(call_tool(srv, "log_step", {"run_id": V2_RUN_ID, "step": v2_step(4)}))
+    contains(text, "NOTE: Your patience budget is exhausted: decide now.", "default give up note")
+    contains(text, 'toward "The account shows as created on the welcome page"', "names the criterion")
+    contains(text, 'status "abandoned"', "says how to abandon")
+    STATE.error_overrides["/steps"] = (200, dict(STEPS_RESPONSE, note="The backend says: decide now."))
+    contains(result_text(call_tool(srv, "log_step", {"run_id": V2_RUN_ID, "step": v2_step(5)})),
+             "NOTE: The backend says: decide now.", "a backend note wins")
+    STATE.error_overrides["/steps"] = (409, {"error": "run_ended", "message": "patience budget exhausted twice"})
+    text = result_text(call_tool(srv, "log_step", {"run_id": V2_RUN_ID, "step": v2_step(6)}))
+    contains(text, "This run has ended (patience budget exhausted twice)", "ended run said")
+    ended_note = "Your patience ran out a second time, so this run is over: report abandoned."
+    STATE.error_overrides["/steps"] = (409, {"error": "run_ended", "note": ended_note, "state": dict(
+        STEPS_RESPONSE["state"], seq=7, ended=True, endedReason="patience_exhausted_twice")})
+    text = result_text(call_tool(srv, "log_step", {"run_id": V2_RUN_ID, "step": v2_step(7)}))
+    contains(text, f"NOTE: {ended_note}", "the backend's own note on a 409")
+    contains(text, "STATE step 7 of max 16", "the backend's state on a 409")
+    STATE.error_overrides["/steps"] = (200, dict(STEPS_RESPONSE, note="Stop now and report abandoned.", state=dict(
+        STEPS_RESPONSE["state"], seq=4, ended=True, endedReason="patience_exhausted_twice")))
+    text = result_text(call_tool(srv, "log_step", {"run_id": V2_RUN_ID, "step": v2_step(4)}))
+    contains(text, "NOTE: Stop now and report abandoned.", "an ending step keeps the backend note")
+    expect(not (data_dir / "runs" / f"{V2_RUN_ID}.steps.jsonl").exists(), "an ended run buffers nothing")
+
+
+def case_57b_local_give_up_when_backend_down(srv: ServerProc, data_dir: Path) -> None:
+    write_auth(data_dir)
+    start_v2_run(srv)
+    STATE.error_overrides["/steps"] = (502, {"error": "bad_gateway", "message": "proxy"})
+    texts = []
+    for seq in (1, 2, 3):
+        failing = v2_step(seq, progress=0, friction={"level": "major", "type": "form"})
+        failing["act"] = {"target": "button Next", "result": "failed", "error_message": f"timeout {seq}"}
+        texts.append(result_text(call_tool(srv, "log_step", {"run_id": V2_RUN_ID, "step": failing})))
+    contains(texts[1], "unproductive 2 of 3", "local counter grows on failed steps")
+    expect("NOTE:" not in texts[1], "no note before the budget is spent")
+    contains(texts[2], "unproductive 3 of 3", "budget spent")
+    contains(texts[2], "NOTE: Your patience budget is exhausted", "local state still asks to decide")
+    buffered = (data_dir / "runs" / f"{V2_RUN_ID}.steps.jsonl").read_text().splitlines()
+    expect(len(buffered) == 3, f"all three steps kept for later, got {len(buffered)}")
+
+
+def case_57c_rejected_step(srv: ServerProc, data_dir: Path) -> None:
+    write_auth(data_dir)
+    start_v2_run(srv)
+    STATE.error_overrides["/steps"] = (400, {"error": "invalid_step", "message": "after.progress must be 0 to 100."})
+    result = call_tool(srv, "log_step", {"run_id": V2_RUN_ID, "step": v2_step(1, progress=400)})
+    expect(result.get("isError") is True, "a rejected step is the actor's to fix")
+    contains(result_text(result), "after.progress must be 0 to 100.", "reason relayed")
+    expect(not (data_dir / "runs" / f"{V2_RUN_ID}.steps.jsonl").exists(), "not buffered")
+    expect(not (data_dir / "runs" / f"{V2_RUN_ID}.journal.jsonl").exists(), "not journaled")
+    bad = call_tool(srv, "log_step", {"run_id": V2_RUN_ID, "step": "clicked"})
+    expect(bad.get("isError") is True, "a step must be an object")
+
+
+def case_58_report_abandoned_with_actions_and_video(srv: ServerProc, data_dir: Path) -> None:
+    write_auth(data_dir)
+    result = call_tool(srv, "start_run", {"run_id": "queued0005", "browser": "archetype-browser-2"})
+    expect(not result.get("isError"), "claim ok")
+    runs = data_dir / "runs"
+    tool = "mcp__plugin_archetype_archetype-browser-2__browser_click"
+    actions = [{"ts": "2026-11-03T10:00:00.000Z", "agent_id": "a1", "tool_name": tool,
+                "tool_input": {"ref": "e5"}, "result_ok": True, "error": None}] * 3
+    (runs / "queued0005.actions.jsonl").write_text("".join(json.dumps(a) + "\n" for a in actions))
+    videos = data_dir / "browser" / "archetype-browser-2" / "videos"
+    videos.mkdir(parents=True)
+    (videos / "small.webm").write_bytes(b"\x1aE\xdf\xa3" + b"0" * 10)
+    (videos / "page@main.webm").write_bytes(b"\x1aE\xdf\xa3" + b"0" * 5000)
+    old = videos / "old.webm"
+    old.write_bytes(b"0" * 9000)
+    os.utime(old, (time.time() - 3600, time.time() - 3600))
+    feedback = {"verdict": "fail", "summary": "Left at the card form.",
+                "outcome": {"completed": False, "quit_reason": "frustration", "abandoned_at_step": 7,
+                            "in_their_words": "No refund terms, no card."}}
+    result = call_tool(srv, "report_result", {"run_id": "queued0005", "session_id": "plugin-v2-session",
+                                               "status": "abandoned", "steps": [], "feedback": feedback})
+    expect(not result.get("isError"), f"report ok: {result_text(result)}")
+    body = STATE.last_for("/results")["body"]
+    expect(body["status"] == "abandoned", "abandoned passes on v2")
+    expect(body["feedback"]["outcome"] == feedback["outcome"], "outcome untouched")
+    expect(len(body["rawActions"]) == 3 and body["rawActions"][0]["tool_name"] == tool, "raw actions uploaded")
+    expect(body["browser"]["server"] == "archetype-browser-2", f"browser from the recorded actions, got {body.get('browser')}")
+    expect(body["artifacts"]["video_path"].endswith("page@main.webm"),
+           f"largest video written during the run, got {body.get('artifacts')}")
+    expect(isinstance(body.get("durationSeconds"), (int, float)), "duration filled from start_run")
+    text = result_text(result)
+    contains(text, "Raw browser actions recorded: 3", "action count shown")
+    contains(text, "Video: ", "video path shown")
+    for left in ("queued0005.state.json", "queued0005.actions.jsonl"):
+        expect(not (runs / left).exists(), f"{left} removed after a stored report")
+    bad = call_tool(srv, "report_result", {"run_id": "r1", "session_id": "s", "status": "gave_up",
+                                           "steps": [], "feedback": {}})
+    expect(bad.get("isError") is True and "status must be one of" in result_text(bad), "unknown status refused locally")
+
+
+def case_59_step_answer_stays_short(srv: ServerProc, data_dir: Path) -> None:
+    write_auth(data_dir)
+    start_v2_run(srv)
+    long_rule = "You read every word of the fine print and the footer before you click anything at all " * 3
+    long_recall = [{"text": "A long memory about a previous signup that went badly for many reasons " * 3,
+                    "source": "episode"}] * 5
+    STATE.error_overrides["/steps"] = (200, dict(STEPS_RESPONSE, activeRules=[long_rule] * 5,
+                                                 recall=long_recall, note="Decide now. " * 10))
+    text = result_text(call_tool(srv, "log_step", {"run_id": V2_RUN_ID, "step": v2_step(1)}))
+    expect(state_words(text) <= 120, f"at most 120 words outside the STATE block, got {state_words(text)}")
+    contains(text, "ACTIVE RULES:", "rules survive trimming")
+    contains(text, "NOTE: Decide now.", "the note survives trimming")
+
 CASES = [
-    ("initialize + tools/list shows 10 tools", case_1_tools_list),
+    ("initialize + tools/list shows 11 tools", case_1_tools_list),
     ("start_run happy path (camelCase body, rich tool text)", case_2_start_run_happy),
     ("start_run maps feature_id -> featureId", case_2b_start_run_feature_id),
     ("start_run says when a pool member was chosen, not spun off", case_2e_start_run_says_chosen_not_spun),
@@ -2045,6 +2455,20 @@ CASES = [
     ("concurrent 401s share one login", case_41_concurrent_401s_share_one_login),
     ("login re-prompt for a pending code opens no second tab", case_42_login_reprompt_opens_no_second_tab),
     ("ARCHETYPE_NO_BROWSER=1 suppresses the auto-open", case_43_no_browser_env),
+    ("v2 briefing: behavior rules, criterion, checks, protocol 2", case_50_start_run_v2_briefing),
+    ("old backend: trait phrases, protocol 1, journal sent as v1 steps", case_51_old_backend_fallback),
+    ("start_run(run_id) claims with the browser config", case_52_claim),
+    ("claimed study briefing: archetype words, preconditions, no role", case_52b_claimed_briefing_from_a_study),
+    ("claim 409 and a backend without claim stop the actor", case_53_claim_conflict),
+    ("log_step success: stamped, posted, state rendered", case_54_log_step_success),
+    ("log_step buffers on timeout and flushes next time", case_55_log_step_buffers_on_timeout, STEP_FAST),
+    ("report_result flushes buffered steps first", case_56_report_flushes_buffer_first, STEP_FAST),
+    ("report_result carries steps the backend never took", case_56b_unsent_steps_ride_with_results, STEP_FAST),
+    ("log_step give up NOTE, backend note, ended run", case_57_give_up_note),
+    ("log_step local give up while the backend is down", case_57b_local_give_up_when_backend_down, STEP_FAST),
+    ("log_step relays a rejected step without keeping it", case_57c_rejected_step),
+    ("report_result abandoned with raw actions, browser and video", case_58_report_abandoned_with_actions_and_video),
+    ("log_step answer stays under 120 words", case_59_step_answer_stays_short),
 ]
 
 
@@ -2067,6 +2491,8 @@ def main() -> int:
             clear_auth(data_dir)
             for stale in ("runs.json", "pending_login.json"):
                 (data_dir / stale).unlink(missing_ok=True)
+            for folder in ("runs", "browser", "studies"):
+                shutil.rmtree(data_dir / folder, ignore_errors=True)
             srv = ServerProc(port, data_dir, rest[0] if rest else None)
             try:
                 srv.initialize()
