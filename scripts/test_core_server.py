@@ -2989,6 +2989,40 @@ def case_66_study_status(srv: ServerProc, data_dir: Path) -> None:
     contains(text, f"/workspace/studies/{STUDY_ID}", "portal link")
 
 
+def case_66c_study_status_shows_what_the_runner_hit(srv: ServerProc, data_dir: Path) -> None:
+    write_auth(data_dir)
+    folder = data_dir / "studies" / STUDY_ID
+    folder.mkdir(parents=True)
+    # dispatch_study starts the runner detached: its exit code reaches
+    # nobody, so the problems it records are what study_status must show.
+    (folder / "runner.json").write_text(json.dumps({
+        "state": "finished", "pid": 1, "workers": {"r1": {"state": "finished"}},
+        "problems": ["run r-trust-1: the worker exited before claiming it (exit 1)"]}))
+    text = result_text(call_tool(srv, "study_status", {"study_id": STUDY_ID}))
+    contains(text, "Swarm runner problems:\n- run r-trust-1: the worker exited before claiming it (exit 1)",
+             "the runner's problems")
+    # A runner that died without finishing still says "running" in its
+    # file: an unattended session would wait on it forever.
+    gone = subprocess.Popen([sys.executable, "-c", "pass"])
+    gone.wait()
+    (folder / "runner.json").write_text(json.dumps({"state": "running", "pid": gone.pid,
+                                                    "workers": {"r1": {"state": "running"}}}))
+    text = result_text(call_tool(srv, "study_status", {"study_id": STUDY_ID}))
+    contains(text, f"Swarm runner: stopped without finishing (pid {gone.pid} is gone;", "a dead runner is named")
+    contains(text, "runner.log", "where to look")
+    # A wait wakes up when the runner dies, not only when its file changes.
+    STATE.error_overrides["/status"] = (200, dict(STUDY_STATUS_RESPONSE, runs={
+        "allTerminal": False, "byStatus": {"running": 2, "completed": 3}, "terminal": 3, "total": 5}))
+    live = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    (folder / "runner.json").write_text(json.dumps({"state": "running", "pid": live.pid, "workers": {}}))
+    killer = threading.Timer(0.8, lambda: (live.kill(), live.wait()))
+    killer.start()
+    began = time.monotonic()
+    text = result_text(call_tool(srv, "study_status", {"study_id": STUDY_ID, "wait_seconds": 30}))
+    expect(time.monotonic() - began < 10, "the wait returned when the runner died")
+    contains(text, "stopped without finishing", "and says so")
+
+
 def case_67_study_report(srv: ServerProc, data_dir: Path) -> None:
     write_auth(data_dir)
     text = result_text(call_tool(srv, "get_study_report", {"study_id": STUDY_ID}))
@@ -3322,6 +3356,7 @@ CASES = [
     ("create_study_runs: matrix, order, estimate, wave 2 size", case_64_create_study_runs),
     ("next_study_wave: done, not yet, wave 2", case_65_next_study_wave),
     ("study_status counts runs and says what is next", case_66_study_status),
+    ("study_status shows the runner's problems and a dead runner", case_66c_study_status_shows_what_the_runner_hit),
     ("study report: labels in words, stress, excluded, fencing", case_67_study_report),
     ("study_status wait_seconds returns on the first change", case_66b_study_status_waits_for_a_change),
     ("study tools on an old backend and with bad ids", case_68_study_tools_on_an_old_backend),
