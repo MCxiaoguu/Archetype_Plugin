@@ -15,7 +15,7 @@ under that run; report_result clears the mapping.
 
 Typed text is never stored: text and values are replaced by their length.
 The hook is stdlib only and never fails the session: every surprise is
-swallowed and the exit code is always 0.
+logged to stderr and the exit code is always 0.
 """
 
 from __future__ import annotations
@@ -163,6 +163,9 @@ def main() -> None:
 if __name__ == "__main__":
     try:
         main()
-    except Exception:
-        pass
+    except Exception as exc:
+        # Exit 0 all the same: a hook error must never cost the actor its
+        # tool call. A missing record is not hidden from the report either:
+        # its integrity line says no raw actions were available.
+        sys.stderr.write(f"[archetype action-hook] not recorded: {exc!r}\n")
     sys.exit(0)

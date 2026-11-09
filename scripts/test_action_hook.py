@@ -158,7 +158,9 @@ def case_never_fails(d: Path) -> None:
     expect(run_hook(started("a", "run999"), None).returncode == 0, "no plugin data: exit 0")
     blocked = d / "blocked"
     blocked.write_text("a file where a folder should be")
-    expect(run_hook(started("a", "run999"), blocked).returncode == 0, "unwritable data dir: exit 0")
+    result = run_hook(started("a", "run999"), blocked)
+    expect(result.returncode == 0, "unwritable data dir: exit 0")
+    expect("not recorded" in result.stderr, f"but the failure is logged, not swallowed: {result.stderr!r}")
     expect(run_hook(browser_call("nobody", BROWSER + "browser_click", {}), d).returncode == 0, "no run yet: exit 0")
 
 
