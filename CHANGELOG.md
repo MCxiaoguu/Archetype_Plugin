@@ -18,6 +18,28 @@ All notable changes to the Archetype plugin. Versions follow
   "remote"` (the Figma plugin's): it polls the backend, runs every queued
   run of each study, then polls again. `--once` makes a single pass.
 
+### Fixed
+
+- The swarm runner aborts a run only when its own worker claimed it (the
+  `start_run` answer in the worker's stream). It used to abort any run
+  still open when its worker exited, so two runners on one study (a
+  `--watch` service and `dispatch_study`, or overlapping `--once` passes)
+  killed each other's live runs. A run nobody claimed now stays queued.
+- A signal no longer leaves a `stop` file in the study folder (which kept
+  `--watch` from ever serving that study again), and Ctrl-C or SIGTERM
+  stops the watcher and its workers. A runner exits 1 when a run went
+  wrong, and `--watch` leaves a study to the runner already serving it.
+- The runner sends the login token only to an https backend (http only on
+  localhost), like the core server.
+- A browser server that hangs on close is killed (SIGTERM, then SIGKILL on
+  its process group) instead of being left running.
+- The permission hook allows only this plugin's actor agents, not another
+  plugin's agent with the same name.
+- The Relay grader counts no page for a step without a URL, grades only
+  runs that ran, and `relay_study.py` exits 1 when a report is missing.
+- `docs/examples/study-ci.yml` creates a fresh study per job (a saved
+  study cannot be repointed or rerun).
+
 ## 0.6.0 (2026-11-03): behavioral studies
 
 ### Added

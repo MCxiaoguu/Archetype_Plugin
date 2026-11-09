@@ -158,8 +158,14 @@ def run_session(opts: argparse.Namespace, out: Path, data_dir: Path, relay_url: 
                 time.sleep(15)
                 sid = sid or study_id_from_stream(stream) or next(iter(study_ids(data_dir) - before), None)
                 if sid and opts.max_runs:
-                    code, listing = api(opts.backend, f"/api/studies/{sid}/runs", data_dir, timeout=30)
-                    total = len(listing.get("runs") or []) if code == 200 else 0
+                    try:
+                        code, listing = api(opts.backend, f"/api/studies/{sid}/runs", data_dir, timeout=30)
+                    except (urllib.error.URLError, OSError, ValueError) as exc:
+                        # One missed check of the run count; the session goes on.
+                        log(f"could not count the study's runs ({exc}); checking again in 15 s")
+                        code, listing = 0, {}
+                    if code not in (0, 200):
+                        log(f"could not count the study's runs (HTTP {code}); checking again in 15 s")
                     ran = sum(1 for r in listing.get("runs") or []
                               if r.get("status") not in ("queued", "aborted") or r.get("claimedAt"))
                     if ran > opts.max_runs:
@@ -172,25 +178,44 @@ def run_session(opts: argparse.Namespace, out: Path, data_dir: Path, relay_url: 
                         os.killpg(child.pid, signal.SIGTERM)
                     except OSError:
                         pass
-        except KeyboardInterrupt:
-            os.killpg(child.pid, signal.SIGTERM)
+        except BaseException:
+            # Never leave the session (and its runner and workers) running
+            # unwatched behind a crashed harness.
+            try:
+                os.killpg(child.pid, signal.SIGTERM)
+            except OSError:
+                pass
             raise
     log(f"session ended (exit {child.returncode}) after {(time.monotonic() - started) / 60:.1f} min")
     return sid or study_id_from_stream(stream) or next(iter(study_ids(data_dir) - before), None)
 
 
-def grade(opts: argparse.Namespace, out: Path, data_dir: Path, sid: str) -> dict[str, Any]:
+def grade(opts: argparse.Namespace, out: Path, data_dir: Path, sid: str) -> tuple[dict[str, Any], list[str]]:
+    """The matrix, and what kept it from being complete: a report the
+    backend did not hand over is a problem, never a run graded "not
+    reached"."""
+    problems = []
     code, report = api(opts.backend, f"/api/studies/{sid}/report", data_dir)
     (out / "study_report.json").write_text(json.dumps(report, indent=2))
+    if code != 200:
+        problems.append(f"study report: HTTP {code} {report.get('message') or report.get('error')}")
     code_l, listing = api(opts.backend, f"/api/studies/{sid}/runs", data_dir)
+    if code_l != 200:
+        problems.append(f"study runs: HTTP {code_l} {listing.get('message') or listing.get('error')}")
+        listing = {}
     runs = []
     for r in listing.get("runs") or []:
         rc, run_report = api(opts.backend, f"/api/plugin/runs/{r['runId']}/report", data_dir)
         (out / "runs").mkdir(exist_ok=True)
         (out / "runs" / f"{r['runId']}.json").write_text(json.dumps(run_report, indent=2))
-        runs.append(dict(r, report=run_report if rc == 200 else {}))
+        if rc != 200:
+            problems.append(f"run {r['runId']} report: HTTP {rc} {run_report.get('message') or run_report.get('error')}")
+            continue
+        runs.append(dict(r, report=run_report))
     defects = relay_matrix.load_ground_truth(ROOT / "demo-apps" / "relay" / "GROUND_TRUTH.md")
     matrix = relay_matrix.build_matrix(defects, runs)
+    if not matrix["runs"]:
+        problems.append("no run of the study has a persona outcome to grade")
     matrix["studyId"] = sid
     (out / "matrix.json").write_text(json.dumps(matrix, indent=2))
     md = relay_matrix.render_markdown(matrix)
@@ -198,9 +223,11 @@ def grade(opts: argparse.Namespace, out: Path, data_dir: Path, sid: str) -> dict
         earlier = json.loads(Path(opts.compare).read_text())
         md += "\n\n" + relay_matrix.render_comparison(earlier, matrix)
     (out / "matrix.md").write_text(md + "\n")
-    print(f"\nStudy {sid}: report {code}, {len(runs)} run(s)\n")
+    print(f"\nStudy {sid}: report {code}, {len(matrix['runs'])} graded run(s) of {len(listing.get('runs') or [])}\n")
     print(md)
-    return matrix
+    for msg in problems:
+        log(f"grading problem: {msg}")
+    return matrix, problems
 
 
 def main(argv: list[str]) -> int:
@@ -229,8 +256,8 @@ def main(argv: list[str]) -> int:
     if opts.grade_only:
         if not opts.study:
             p.error("--grade-only needs --study")
-        grade(opts, out, data_dir, opts.study)
-        return 0
+        _, problems = grade(opts, out, data_dir, opts.study)
+        return 1 if problems else 0
     relay = serve_relay(out, opts.relay_port)
     started = time.time()
     try:
@@ -244,8 +271,8 @@ def main(argv: list[str]) -> int:
     (out / "study_id").write_text(sid + "\n")
     (out / "wall_clock.json").write_text(json.dumps({"started": started, "ended": time.time(),
                                                      "minutes": round((time.time() - started) / 60, 1)}))
-    grade(opts, out, data_dir, sid)
-    return 0
+    _, problems = grade(opts, out, data_dir, sid)
+    return 1 if problems else 0
 
 
 if __name__ == "__main__":

@@ -89,7 +89,11 @@ whole study by typing it, so this mode asks nothing and confirms nothing.
   returns early when a run finishes) and print one progress line each time,
   until it says the swarm runner finished and every run is terminal. Then
   call `next_study_wave` once: it should answer "no more waves" (the runner
-  asked for them); if it creates runs, dispatch them the same way.
+  asked for them); if it creates runs, dispatch them the same way. If the
+  runner finished while runs are still queued (their workers exited before
+  claiming them; the runner never aborts a run it did not claim), call
+  `dispatch_study` once more with `confirm: true`; if runs are still queued
+  after that runner finishes too, report them as not run and go on.
 - Step 8 as usual. Print the full report: it is the session's output.
 
 Every other rule still holds: never invent factors, archetypes or results.
@@ -146,7 +150,9 @@ browsers: the report compares only runs with the same browser config):
    `claude -p` worker per run, each on its own headless browser, and runs
    the next wave by itself when one finishes. Poll `study_status` every 60
    seconds and report progress in one line each time; when it says the
-   runner finished and the backend has no more waves, go to step 8. Never
+   runner finished and the backend has no more waves, go to step 8. If the
+   runner finished with runs still queued (no worker claimed them), say so
+   and offer to dispatch them again. Never
    confirm on the user's behalf; the one exception is `unattended`, where
    the command line was the confirmation (see "Unattended mode": call it
    once with `confirm: true` and wait with `study_status` `wait_seconds`).

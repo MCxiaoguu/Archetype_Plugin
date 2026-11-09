@@ -28,6 +28,10 @@ from pathlib import Path
 from typing import Any, Iterable
 
 LEVELS = ("found", "noticed", "reached", "not reached")
+# Run statuses that are a persona outcome. aborted (the worker died, or the
+# run budget skipped it), queued and running (never ran, still running) are
+# not, and grading them would add "not reached" cells nobody earned.
+GRADED = ("completed", "abandoned", "failed")
 
 SIGNATURES: dict[str, list[list[list[str]]]] = {
     # Card required although the landing page promises no card.
@@ -116,7 +120,11 @@ def matches(text: str, sig: list[list[list[str]]]) -> bool:
 
 
 def _page_paths(url: Any) -> set[str]:
-    path = re.sub(r"^[a-z]+://[^/]+", "", str(url or "")).split("?")[0].split("#")[0]
+    """The page a step's URL names (a bare origin is index.html); none for a
+    step that has no URL."""
+    if not isinstance(url, str) or not url.strip():
+        return set()
+    path = re.sub(r"^[a-z]+://[^/]+", "", url.strip()).split("?")[0].split("#")[0]
     names = {path.rsplit("/", 1)[-1] or "index.html"}
     return {n if n.endswith(".html") else f"{n}.html" for n in names}
 
@@ -152,12 +160,13 @@ def grade_run(defects: list[dict[str, Any]], run: dict[str, Any]) -> dict[str, d
 
 
 def build_matrix(defects: list[dict[str, Any]], runs: Iterable[dict[str, Any]]) -> dict[str, Any]:
-    """runs: [{runId, archetypeName, role, report}] in study order."""
+    """runs: [{runId, archetypeName, role, status, report}] in study order
+    (rows of GET /api/studies/<id>/runs with each run's report)."""
     archetypes: list[str] = []
     per_run = []
     for r in runs:
-        if r.get("status") == "aborted" or (r.get("report") or {}).get("status") == "aborted":
-            continue  # never a persona outcome (worker died, or the run budget skipped it)
+        if r.get("status") not in GRADED or (r.get("report") or {}).get("status") == "aborted":
+            continue
         name = r.get("archetypeName") or "?"
         if name not in archetypes:
             archetypes.append(name)

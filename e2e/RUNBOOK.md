@@ -314,3 +314,7 @@ match the defect), noticed (only the step narration does), reached, missed
 (the run opened a page the defect lives on), not reached. Signatures for
 D1 to D9 are plain word groups in `relay_matrix.SIGNATURES`; a defect added
 to the answer key later is matched by the code spans and quotes of its row.
+Only runs with a persona outcome (completed, abandoned, failed) are graded;
+a step without a URL opens no page. A report or run listing the backend
+does not return is printed as a grading problem and the script exits 1,
+rather than counting that run as "not reached".

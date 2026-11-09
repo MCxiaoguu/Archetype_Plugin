@@ -102,8 +102,8 @@ back as a report and as annotations on the frames. See
 ```
 
 - **`core`** (`scripts/core-server.py`, Python stdlib): every backend call,
-  with wall clock deadlines and self healing login. Twenty tools: login,
-  runs, `log_step`, features, pools, the nine study tools, status.
+  with wall clock deadlines and self healing login. Twenty-one tools:
+  login, runs, `log_step`, features, pools, the ten study tools, status.
 - **Actors** (`agents/`): `feature-validator` on Claude in Chrome and
   `feature-validator-headless` on Playwright, the same per-step protocol
   (observe, recall, decide, act, record), kept in sync by a test.
@@ -173,7 +173,7 @@ files as project config, and `${CLAUDE_PLUGIN_ROOT}` and
 | Fresh login | delete `~/.claude/plugins/data/archetype-*/auth.json` |
 | Deadlines | `ARCHETYPE_HTTP_TIMEOUT`, `_RUN_TIMEOUT`, `_RESULT_TIMEOUT`, `_PERSONA_TIMEOUT`, `_STEP_TIMEOUT`, `_STUDY_TIMEOUT` |
 | See what a browser proxy receives | `ARCHETYPE_BROWSER_TRACE=/tmp/trace.log` |
-| Unattended run by hand | `python3 scripts/study_runner.py --study <id> --runs <a,b> --parallel 2` |
+| Unattended run by hand | `python3 scripts/study_runner.py --study <id> --runs <a,b> --data-dir ~/.claude/plugins/data/archetype-archetype --parallel 2` (the data folder that holds the login; exit 1 when a run went wrong) |
 
 Print mode cannot show the login modal: log in once interactively first.
 Never pass `--strict-mcp-config` with `--plugin-dir`: it drops the plugin's
@@ -187,6 +187,8 @@ python3 scripts/test_action_hook.py     # raw action capture
 python3 scripts/test_browsers.py        # lazy proxy, permission hook, swarm runner
 python3 scripts/test_agents_in_sync.py  # the two actors share one procedure
 python3 scripts/test_session_hook.py
+python3 scripts/test_security.py        # token file mode, https-only credentials
+python3 e2e/test_relay_matrix.py        # Relay study grader
 claude plugin validate --strict .
 ```
 

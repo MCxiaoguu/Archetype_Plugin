@@ -12,9 +12,16 @@
 #                          under API key auth, which is why studies use the
 #                          plugin's headless Playwright browsers)
 # Variables:
-#   ARCHETYPE_STUDY_ID     a study created once in the portal or with
-#                          /archetype:study; each run of this job creates a
-#                          fresh wave against the preview URL
+#   ARCHETYPE_STUDY        the study to run, as the JSON body of
+#                          POST /api/studies without the URL, for example
+#                          {"title": "Signup", "icp": {"label": "...",
+#                          "description": "..."}, "task": {"goal": "..."},
+#                          "success": {"criterion": "..."}}
+#
+# Each run of this job creates a fresh study from that template against the
+# preview URL (a study's task can no longer be edited once it has
+# archetypes, and its wave 1 is created once), lets the backend pick the
+# factors and archetypes, and runs wave 1 and any confirmation wave.
 
 name: Archetype study
 
@@ -37,7 +44,6 @@ jobs:
     env:
       CLAUDE_PLUGIN_DATA: ${{ runner.temp }}/archetype-data
       ARCHETYPE_BACKEND_URL: https://api.syntheticarchetype.com
-      STUDY_ID: ${{ vars.ARCHETYPE_STUDY_ID }}
     steps:
       - uses: actions/setup-node@v4
         with:
@@ -59,19 +65,27 @@ jobs:
             "${{ secrets.ARCHETYPE_TOKEN }}" "$(date +%s)" > "$CLAUDE_PLUGIN_DATA/auth.json"
           chmod 600 "$CLAUDE_PLUGIN_DATA/auth.json"
 
-      - name: Point the study at the preview and create a wave
+      - name: Create the study against the preview and its first wave
         env:
           PREVIEW_URL: ${{ github.event.deployment_status.target_url || vars.PREVIEW_URL }}
+          STUDY_TEMPLATE: ${{ vars.ARCHETYPE_STUDY }}
           TOKEN: ${{ secrets.ARCHETYPE_TOKEN }}
         run: |
           api() { curl -fsS -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" "$@"; }
-          api -X PATCH "$ARCHETYPE_BACKEND_URL/api/studies/$STUDY_ID" -d "{\"task\": {\"url\": \"$PREVIEW_URL\"}}"
+          python3 -c 'import json, os; s = json.loads(os.environ["STUDY_TEMPLATE"]); s.setdefault("task", {})["url"] = os.environ["PREVIEW_URL"]; print(json.dumps(s))' > study.json
+          api -X POST "$ARCHETYPE_BACKEND_URL/api/studies" -d @study.json > created.json
+          STUDY_ID=$(python3 -c "import json; print(json.load(open('created.json'))['studyId'])")
+          echo "STUDY_ID=$STUDY_ID" >> "$GITHUB_ENV"
+          api -X POST "$ARCHETYPE_BACKEND_URL/api/studies/$STUDY_ID/factors" -d '{}' > /dev/null
+          api -X POST "$ARCHETYPE_BACKEND_URL/api/studies/$STUDY_ID/archetypes" -d '{}' > /dev/null
           api -X POST "$ARCHETYPE_BACKEND_URL/api/studies/$STUDY_ID/runs" -d '{}' > wave.json
           python3 -c "import json; print(','.join(r['runId'] for r in json.load(open('wave.json'))['runs']))" > runs.txt
 
       - name: Run the study unattended (2 workers)
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        # Exits 1 when a worker failed, timed out or stalled, a run was
+        # aborted or left queued, or the next wave never came.
         run: |
           python3 "$RUNNER_TEMP/archetype-plugin/scripts/study_runner.py" \
             --study "$STUDY_ID" --data-dir "$CLAUDE_PLUGIN_DATA" \

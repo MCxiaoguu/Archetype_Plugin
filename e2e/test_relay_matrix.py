@@ -68,15 +68,18 @@ def case_noticed_reached_and_words():
 def case_matrix_and_markdown():
     defects = rm.load_ground_truth(GROUND_TRUTH)
     runs = [
-        {"runId": "a", "archetypeName": "Baseline", "role": "baseline",
+        {"runId": "a", "archetypeName": "Baseline", "role": "baseline", "status": "completed",
          "report": run(findings=["Card required although the page said free forever"], urls=["http://x/signup.html"])},
-        {"runId": "b", "archetypeName": "Baseline", "role": "baseline", "report": run(urls=["http://x/signup.html"])},
-        {"runId": "c", "archetypeName": "Low trust", "role": "variant", "report": run(urls=["http://x/"])},
+        {"runId": "b", "archetypeName": "Baseline", "role": "baseline", "status": "abandoned",
+         "report": run(urls=["http://x/signup.html"])},
+        {"runId": "c", "archetypeName": "Low trust", "role": "variant", "status": "failed", "report": run(urls=["http://x/"])},
     ]
     runs.append({"runId": "d", "archetypeName": "Low trust", "status": "aborted", "report": run()})
+    runs.append({"runId": "e", "archetypeName": "Low trust", "status": "queued", "report": run()})
+    runs.append({"runId": "f", "archetypeName": "Stress", "status": "running", "report": run()})
     m = rm.build_matrix(defects, runs)
-    assert m["archetypes"] == ["Baseline", "Low trust"]
-    assert m["cells"]["D1|Low trust"]["n"] == 1, "aborted runs are not graded"
+    assert m["archetypes"] == ["Baseline", "Low trust"], m["archetypes"]
+    assert m["cells"]["D1|Low trust"]["n"] == 1, "aborted runs and runs that never ran are not graded"
     assert m["cells"]["D1|Baseline"]["found"] == 1 and m["cells"]["D1|Baseline"]["n"] == 2
     assert m["cells"]["D1|Low trust"]["best"] == "reached"
     md = rm.render_markdown(m)
@@ -93,9 +96,9 @@ def case_unknown_defect_uses_its_own_terms():
 
 def case_comparison_names_new_finds():
     defects = rm.load_ground_truth(GROUND_TRUTH)
-    first = rm.build_matrix(defects, [{"runId": "a", "archetypeName": "B", "report": run(findings=["Card required despite no card promise"], urls=["http://x/signup.html"])}])
+    first = rm.build_matrix(defects, [{"runId": "a", "archetypeName": "B", "status": "completed", "report": run(findings=["Card required despite no card promise"], urls=["http://x/signup.html"])}])
     first["studyId"] = "aaaaaaaa1"
-    second = rm.build_matrix(defects, [{"runId": "b", "archetypeName": "B", "report": run(findings=[
+    second = rm.build_matrix(defects, [{"runId": "b", "archetypeName": "B", "status": "completed", "report": run(findings=[
         "The dashboard says No events yet and nothing else"], urls=["http://x/dashboard.html"])}])
     second["studyId"] = "bbbbbbbb2"
     text = rm.render_comparison(first, second)
@@ -104,7 +107,83 @@ def case_comparison_names_new_finds():
     assert "Newly found: D4." in text
 
 
-CASES = [case_comparison_names_new_finds, case_parses_every_defect_row, case_demo_script_quotes_are_found, case_noticed_reached_and_words,
+def case_a_step_without_a_url_reaches_no_page():
+    defects = rm.load_ground_truth(GROUND_TRUTH)
+    report = {"findings": [], "outcome": {},
+              "steps": [{"seq": 1, "narration": "Looking around", "url": None}, {"seq": 2, "narration": "", "url": ""}]}
+    grades = rm.grade_run(defects, report)
+    assert all(g["level"] == "not reached" for g in grades.values()), \
+        {k: v for k, v in grades.items() if v["level"] != "not reached"}
+    root = rm.grade_run(defects, {"steps": [{"seq": 1, "url": "http://127.0.0.1:8322"}]})
+    assert root["D1"]["level"] == "reached", "a bare origin is the landing page"
+
+
+def case_grade_fails_loudly_when_the_backend_does():
+    import argparse
+    import contextlib
+    import io
+    import tempfile
+    sys.path.insert(0, str(HERE.parent / "scripts"))
+    import relay_study as rs
+    answers = {
+        "/api/studies/s1/report": (200, {"status": "complete"}),
+        "/api/studies/s1/runs": (200, {"runs": [
+            {"runId": "a", "archetypeName": "Baseline", "status": "completed"},
+            {"runId": "b", "archetypeName": "Low trust", "status": "completed"}]}),
+        "/api/plugin/runs/a/report": (200, run(findings=["Card required despite the no card promise"],
+                                               urls=["http://x/signup.html"])),
+        "/api/plugin/runs/b/report": (500, {"error": "internal_error", "message": "boom"}),
+    }
+    rs.api = lambda backend, path, data_dir, timeout=300: answers[path]
+    opts = argparse.Namespace(backend="http://127.0.0.1:1", compare=None)
+    with tempfile.TemporaryDirectory() as tmp, contextlib.redirect_stdout(io.StringIO()):
+        matrix, problems = rs.grade(opts, Path(tmp), Path(tmp), "s1")
+        assert [r["runId"] for r in matrix["runs"]] == ["a"], "a run whose report failed is not graded as not reached"
+        assert any("run b" in p and "500" in p for p in problems), problems
+        answers["/api/studies/s1/runs"] = (401, {"error": "unauthorized", "message": "no"})
+        matrix, problems = rs.grade(opts, Path(tmp), Path(tmp), "s1")
+        assert any("401" in p for p in problems) and any("no run" in p for p in problems), problems
+
+
+def case_session_survives_a_backend_blip():
+    import argparse
+    import contextlib
+    import io
+    import tempfile
+    import time
+    import urllib.error
+    sys.path.insert(0, str(HERE.parent / "scripts"))
+    import relay_study as rs
+    calls = []
+
+    def flaky(backend, path, data_dir, timeout=300):
+        calls.append(path)
+        if len(calls) == 1:
+            raise urllib.error.URLError("connection refused")
+        return 200, {"runs": []}
+
+    rs.api = flaky
+    real_sleep = time.sleep
+    with tempfile.TemporaryDirectory() as tmp, contextlib.redirect_stdout(io.StringIO()):
+        out = Path(tmp)
+        claude = out / "claude"
+        claude.write_text("#!/usr/bin/env python3\nimport time\nprint('studyId for tool calls: abcdefgh1', flush=True)\n"
+                          "time.sleep(1.5)\n")
+        claude.chmod(0o755)
+        data = out / "plugin-data"
+        data.mkdir()
+        opts = argparse.Namespace(study=None, preconditions="", factors="a", parallel=1, model="m", max_runs=4,
+                                  outer_model="m", claude=str(claude), backend="http://127.0.0.1:1", timeout_min=5)
+        rs.time.sleep = lambda s: real_sleep(min(s, 0.2))
+        try:
+            sid = rs.run_session(opts, out, data, "http://127.0.0.1:8322")
+        finally:
+            rs.time.sleep = real_sleep
+    assert sid == "abcdefgh1", sid
+    assert len(calls) >= 2, f"the session was followed after the blip: {calls}"
+
+
+CASES = [case_session_survives_a_backend_blip, case_a_step_without_a_url_reaches_no_page, case_grade_fails_loudly_when_the_backend_does,case_comparison_names_new_finds, case_parses_every_defect_row, case_demo_script_quotes_are_found, case_noticed_reached_and_words,
          case_matrix_and_markdown, case_unknown_defect_uses_its_own_terms]
 
 

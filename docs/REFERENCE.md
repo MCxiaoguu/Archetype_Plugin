@@ -42,9 +42,11 @@ with `confirm: true` and waits with `study_status` `wait_seconds: 300`.
 `--max-runs`): a next wave larger than what is left runs the archetypes whose
 outcome disagreed with the baseline first, then frustration, then steps, and
 the rest are reported as aborted with "not run: the run budget of N was
-spent". The runner also aborts, with the reason, a run whose worker exited
-or timed out without reporting and one whose worker logged no step for
-`--stall-min` (20) minutes after the claim. A
+spent" (only while they are still queued). The runner also aborts, with
+the reason, a run its own worker claimed and then left without reporting
+(exited, timed out, or logged no step for `--stall-min` (20) minutes after
+the claim). A run another actor claimed is never aborted, and a run no
+worker claimed stays queued for the next dispatch. A
 missing ICP or success criterion is asked once, with suggestions from the
 feature target or the pool.
 
@@ -313,7 +315,7 @@ seconds and reported a real wiring defect on the way.
 
 ### Swarm runner (`scripts/study_runner.py`, `dispatch_study`)
 
-`dispatch_study {study_id, parallel?, model?, timeout_minutes?, confirm?}`
+`dispatch_study {study_id, parallel?, model?, timeout_minutes?, max_runs?, stall_minutes?, confirm?}`
 reads the study's queued runs (`GET /api/studies/<id>/runs`, whose runs
 carry their live status; the study object's own run refs do not), else the
 last wave seen locally, shows the count and an estimate (8 to 15 minutes and 30k to
@@ -334,7 +336,18 @@ true`. The runner:
 - writes `studies/<id>/<run_id>/stream.jsonl` and `stderr.log` per worker
   and `studies/<id>/runner.json` (read by `study_status`),
 - asks for the next wave when the queue is empty, until the backend says
-  done; a `stop` file in the study folder stops new workers.
+  done; a `stop` file in the study folder stops new workers, and SIGTERM
+  or SIGINT stops the running ones too (no file is left behind),
+- reads each worker's stream for its `start_run` answer: a run is aborted
+  (with the reason) only when this worker claimed it and left it open; a
+  run another actor holds is left alone, and a run nobody claimed stays
+  queued (the runner then stops before the next wave, which could not
+  start),
+- sends the login token only to an https backend (http only on
+  localhost), as the core server does, and refuses any other `--backend`,
+- exits 1 when a worker failed, timed out or stalled, a run was aborted
+  or left queued, a backend read failed or the next wave never came
+  (`runner.json` lists them under `problems`), else 0.
 
 **Watch mode** serves studies that another client started and asked to be
 run remotely (`execution: "remote"`), such as the Figma plugin:
@@ -348,9 +361,15 @@ It polls `GET /api/studies?execution=remote&status=running`, runs every
 queued run of each study (oldest first) with the same workers, waves,
 orphan handling and budget as above, then polls again. Runs that are
 already claimed or finished are left alone, so two watchers never act on
-one run (the claim is atomic on the backend). `--once` makes one pass for
-cron or CI; a `stop` file in `${CLAUDE_PLUGIN_DATA}/studies/` stops it
-between studies. It uses the login in `auth.json`, so it serves that
+one run (the claim is atomic on the backend, and a runner aborts only the
+runs its own workers claimed). A study that another runner on this
+machine is serving (its `runner.json`) is left to it. `--once` makes one
+pass for cron or CI and exits 1 when that pass had a problem; a `stop`
+file in `${CLAUDE_PLUGIN_DATA}/studies/` stops it between studies, a
+study whose own folder has a `stop` file is skipped, and SIGTERM or
+Ctrl-C stops it at once (its workers too). A run whose workers exit
+before claiming it three times stays queued and is not tried again until
+the watcher restarts. It uses the login in `auth.json`, so it serves that
 account's studies.
 
 `docs/examples/study-ci.yml` is a documented GitHub Actions job (not
@@ -686,9 +705,9 @@ When the client sends `_meta.progressToken`, the server emits `notifications/pro
 
 ### The tools
 
-Twenty tools. The ten below are unchanged from 0.5.1 apart from `start_run` (claim mode, `browser`)
-and `report_result` (`abandoned`, outcome, raw actions, browser, video). `log_step`, the eight
-study tools and `dispatch_study` are described in
+Twenty-one tools. The ten below are unchanged from 0.5.1 apart from `start_run` (claim mode, `browser`)
+and `report_result` (`abandoned`, outcome, raw actions, browser, video). `log_step`, the nine
+study tools (`get_study` included) and `dispatch_study` are described in
 [Studies, protocol v2 and browsers](#studies-protocol-v2-and-browsers-060).
 
 #### `login`
@@ -1212,9 +1231,12 @@ inherits the environment of the Claude Code CLI, so export these **before** laun
 | `ARCHETYPE_STUDY_TIMEOUT` | `180` | Deadline for the study calls that run models (factors, archetypes, runs). |
 | `ARCHETYPE_BROWSER_IDLE_MINUTES` | `15` | Idle minutes before a plugin browser's real server is stopped (`browser-server.py`). |
 | `ARCHETYPE_BROWSER_START_TIMEOUT` | `180` | How long the proxy waits for the real browser server's handshake (first `npx` run downloads it). |
+| `ARCHETYPE_BROWSER_STOP_TIMEOUT` | `15` | Seconds the real browser server gets to close (and write its videos) after its stdin closes, before the proxy sends SIGTERM, then SIGKILL, to its process group. |
 | `ARCHETYPE_BROWSER_TRACE` | *(unset)* | A file the browser proxy appends every MCP method to, for debugging startup. |
 | `ARCHETYPE_CLAUDE_BIN` | `claude` | The CLI the swarm runner starts workers with. |
 | `ARCHETYPE_RUNNER_WAVE_WAIT` | `30` | Seconds the runner waits between next wave attempts while the backend answers 409. |
+| `ARCHETYPE_RUNNER_WATCH_S` | `30` | How often the runner checks each worker's stream for steps (stall and timeout checks). |
+| `ARCHETYPE_WATCH_POLL_S` | *(unset)* | Overrides `--poll-sec` of `study_runner.py --watch`. |
 | `CLAUDE_PLUGIN_DATA` | *(set by Claude Code)* | Directory holding `auth.json` (credentials), `runs.json` (run log), `runs/`, `browser/` and `studies/`; see below. |
 
 ### Plugin data files (`${CLAUDE_PLUGIN_DATA}`)
@@ -1270,7 +1292,10 @@ was launched from inside the plugin folder), the server refuses to store credent
 - **Action hook:** `python3 scripts/test_action_hook.py` (writes, redacts, never fails, maps tool
   names, keeps parallel agents apart).
 - **Browsers:** `python3 scripts/test_browsers.py` (the lazy proxy against a fake MCP child, the
-  permission hook decisions, the runner's shadow plugin and worker command).
+  permission hook decisions, the runner's shadow plugin and worker command, and the runner and
+  watcher against a stub backend: claims, aborts, budget, signals, exit codes).
+- **Relay grader:** `python3 e2e/test_relay_matrix.py` (the defect x archetype matrix against the
+  real answer key).
 - **Agents:** `python3 scripts/test_agents_in_sync.py`; **session hook:**
   `python3 scripts/test_session_hook.py`.
 - **Manifest:** `claude plugin validate --strict .` (CI runs it).

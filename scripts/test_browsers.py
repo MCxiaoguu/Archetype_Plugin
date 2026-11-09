@@ -74,7 +74,8 @@ class Proxy:
         fake = tmp / "fake_child.py"
         fake.write_text(FAKE_CHILD)
         env = dict(os.environ, CLAUDE_PLUGIN_DATA=str(tmp / "data"), FAKE_LOG=str(self.log),
-                   ARCHETYPE_BROWSER_COMMAND=json.dumps([sys.executable, str(fake)]), **(env_extra or {}))
+                   ARCHETYPE_BROWSER_COMMAND=json.dumps([sys.executable, str(fake)]))
+        env.update(env_extra or {})
         args = [sys.executable, str(PROXY), name] + (["--headed"] if headed else [])
         self.proc = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                      stderr=subprocess.DEVNULL, text=True, bufsize=1, env=env, cwd=tmp)
@@ -201,6 +202,64 @@ def case_proxy_survives_a_crash(tmp: Path) -> None:
         expect(proxy.close() == 0, "clean exit when the client goes away")
 
 
+STUBBORN_CHILD = r'''
+import json, os, signal, sys, time
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+with open(os.environ["FAKE_LOG"], "a") as fh:
+    fh.write(json.dumps({"pid": os.getpid()}) + "\n")
+for line in sys.stdin:
+    m = json.loads(line)
+    if m.get("method") == "initialize":
+        sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": m["id"], "result": {"protocolVersion": "2025-06-18",
+                         "capabilities": {"tools": {}}, "serverInfo": {"name": "stubborn", "version": "1"}}}) + "\n")
+    elif m.get("method") == "tools/call":
+        sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": m["id"], "result": {"content": []}}) + "\n")
+    sys.stdout.flush()
+while True:  # a browser that hangs on close: ignores the closed stdin and SIGTERM
+    time.sleep(1)
+'''
+
+
+def case_proxy_never_leaves_a_hung_browser_behind(tmp: Path) -> None:
+    stubborn = tmp / "stubborn.py"
+    stubborn.write_text(STUBBORN_CHILD)
+    proxy = Proxy(tmp, env_extra={"ARCHETYPE_BROWSER_COMMAND": json.dumps([sys.executable, str(stubborn)]),
+                                  "ARCHETYPE_BROWSER_STOP_TIMEOUT": "1"})
+    handshake(proxy)
+    proxy.rpc("tools/call", {"name": "browser_navigate", "arguments": {}})
+    pid = proxy.child_events()[0]["pid"]
+    try:
+        expect(proxy.close() == 0, "the proxy exits")
+        deadline = time.monotonic() + 10
+        alive = True
+        while alive and time.monotonic() < deadline:
+            try:
+                os.kill(pid, 0)
+                time.sleep(0.2)
+            except ProcessLookupError:
+                alive = False
+        expect(not alive, "a browser server that ignores the closed stdin and SIGTERM is killed, not orphaned")
+    finally:
+        try:
+            os.kill(pid, 9)
+        except OSError:
+            pass
+
+
+def case_proxy_answers_when_the_video_folder_cannot_be_made(tmp: Path) -> None:
+    blocker = tmp / "not-a-folder"
+    blocker.write_text("")
+    proxy = Proxy(tmp, env_extra={"CLAUDE_PLUGIN_DATA": str(blocker)})
+    try:
+        handshake(proxy)
+        answer = proxy.rpc("tools/call", {"name": "browser_navigate", "arguments": {}})
+        message = answer.get("error", {}).get("message", "")
+        expect("archetype-browser-2" in message and "video" in message, f"the call is answered with why: {answer}")
+        expect(proxy.child_events() == [], "no browser started without its video folder")
+    finally:
+        proxy.close()
+
+
 def case_watch_server_is_headed(tmp: Path) -> None:
     proxy = Proxy(tmp, name="archetype-watch-1", headed=True)
     try:
@@ -242,6 +301,8 @@ def case_permission_hook(_tmp: Path) -> None:
     not_allowed = [
         ("mcp__plugin_archetype_archetype-browser-3__browser_click", None),
         ("mcp__plugin_archetype_archetype-browser-3__browser_click", "general-purpose"),
+        ("mcp__plugin_archetype_archetype-browser-3__browser_click", "other-plugin:feature-validator"),
+        ("mcp__plugin_archetype_core__report_result", "other-plugin:feature-validator-headless"),
         ("mcp__plugin_archetype_archetype-browser-3__browser_run_code_unsafe", actor),
         ("mcp__plugin_archetype_archetype-browser-3__browser_evaluate", actor),
         ("mcp__plugin_archetype_archetype-browser-3__browser_file_upload", actor),
@@ -386,21 +447,38 @@ def case_recorded_config_names_the_engine(tmp: Path) -> None:
 # ---- swarm runner against a stub backend ----
 
 RUNNER_WORKER = r"""#!/usr/bin/env python3
-import json, os, sys, time, urllib.request
+import json, os, sys, time, urllib.error, urllib.request
 prompt = sys.argv[sys.argv.index("-p") + 1]
 run_id = prompt.split("--run ")[1].split()[0]
 plan = json.load(open(os.environ["RUNNER_PLAN"])).get(run_id, "report")
 base = os.environ["ARCHETYPE_BACKEND_URL"]
-def say(name):
-    print(json.dumps({"type": "assistant", "message": {"content": [{"type": "tool_use", "name": name}]}}), flush=True)
+calls = []
+def emit(event):
+    print(json.dumps(event), flush=True)
+def call(name, args=None):
+    calls.append(name)
+    tool_id = f"toolu_{len(calls)}"
+    emit({"type": "assistant", "message": {"content": [{"type": "tool_use", "id": tool_id, "name": name,
+                                                        "input": args or {}}]}})
+    return tool_id
+def answer(tool_id, text, error=False):
+    emit({"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": tool_id,
+                                                   "is_error": error, "content": [{"type": "text", "text": text}]}]}})
 if plan == "exit":
     sys.exit(0)
-say("mcp__plugin_archetype_core__start_run")
-urllib.request.urlopen(urllib.request.Request(f"{base}/claim/{run_id}", data=b"{}", method="POST"))
-if plan == "stall":
-    say("mcp__plugin_archetype_core__log_step")
+claim = call("mcp__plugin_archetype_core__start_run", {"run_id": run_id, "browser": "archetype-browser-1"})
+try:
+    urllib.request.urlopen(urllib.request.Request(f"{base}/claim/{run_id}", data=b"{}", method="POST"))
+except urllib.error.HTTPError:
+    answer(claim, f"Run {run_id} cannot be claimed: it is running, not queued. Another actor owns it.", error=True)
+    sys.exit(0)
+answer(claim, f"YOUR PERSONA\n...\nrunId: {run_id}\nsessionId: s-{run_id}")
+if plan == "claim-exit":
+    sys.exit(0)
+if plan in ("stall", "slow"):
+    call("mcp__plugin_archetype_core__log_step")
     time.sleep(60)
-say("mcp__plugin_archetype_core__log_step")
+call("mcp__plugin_archetype_core__log_step")
 urllib.request.urlopen(urllib.request.Request(f"{base}/done/{run_id}", data=b"{}", method="POST"))
 """
 
@@ -414,6 +492,8 @@ class StubStudy:
         self.status = {r: "queued" for r in runs}
         self.aborts: dict[str, str] = {}
         self.wave2 = wave2
+        self.wave_open = False  # answer runs/next with 409, as while a wave is open elsewhere
+        self.next_calls = 0
         self.studies = ["s1"]
         self.listings: list[str] = []
         stub = self
@@ -442,15 +522,22 @@ class StubStudy:
                 body = json.loads(self.rfile.read(length) or b"{}")
                 parts = self.path.strip("/").split("/")
                 if parts[0] == "claim":
+                    if stub.status.get(parts[1]) != "queued":
+                        return self.reply(409, {"error": "already_claimed", "message": "not queued"})
                     stub.status[parts[1]] = "running"
                     return self.reply(200, {})
                 if parts[0] == "done":
                     stub.status[parts[1]] = "completed"
                     return self.reply(200, {})
                 if self.path.endswith("/runs/next"):
+                    stub.next_calls += 1
+                    if stub.wave_open:
+                        return self.reply(409, {"error": "wave_in_progress", "message": "wave 1 still has open runs"})
                     if stub.wave2 and not any(r in stub.status for r in stub.wave2["runs_ids"]):
                         for r in stub.wave2["runs_ids"]:
                             stub.status[r] = "queued"
+                        for r in stub.wave2.get("taken", []):
+                            stub.status[r] = "running"  # claimed by another actor right away
                         return self.reply(201, stub.wave2["body"])
                     return self.reply(200, {"done": True, "reason": "no more"})
                 if self.path.endswith("/results"):
@@ -469,7 +556,7 @@ class StubStudy:
         self.server.shutdown()
 
 
-def run_runner(tmp: Path, stub: StubStudy, runs: list[str], plan: dict, *extra: str) -> dict:
+def run_runner(tmp: Path, stub: StubStudy, runs: list[str], plan: dict, *extra: str, code: int = 0) -> dict:
     worker = tmp / "claude"
     worker.write_text(RUNNER_WORKER)
     worker.chmod(0o755)
@@ -482,22 +569,40 @@ def run_runner(tmp: Path, stub: StubStudy, runs: list[str], plan: dict, *extra: 
     args = [sys.executable, str(HERE / "study_runner.py"), "--study", "s1", "--data-dir", str(data),
             "--backend", stub.url, "--runs", ",".join(runs), "--parallel", "2", "--claude", str(worker), *extra]
     out = subprocess.run(args, env=env, capture_output=True, text=True, timeout=120)
-    expect(out.returncode == 0, f"runner exit {out.returncode}: {out.stdout[-600:]} {out.stderr[-600:]}")
+    expect(out.returncode == code, f"runner exit {out.returncode}, not {code}: {out.stdout[-600:]} {out.stderr[-600:]}")
     return json.loads((data / "studies" / "s1" / "runner.json").read_text())
 
 
 def case_runner_aborts_orphans(tmp: Path) -> None:
-    stub = StubStudy(["r-ok", "r-exit", "r-stall"])
+    stub = StubStudy(["r-ok", "r-gone", "r-stall"])
     try:
         started = time.monotonic()
-        status = run_runner(tmp, stub, ["r-ok", "r-exit", "r-stall"], {"r-exit": "exit", "r-stall": "stall"},
-                            "--stall-min", "0.05")
+        status = run_runner(tmp, stub, ["r-ok", "r-gone", "r-stall"], {"r-gone": "claim-exit", "r-stall": "stall"},
+                            "--stall-min", "0.05", code=1)
         expect(time.monotonic() - started < 30, "the stalled worker did not hold the study")
-        expect(stub.status == {"r-ok": "completed", "r-exit": "aborted", "r-stall": "aborted"}, f"statuses: {stub.status}")
-        expect(stub.aborts == {"r-exit": "worker exited without reporting",
+        expect(stub.status == {"r-ok": "completed", "r-gone": "aborted", "r-stall": "aborted"}, f"statuses: {stub.status}")
+        expect(stub.aborts == {"r-gone": "worker exited without reporting",
                                "r-stall": "claimed but no step for 0.05 minutes"}, f"reasons: {stub.aborts}")
         expect(status["workers"]["r-stall"]["state"] == "stalled", f"stalled state: {status['workers']['r-stall']}")
+        expect(status["workers"]["r-ok"]["claim"] == "won", f"claim recorded: {status['workers']['r-ok']}")
         expect(status["summary"]["aborted"] == 2, f"summary: {status['summary']}")
+    finally:
+        stub.close()
+
+
+def case_runner_aborts_only_runs_its_workers_claimed(tmp: Path) -> None:
+    stub = StubStudy(["r-ok", "r-taken", "r-early"])
+    stub.status["r-taken"] = "running"  # another runner's worker claimed it a moment ago
+    try:
+        status = run_runner(tmp, stub, ["r-ok", "r-taken", "r-early"], {"r-early": "exit"}, code=1)
+        expect(stub.aborts == {}, f"no run aborted: {stub.aborts}")
+        expect(stub.status == {"r-ok": "completed", "r-taken": "running", "r-early": "queued"},
+               f"the other actor's run is still running, the unclaimed one still queued: {stub.status}")
+        workers = status["workers"]
+        expect(workers["r-taken"]["claim"] == "lost" and workers["r-early"]["claim"] == "none",
+               f"claims: {workers['r-taken']} {workers['r-early']}")
+        expect(any("r-early" in p for p in status["problems"]) and not any("r-taken" in p for p in status["problems"]),
+               f"the unclaimed run is a problem, the lost claim is not: {status['problems']}")
     finally:
         stub.close()
 
@@ -509,16 +614,231 @@ def case_runner_budget_runs_the_highest_priority_wave_two_runs(tmp: Path) -> Non
                  {"runId": "w2-frus", "archetypeId": "C"}, {"runId": "w2-out-b", "archetypeId": "B"}],
         "reasons": [{"archetypeId": "A", "reason": "14 steps vs baseline median 10"},
                     {"archetypeId": "B", "reason": "did not complete while the baseline majority completed"},
-                    {"archetypeId": "C", "reason": "frustration 35 vs baseline median 10"}]}}
+                    {"archetypeId": "C", "reason": "frustration 35 vs baseline median 10"}]},
+        "taken": ["w2-steps"]}
     stub = StubStudy(["w1-a", "w1-b"], wave2=wave2)
     try:
         status = run_runner(tmp, stub, ["w1-a", "w1-b"], {}, "--max-runs", "4")
         ran = sorted(r for r, w in status["workers"].items() if w.get("state") == "finished")
         expect(ran == ["w1-a", "w1-b", "w2-out-a", "w2-out-b"], f"outcome disagreements first: {ran}")
-        expect(stub.aborts == {"w2-frus": "not run: the run budget of 4 was spent",
-                               "w2-steps": "not run: the run budget of 4 was spent"}, f"budget: {stub.aborts}")
+        expect(stub.aborts == {"w2-frus": "not run: the run budget of 4 was spent"}, f"budget: {stub.aborts}")
+        expect(stub.status["w2-steps"] == "running", "a run another actor claimed is never aborted for the budget")
     finally:
         stub.close()
+
+
+def start_watcher(tmp: Path, stub: StubStudy, plan: dict) -> tuple[subprocess.Popen, Path]:
+    """A --watch service (no --once) against the stub, polling every 0.2 s."""
+    worker = tmp / "claude"
+    worker.write_text(RUNNER_WORKER)
+    worker.chmod(0o755)
+    (tmp / "plan.json").write_text(json.dumps(plan))
+    data = tmp / "data"
+    data.mkdir(exist_ok=True)
+    (data / "auth.json").write_text(json.dumps({"access_token": "t"}))
+    env = dict(os.environ, RUNNER_PLAN=str(tmp / "plan.json"), ARCHETYPE_RUNNER_WATCH_S="0.2",
+               ARCHETYPE_RUNNER_WAVE_WAIT="0.1", ARCHETYPE_WATCH_POLL_S="0.2")
+    args = [sys.executable, str(HERE / "study_runner.py"), "--watch", "--data-dir", str(data),
+            "--backend", stub.url, "--parallel", "2", "--claude", str(worker)]
+    proc = subprocess.Popen(args, env=env, stdout=(tmp / "watch.log").open("w"), stderr=subprocess.STDOUT)
+    return proc, data
+
+
+def wait_for(cond, timeout: float, what: str) -> None:
+    deadline = time.monotonic() + timeout
+    while not cond():
+        expect(time.monotonic() < deadline, f"timed out waiting for {what}")
+        time.sleep(0.1)
+
+
+def case_runner_watch_stops_on_ctrl_c_and_serves_again(tmp: Path) -> None:
+    import signal as sig
+    stub = StubStudy(["q-1"])
+    proc, data = start_watcher(tmp, stub, {})
+    try:
+        wait_for(lambda: stub.status["q-1"] == "completed", 60, "the first run")
+        seen = len(stub.listings)
+        wait_for(lambda: len(stub.listings) >= seen + 2, 30, "the watcher to poll again")
+        proc.send_signal(sig.SIGINT)
+        try:
+            code = proc.wait(timeout=15)
+        except subprocess.TimeoutExpired:
+            raise Fail("Ctrl-C did not stop the watcher once it had served a study: "
+                       + (tmp / "watch.log").read_text()[-600:])
+        expect(code == 0, f"clean stop: exit {code}")
+        expect(not (data / "studies" / "s1" / "stop").exists(), "a signal leaves no stop file behind")
+        stub.status["q-2"] = "queued"
+        env = dict(os.environ, RUNNER_PLAN=str(tmp / "plan.json"), ARCHETYPE_RUNNER_WATCH_S="0.2",
+                   ARCHETYPE_RUNNER_WAVE_WAIT="0.1")
+        out = subprocess.run([sys.executable, str(HERE / "study_runner.py"), "--watch", "--once", "--data-dir",
+                              str(data), "--backend", stub.url, "--claude", str(tmp / "claude")],
+                             env=env, capture_output=True, text=True, timeout=120)
+        expect(out.returncode == 0 and stub.status["q-2"] == "completed",
+               f"a restarted watcher serves the study again: {stub.status} {out.stdout[-600:]}")
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+        stub.close()
+
+
+def case_runner_watch_sigterm_stops_its_live_worker(tmp: Path) -> None:
+    import signal as sig
+    stub = StubStudy(["w-slow"])
+    proc, data = start_watcher(tmp, stub, {"w-slow": "slow"})
+    try:
+        stream = data / "studies" / "s1" / "w-slow" / "stream.jsonl"
+        wait_for(lambda: stream.exists() and "log_step" in stream.read_text(), 60, "the worker's first step")
+        proc.send_signal(sig.SIGTERM)
+        try:
+            code = proc.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            raise Fail("SIGTERM did not stop the watcher: " + (tmp / "watch.log").read_text()[-600:])
+        expect(code == 0, f"clean stop: exit {code}")
+        expect(stub.aborts == {"w-slow": "the runner was stopped before the worker reported"},
+               f"its claimed run is aborted with the reason: {stub.aborts}")
+        expect(not (data / "studies" / "s1" / "stop").exists(), "no stop file left behind")
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+        stub.close()
+
+
+def case_runner_watch_gives_up_on_a_run_no_worker_can_claim(tmp: Path) -> None:
+    import signal as sig
+    stub = StubStudy(["q-x"])
+    proc, data = start_watcher(tmp, stub, {"q-x": "exit"})
+    log = tmp / "watch.log"
+    try:
+        starts = lambda: log.read_text().count("run q-x on archetype-browser")
+        wait_for(lambda: "not retried" in log.read_text(), 60, "the watcher to give up on q-x")
+        seen = len(stub.listings)
+        wait_for(lambda: len(stub.listings) >= seen + 5, 30, "more polls")
+        expect(starts() == 3, f"three workers tried q-x, then no more: {starts()}")
+        expect(stub.status["q-x"] == "queued" and stub.aborts == {}, f"left queued, not aborted: {stub.status}")
+        proc.send_signal(sig.SIGINT)
+        expect(proc.wait(timeout=15) == 0, "clean stop")
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+        stub.close()
+
+
+def case_runner_leaves_a_study_to_its_live_runner(tmp: Path) -> None:
+    stub = StubStudy(["q-a"])
+    try:
+        worker = tmp / "claude"
+        worker.write_text(RUNNER_WORKER)
+        worker.chmod(0o755)
+        (tmp / "plan.json").write_text("{}")
+        data = tmp / "data"
+        (data / "studies" / "s1").mkdir(parents=True)
+        (data / "auth.json").write_text(json.dumps({"access_token": "t"}))
+        # A dispatch_study runner (this test process stands in for it) is serving s1 on this machine.
+        live = {"study_id": "s1", "state": "running", "pid": os.getpid(), "workers": {"q-a": {"state": "running"}}}
+        (data / "studies" / "s1" / "runner.json").write_text(json.dumps(live))
+        env = dict(os.environ, RUNNER_PLAN=str(tmp / "plan.json"), ARCHETYPE_RUNNER_WATCH_S="0.2")
+        common = ["--data-dir", str(data), "--backend", stub.url, "--claude", str(worker)]
+        out = subprocess.run([sys.executable, str(HERE / "study_runner.py"), "--watch", "--once", *common],
+                             env=env, capture_output=True, text=True, timeout=60)
+        expect(out.returncode == 0 and stub.status["q-a"] == "queued", f"watch leaves it alone: {stub.status} {out.stdout[-400:]}")
+        expect(json.loads((data / "studies" / "s1" / "runner.json").read_text()) == live, "its runner.json untouched")
+        expect(not (data / "studies" / "s1" / "plugin").exists(), "its shadow plugin untouched")
+        out = subprocess.run([sys.executable, str(HERE / "study_runner.py"), "--study", "s1", "--runs", "q-a", *common],
+                             env=env, capture_output=True, text=True, timeout=60)
+        expect(out.returncode == 2 and str(os.getpid()) in out.stdout + out.stderr and stub.status["q-a"] == "queued",
+               f"a second runner refuses: {out.returncode} {out.stdout[-300:]} {out.stderr[-300:]}")
+    finally:
+        stub.close()
+
+
+def case_runner_stops_waiting_for_a_wave_on_sigterm(tmp: Path) -> None:
+    import signal as sig
+    stub = StubStudy([])
+    stub.wave_open = True
+    try:
+        data = tmp / "data"
+        data.mkdir()
+        (data / "auth.json").write_text(json.dumps({"access_token": "t"}))
+        env = dict(os.environ, ARCHETYPE_RUNNER_WAVE_WAIT="30")
+        proc = subprocess.Popen([sys.executable, str(HERE / "study_runner.py"), "--study", "s1", "--data-dir", str(data),
+                                 "--backend", stub.url, "--claude", "/bin/false"], env=env,
+                                stdout=(tmp / "runner.log").open("w"), stderr=subprocess.STDOUT)
+        try:
+            wait_for(lambda: stub.next_calls >= 1, 30, "the first next wave request")
+            time.sleep(0.3)
+            proc.send_signal(sig.SIGTERM)
+            try:
+                code = proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                raise Fail("SIGTERM did not stop a runner waiting for the next wave")
+            expect(code == 1, f"stopped before the study finished: exit {code}")
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+    finally:
+        stub.close()
+
+
+def case_runner_sends_the_token_only_over_https(tmp: Path) -> None:
+    runner = load_runner()
+    spec = importlib.util.spec_from_file_location("core_server", HERE / "core-server.py")
+    core = importlib.util.module_from_spec(spec)
+    assert spec.loader
+    spec.loader.exec_module(core)
+    for url in ("https://api.syntheticarchetype.com", "http://127.0.0.1:5001", "http://localhost:5001",
+                "http://[::1]:5001", "http://api.example.com", "http://10.0.0.5:5001", "https://",
+                "file:///etc/passwd", "javascript:alert(1)", "ftp://api.example.com", ""):
+        expect(runner.is_safe_url(url) == core._is_safe_url(url), f"same rule as the core server for {url!r}")
+    data = tmp / "data"
+    data.mkdir()
+    (data / "auth.json").write_text(json.dumps({"access_token": "secret-token"}))
+    sent: list = []
+
+    class Answer:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self):
+            return b'{"ok": true}'
+
+    def fake_urlopen(req, timeout=None):
+        sent.append(req)
+        return Answer()
+
+    runner.urllib.request.urlopen = fake_urlopen
+    status, body = runner.backend_call("http://api.example.com", data, "GET", "/api/studies")
+    expect(status == 0 and body.get("error") == "insecure_backend" and not sent,
+           f"no request to a cleartext remote backend: {status} {body} {len(sent)}")
+    for url in ("https://api.example.com", "http://127.0.0.1:5001"):
+        status, body = runner.backend_call(url, data, "POST", "/api/studies/s1/runs/next")
+        expect(status == 200 and body == {"ok": True}, f"{url}: {status} {body}")
+        expect(sent[-1].get_header("Authorization") == "Bearer secret-token", f"{url} gets the token")
+        expect(sent[-1].data == b"{}" and sent[-1].get_method() == "POST", "a POST sends an empty object")
+    out = subprocess.run([sys.executable, str(HERE / "study_runner.py"), "--study", "s1", "--data-dir", str(data),
+                          "--backend", "http://api.example.com", "--runs", "r-1", "--dry-run"],
+                         capture_output=True, text=True, timeout=30)
+    expect(out.returncode == 2 and "https" in out.stderr, f"refuses a cleartext backend up front: {out.stderr[-300:]}")
+    expect(not (data / "studies" / "s1").exists(), "nothing prepared for it")
+
+
+def case_runner_refuses_options_it_cannot_honor(tmp: Path) -> None:
+    data = tmp / "data"
+    data.mkdir()
+    (data / "auth.json").write_text(json.dumps({"access_token": "t"}))
+    base = [sys.executable, str(HERE / "study_runner.py"), "--study", "s1", "--data-dir", str(data),
+            "--backend", "http://127.0.0.1:1", "--runs", "r-1", "--dry-run"]
+    for extra, why in ((["--parallel", "8"], "--parallel"), (["--parallel", "0"], "--parallel"),
+                       (["--max-runs", "-1"], "--max-runs"), (["--stall-min", "0"], "--stall-min"),
+                       (["--timeout-min", "0"], "--timeout-min")):
+        out = subprocess.run(base + extra, capture_output=True, text=True, timeout=30)
+        expect(out.returncode == 2 and why in out.stderr, f"{extra} refused, not coerced: {out.returncode} {out.stderr[-200:]}")
+    out = subprocess.run(base + ["--parallel", "4", "--max-runs", "0"], capture_output=True, text=True, timeout=30)
+    expect(out.returncode == 0, f"the limits themselves are fine: {out.stderr[-200:]}")
 
 
 def case_runner_watch_serves_remote_studies(tmp: Path) -> None:
@@ -557,6 +877,8 @@ CASES = [
     ("proxy routes the server's own requests through the client", case_proxy_routes_server_requests),
     ("proxy answers a call the crashed server never will, then restarts", case_proxy_survives_a_crash),
     ("watch servers are headed and still isolated", case_watch_server_is_headed),
+    ("proxy kills a browser server that hangs on close", case_proxy_never_leaves_a_hung_browser_behind),
+    ("proxy answers a call when the video folder cannot be made", case_proxy_answers_when_the_video_folder_cannot_be_made),
     (".mcp.json declares the six servers on the proxy", case_mcp_json_declares_six_servers),
     ("permission hook allows only actor browser and run tools", case_permission_hook),
     ("runner shadow plugin, scrubbed env and worker command", case_runner_shadow_and_command),
@@ -565,8 +887,16 @@ CASES = [
     ("proxy without any browser answers with the install command", case_proxy_without_a_browser_says_how_to_install),
     ("the recorded browser config names the engine that runs", case_recorded_config_names_the_engine),
     ("runner aborts runs whose worker exited or stalled, with the reason", case_runner_aborts_orphans),
+    ("runner aborts only the runs its own workers claimed", case_runner_aborts_only_runs_its_workers_claimed),
     ("runner budget runs the highest priority wave 2 runs, the rest not run", case_runner_budget_runs_the_highest_priority_wave_two_runs),
     ("runner --watch serves every queued run of remote studies", case_runner_watch_serves_remote_studies),
+    ("runner sends the token only to an https or loopback backend", case_runner_sends_the_token_only_over_https),
+    ("runner --watch stops on Ctrl-C after a study and serves it again later", case_runner_watch_stops_on_ctrl_c_and_serves_again),
+    ("runner --watch on SIGTERM stops its live worker and aborts that run", case_runner_watch_sigterm_stops_its_live_worker),
+    ("runner leaves a study to the live runner already serving it here", case_runner_leaves_a_study_to_its_live_runner),
+    ("runner --watch stops retrying a run no worker can claim", case_runner_watch_gives_up_on_a_run_no_worker_can_claim),
+    ("runner refuses options it cannot honor instead of coercing them", case_runner_refuses_options_it_cannot_honor),
+    ("runner stops waiting for the next wave on SIGTERM", case_runner_stops_waiting_for_a_wave_on_sigterm),
 ]
 
 
