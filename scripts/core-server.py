@@ -3738,6 +3738,9 @@ def _study_next_step(study: dict[str, Any], runs: list[dict[str, Any]]) -> tuple
         return "runs", ["Create wave 1: create_study_runs."]
     wave = max((_int_or(r.get("wave"), 1) for r in runs), default=1)
     current = [r for r in runs if _int_or(r.get("wave"), 1) == wave]
+    if any(r.get("status") == "unknown" for r in current):
+        return "unknown", ["This backend lists no run statuses, so whether the wave has finished is "
+                           "unknown: check study_status before dispatching runs or asking for the next wave."]
     queued = [r for r in current if r.get("status") == "queued"]
     running = [r for r in current if r.get("status") == "running"]
     if queued:

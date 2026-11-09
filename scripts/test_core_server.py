@@ -2966,7 +2966,10 @@ def case_69b_get_study_without_its_run_listing(srv: ServerProc, data_dir: Path) 
     STATE.once_overrides[study_path] = (200, ready)
     result = call_tool(srv, "get_study", {"study_id": STUDY_ID})
     expect(not result.get("isError"), f"an old backend resumes: {result_text(result)[:200]}")
-    contains(result_text(result), "| unknown |", "run refs without a live status")
+    text = result_text(result)
+    contains(text, "| unknown |", "run refs without a live status")
+    contains(text, "Stage: unknown.", "no stage guessed from unknown statuses")
+    expect("call next_study_wave" not in text, f"no next wave on a guess: {text[-400:]}")
 
 
 def case_66b_study_status_waits_for_a_change(srv: ServerProc, data_dir: Path) -> None:
