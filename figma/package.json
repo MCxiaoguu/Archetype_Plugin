@@ -1,0 +1,27 @@
+{
+  "name": "archetype-figma-plugin",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Archetype for Figma: test a prototype flow with synthetic users before handoff.",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "watch": "node build.mjs --watch",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "check:manifest": "node scripts/check-manifest.mjs",
+    "harness": "node harness/serve.mjs",
+    "shots": "node harness/shots.mjs"
+  },
+  "devDependencies": {
+    "@figma/plugin-typings": "1.142.0",
+    "esbuild": "0.28.2",
+    "playwright": "1.64.1",
+    "typescript": "5.9.3",
+    "vitest": "4.1.12"
+  },
+  "dependencies": {
+    "preact": "11.1.1"
+  }
+}

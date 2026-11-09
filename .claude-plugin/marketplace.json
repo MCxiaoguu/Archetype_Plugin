@@ -1,6 +1,6 @@
 {
   "name": "archetype",
-  "description": "Synthetic Archetype for Claude Code — test your product as if your customers were sitting beside you. Persona-driven browser validation runs with faithful, structured feedback.",
+  "description": "Synthetic Archetype for Claude Code: test your product as if your customers were sitting beside you. Persona runs and behavioral studies in isolated browsers, with faithful, structured feedback.",
   "owner": {
     "name": "Synthetic Archetype",
     "url": "https://www.syntheticarchetype.com"
@@ -13,7 +13,7 @@
         "source": "url",
         "url": "https://github.com/MCxiaoguu/Archetype_Plugin.git"
       },
-      "description": "Testing your product with synthetic personas: create personas from a description, run persona-driven validation tests in a real browser, compare how different personas experience your product, and get verdicts, findings, and reactions persisted to your Archetype workspace.",
+      "description": "Test your product with synthetic personas. Run one persona through a flow in a real browser, or run a behavioral study: the plugin picks the behavioral factors that matter for your users (patience, trust, familiarity and more), generates an archetype per factor plus a baseline and a stress case, runs them in parallel isolated headless browsers with a video per run, and reports completion per archetype, which factor made people give up, with what confidence, and what to change.",
       "author": {
         "name": "Synthetic Archetype",
         "url": "https://www.syntheticarchetype.com"
@@ -22,19 +22,22 @@
       "repository": "https://github.com/MCxiaoguu/Archetype_Plugin",
       "category": "testing",
       "keywords": [
-        "testing",
-        "personas",
-        "user-testing",
-        "validation",
-        "ux",
+        "behavioral-studies",
         "browser-automation",
-        "feedback"
+        "feedback",
+        "personas",
+        "playwright",
+        "testing",
+        "user-testing",
+        "ux",
+        "validation"
       ],
       "tags": [
         "product-testing",
         "synthetic-users",
         "qa"
-      ]
+      ],
+      "version": "0.6.0"
     }
   ]
 }

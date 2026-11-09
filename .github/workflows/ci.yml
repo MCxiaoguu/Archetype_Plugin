@@ -35,6 +35,8 @@ jobs:
         run: python scripts/test_session_hook.py
       - name: Action hook
         run: python scripts/test_action_hook.py
+      - name: Browser proxy, permission hook and swarm runner
+        run: python scripts/test_browsers.py
       - name: Actor agents in sync
         run: python scripts/test_agents_in_sync.py
 
@@ -44,10 +46,19 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
-      - name: plugin.json and hooks.json are valid JSON
+      - name: plugin.json, .mcp.json, hooks.json and browser files are valid JSON
         run: |
-          python3 -m json.tool .claude-plugin/plugin.json > /dev/null
-          python3 -m json.tool hooks/hooks.json > /dev/null
+          for f in .claude-plugin/plugin.json .claude-plugin/marketplace.json .mcp.json hooks/hooks.json browser/*.json; do
+            python3 -m json.tool "$f" > /dev/null || { echo "invalid JSON: $f"; exit 1; }
+          done
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: claude plugin validate --strict
+        run: |
+          npm install -g @anthropic-ai/claude-code
+          claude --version
+          claude plugin validate --strict .
       - name: Every skill and agent has frontmatter with a name
         run: |
           status=0
@@ -56,3 +67,30 @@ jobs:
             grep -qm1 '^name: ' "$f" || { echo "missing name: $f"; status=1; }
           done
           exit $status
+
+  figma:
+    name: figma plugin
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: figma
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: figma/package-lock.json
+      - name: Install
+        run: npm ci
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Unit and main thread tests
+        run: npm test
+      - name: Build
+        run: npm run build
+      - name: Manifest points at the built files
+        run: npm run check:manifest
