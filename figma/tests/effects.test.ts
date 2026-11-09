@@ -185,6 +185,19 @@ describe('panel effects', () => {
     expect(sent).toContainEqual({ type: 'save-token', token: null });
   });
 
+  it('returns to the form after a sign in that interrupted creating the study', async () => {
+    installFetch(() => [401, { error: 'Invalid token', message: 'Token validation failed' }]);
+    const { store, fx } = initStore('expired');
+    store.dispatch({ type: 'pick', role: 'goal', nodeId: '2:50' });
+    store.dispatch({ type: 'field', field: 'goal', value: 'Pay' });
+    store.dispatch({ type: 'field', field: 'who', value: 'Founders' });
+    store.dispatch({ type: 'field', field: 'link', value: 'https://www.figma.com/design/AbCdEfGh1234567890XyZ/x' });
+    await fx.launch();
+    expect(store.get().screen).toBe('signin');
+    fx.acceptToken('fresh');
+    expect(store.get()).toMatchObject({ screen: 'new', study: null, form: { goal: 'Pay', goalId: '2:50' } });
+  });
+
   it('signs in with the device flow and opens the verification page', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     let polls = 0;

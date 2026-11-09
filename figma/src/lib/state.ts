@@ -294,6 +294,9 @@ export function reducer(state: AppState, action: Action): AppState {
     case 'signed-out':
       return {
         ...state,
+        // A launch the sign out cut off before the study existed has nothing
+        // to resume; the form still holds what was typed.
+        study: state.study?.id ? state.study : null,
         token: null,
         screen: 'signin',
         auth: INITIAL_STATE.auth,
