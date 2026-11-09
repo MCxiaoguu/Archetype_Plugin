@@ -103,7 +103,9 @@ export function createMockBackend({ log = () => {} } = {}) {
     if (path === '/api/oauth/device/token' && method === 'POST') {
       const n = (devicePolls.get(body?.device_code) ?? 0) + 1;
       devicePolls.set(body?.device_code, n);
-      if (n < 4) return [403, { error: n === 2 ? 'slow_down' : 'authorization_pending', error_description: 'waiting' }];
+      // Auth0's status codes: 429 for slow_down, 403 while pending.
+      if (n === 2) return [429, { error: 'slow_down', error_description: 'You are polling faster than allowed.' }];
+      if (n < 4) return [403, { error: 'authorization_pending', error_description: 'waiting' }];
       return [200, { access_token: 'mock-token', token_type: 'Bearer', expires_in: 86400 }];
     }
     if (!path.startsWith('/api/')) return null;
