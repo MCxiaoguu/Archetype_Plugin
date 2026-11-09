@@ -19,7 +19,9 @@ function FramePicker(props: {
 }) {
   const { role, value, doc, selection, store } = props;
   const label = role === 'start' ? 'Start here' : 'Goal screen';
-  const current = doc.frames.find((f) => f.id === value) ?? null;
+  // Component sets stay in the snapshot (their layers' interactions are read) but are not screens.
+  const screens = doc.frames.filter((f) => !f.notAScreen);
+  const current = screens.find((f) => f.id === value) ?? null;
   const flowNames = new Map(doc.flowStarts.map((f) => [f.nodeId, f.name]));
   const selId = `pick-${role}`;
   const canUse = !!selection && selection.id !== value;
@@ -55,7 +57,7 @@ function FramePicker(props: {
         onChange={(e) => store.dispatch({ type: 'pick', role, nodeId: (e.currentTarget as HTMLSelectElement).value || null })}
       >
         <option value="">{role === 'start' ? 'Choose a start frame' : 'Choose the goal frame'}</option>
-        {doc.frames.map((f) => (
+        {screens.map((f) => (
           <option value={f.id}>{flowNames.has(f.id) ? `${f.name}  (flow: ${flowNames.get(f.id)})` : f.name}</option>
         ))}
       </select>
@@ -80,7 +82,15 @@ function PreflightPanel({ pf, doc }: { pf: Preflight; doc: DocSnapshot }) {
           <li class={`check ${isFlowBlocker(pf.blocker) ? 'check-block' : 'check-todo'}`}>
             {isFlowBlocker(pf.blocker) ? <IconStop /> : <IconWarn />}
             <div>
-              <strong>{pf.blocker === 'unreachable' ? 'Goal not reachable' : pf.blocker === 'goal_is_overlay' ? 'Goal is an overlay' : 'Almost there'}</strong>
+              <strong>
+                {pf.blocker === 'unreachable'
+                  ? 'Goal not reachable'
+                  : pf.blocker === 'goal_is_overlay'
+                    ? 'Goal is an overlay'
+                    : pf.blocker === 'start_not_a_screen' || pf.blocker === 'goal_not_a_screen'
+                      ? 'Not a screen'
+                      : 'Almost there'}
+              </strong>
               <p>{BLOCKER_TEXT[pf.blocker]}</p>
             </div>
           </li>
@@ -181,7 +191,7 @@ export function NewTest({ state, store, fx }: { state: AppState; store: Store; f
   const errors = state.touched && pf ? validateForm(form, pf, state.fileKey) : {};
 
   if (!doc) return <div class="screen" />;
-  if (doc.frames.length === 0) {
+  if (!doc.frames.some((f) => !f.notAScreen)) {
     return (
       <div class="screen empty">
         <div class="empty-art" aria-hidden="true">

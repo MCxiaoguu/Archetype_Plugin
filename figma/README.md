@@ -32,8 +32,8 @@ the prototype's connections from your start screen:
 
 - whether the goal is reachable at all, and the shortest path;
 - whether the flow navigates to the goal: a goal that only opens as an overlay keeps the address of the
-  screen under it, so the `frame_reached` check could never see it (this and an unreachable goal are the
-  only things that block launch);
+  screen under it, so the `frame_reached` check could never see it (this, an unreachable goal and a start or
+  goal that is a component set, which the pickers never offer, are the only things that block launch);
 - dead ends a persona can reach and never leave;
 - hotspots that point at frames that no longer exist;
 - hotspot layers named `Rectangle 12`, `Frame 3`, `image 4`, `icons8-trophy-32 1` and friends. The prototype viewer's

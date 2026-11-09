@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { runPreflight } from '../src/lib/preflight';
+import { BLOCKER_TEXT, runPreflight } from '../src/lib/preflight';
 import { fixtureDoc } from './helpers';
 
 describe('preflight', () => {
@@ -41,6 +41,15 @@ describe('preflight', () => {
     d.hotspots.push({ id: 'h-nav', name: 'See error', type: 'INSTANCE', frameId: '2:30', trigger: 'ON_CLICK', actions: [{ kind: 'node', navigation: 'NAVIGATE', destinationId: '3:1' }] });
     d.destinations['3:1'] = { exists: true, frameId: '3:1' };
     expect(runPreflight(d, '1:2', '3:1')).toMatchObject({ ok: true, blocker: null });
+  });
+
+  it('refuses a start or goal the prototype cannot open', () => {
+    const d = fixtureDoc();
+    d.frames.push({ id: '8:1', name: 'Button', notAScreen: 'component_set' });
+    expect(runPreflight(d, '8:1', '2:50')).toMatchObject({ ok: false, blocker: 'start_not_a_screen' });
+    expect(runPreflight(d, '1:2', '8:1')).toMatchObject({ ok: false, blocker: 'goal_not_a_screen' });
+    expect(BLOCKER_TEXT.goal_not_a_screen).toMatch(/component set/);
+    expect(runPreflight({ ...d, frames: [{ id: '8:1', name: 'Button', notAScreen: 'component_set' }] }, '8:1', null)).toMatchObject({ blocker: 'no_frames' });
   });
 
   it('still reports advice while the goal is missing', () => {

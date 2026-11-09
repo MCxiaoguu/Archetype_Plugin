@@ -5,7 +5,7 @@ import { clearPins, pinFindings, showNode } from '../src/main/canvas';
 import { createController } from '../src/main/controller';
 import { readDocument, reactionActions, selectedFrame, topFrameOf, topLevelFrames } from '../src/main/document';
 import * as store from '../src/main/storage';
-import { makeFigma, type FakeNode } from './fake-figma';
+import { FakeNode, makeFigma } from './fake-figma';
 
 const rec = (id: string, at: number): StudyRecord => ({ studyId: id, title: id, startName: 'A', goalName: 'B', size: 'quick', launchedAt: at, status: 'running' });
 
@@ -53,6 +53,16 @@ describe('reading the page', () => {
     expect(pf.broken.map((b) => b.hotspotId)).toEqual(['2:23']);
     expect(pf.deadEnds.map((d) => d.name)).toEqual(['Plans']);
     expect(pf.genericNames.map((g) => g.name)).toEqual(['Rectangle 12', 'Frame 48']);
+  });
+
+  it('marks a component set as a frame the prototype cannot open', async () => {
+    const { api, page } = makeFigma();
+    const set = new FakeNode('8:1', 'Button', 'COMPONENT_SET');
+    set.add(new FakeNode('8:2', 'State=Default', 'COMPONENT'));
+    (page as FakeNode).add(set);
+    const doc = await readDocument(api);
+    expect(doc.frames.find((f) => f.id === '8:1')).toEqual({ id: '8:1', name: 'Button', notAScreen: 'component_set' });
+    expect(doc.frames.filter((f) => f.notAScreen)).toHaveLength(1);
   });
 
   it('treats removed destinations as broken', async () => {

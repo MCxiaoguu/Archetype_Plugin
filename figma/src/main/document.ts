@@ -105,6 +105,7 @@ export async function readDocument(api: PluginAPI): Promise<DocSnapshot> {
     if ('overlayBackgroundInteraction' in f && f.overlayBackgroundInteraction === 'CLOSE_ON_CLICK_OUTSIDE') {
       info.closesOnOutsideClick = true;
     }
+    if (f.type === 'COMPONENT_SET') info.notAScreen = 'component_set';
     return info;
   });
   const frameIds = new Set(frames.map((f) => f.id));

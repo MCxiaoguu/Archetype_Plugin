@@ -19,7 +19,15 @@ export interface BrokenIssue {
   frameName: string;
 }
 
-export type Blocker = 'no_start' | 'no_goal' | 'same_frame' | 'unreachable' | 'goal_is_overlay' | 'no_frames';
+export type Blocker =
+  | 'no_start'
+  | 'no_goal'
+  | 'start_not_a_screen'
+  | 'goal_not_a_screen'
+  | 'same_frame'
+  | 'unreachable'
+  | 'goal_is_overlay'
+  | 'no_frames';
 
 export interface Preflight {
   /** Launch is allowed. Only `blocker` stops it; everything else is advice. */
@@ -43,6 +51,8 @@ export const BLOCKER_TEXT: Record<Blocker, string> = {
   no_frames: 'This page has no top level frames. Open the page with your prototype.',
   no_start: 'Pick the screen the test starts on.',
   no_goal: 'Pick the screen that means the goal is reached.',
+  start_not_a_screen: 'The start is a component set. The prototype cannot open a component set as a screen; pick a frame.',
+  goal_not_a_screen: 'The goal is a component set. The prototype cannot open a component set as a screen; pick a frame.',
   same_frame: 'The goal screen is the start screen. Pick a goal further into the flow.',
   unreachable: 'No chain of hotspots leads from the start to the goal screen, so no one can finish. Connect the screens in Prototype mode and check again.',
   goal_is_overlay:
@@ -75,8 +85,9 @@ export function runPreflight(doc: DocSnapshot, startId: string | null, goalId: s
     genericNames: [],
     keyFeatures: [],
   };
-  if (graph.frames.size === 0) return { ...empty, blocker: 'no_frames' };
+  if (![...graph.frames.values()].some((f) => !f.notAScreen)) return { ...empty, blocker: 'no_frames' };
   if (!startId || !graph.frames.has(startId)) return { ...empty, blocker: 'no_start' };
+  if (graph.frames.get(startId)?.notAScreen) return { ...empty, blocker: 'start_not_a_screen' };
 
   const reach = distancesFrom(graph, startId);
   const inReach = (frameId: string) => reach.has(frameId);
@@ -111,6 +122,7 @@ export function runPreflight(doc: DocSnapshot, startId: string | null, goalId: s
     deadEnds: deadEnds(graph, startId, goalId).map((id) => ref(graph, id)),
   };
   if (!goalId || !graph.frames.has(goalId)) return { ...base, blocker: 'no_goal' };
+  if (graph.frames.get(goalId)?.notAScreen) return { ...base, blocker: 'goal_not_a_screen' };
   if (goalId === startId) return { ...base, blocker: 'same_frame' };
   const path = shortestPath(graph, startId, goalId);
   if (!path) return { ...base, blocker: 'unreachable' };

@@ -125,13 +125,14 @@ function emptyStudy(now: number, record: StudyRecord | null, stage: Stage): Acti
   };
 }
 
-function defaultStart(doc: DocSnapshot | null): string | null {
-  const first = doc?.flowStarts.find((f) => doc.frames.some((fr) => fr.id === f.nodeId));
-  return first ? first.nodeId : null;
+/** A top level frame on the page that the prototype can open as a screen. */
+function isScreen(doc: DocSnapshot | null, id: string | null): boolean {
+  return !!id && !!doc?.frames.some((f) => f.id === id && !f.notAScreen);
 }
 
-function frameExists(doc: DocSnapshot | null, id: string | null): boolean {
-  return !!id && !!doc?.frames.some((f) => f.id === id);
+function defaultStart(doc: DocSnapshot | null): string | null {
+  const first = doc?.flowStarts.find((f) => isScreen(doc, f.nodeId));
+  return first ? first.nodeId : null;
 }
 
 function landing(state: AppState): Screen {
@@ -179,8 +180,8 @@ export function reducer(state: AppState, action: Action): AppState {
     }
     case 'doc': {
       const form = { ...state.form };
-      if (!frameExists(action.doc, form.startId)) form.startId = defaultStart(action.doc);
-      if (!frameExists(action.doc, form.goalId)) form.goalId = null;
+      if (!isScreen(action.doc, form.startId)) form.startId = defaultStart(action.doc);
+      if (!isScreen(action.doc, form.goalId)) form.goalId = null;
       return { ...state, doc: action.doc, form };
     }
     case 'selection':
@@ -190,13 +191,17 @@ export function reducer(state: AppState, action: Action): AppState {
     case 'size':
       return { ...state, form: { ...state.form, size: action.size } };
     case 'pick': {
-      const id = frameExists(state.doc, action.nodeId) ? action.nodeId : null;
+      const id = isScreen(state.doc, action.nodeId) ? action.nodeId : null;
       return { ...state, form: { ...state.form, [action.role === 'start' ? 'startId' : 'goalId']: id } };
     }
     case 'use-selection': {
       const sel = state.selection;
-      if (!sel || !frameExists(state.doc, sel.id)) {
+      const frame = sel ? state.doc?.frames.find((f) => f.id === sel.id) : undefined;
+      if (!sel || !frame) {
         return { ...state, notice: { kind: 'info', text: 'Select one top level frame on the canvas first.' } };
+      }
+      if (frame.notAScreen) {
+        return { ...state, notice: { kind: 'info', text: 'A component set cannot be a test screen. Select a frame instead.' } };
       }
       return reducer({ ...state, notice: null }, { type: 'pick', role: action.role, nodeId: sel.id });
     }
