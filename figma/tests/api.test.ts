@@ -100,6 +100,25 @@ describe('api client', () => {
     expect(e2).toMatchObject({ status: 403, code: 'unauthorized_client', message: 'Grant type device_code not allowed for the client.' });
   });
 
+  it('reads problem documents that carry error and message', async () => {
+    const { fetch } = mockFetch([
+      { status: 405, body: { type: 'https://docs.syntheticarchetype.com/api#errors', title: 'Method Not Allowed', status: 405, detail: '/api/studies does not accept PUT; it accepts GET, POST.', error: 'method_not_allowed', message: '/api/studies does not accept PUT; it accepts GET, POST.' } },
+    ]);
+    const api = new ApiClient({ baseUrl: 'http://x', getToken: () => 't', fetch });
+    const e = (await api.createStudy({}).catch((err) => err)) as ApiError;
+    expect(e).toMatchObject({ status: 405, code: 'method_not_allowed', message: '/api/studies does not accept PUT; it accepts GET, POST.' });
+  });
+
+  it('keeps the session when the sign in service is down', async () => {
+    const onUnauthorized = vi.fn();
+    const { fetch } = mockFetch([{ status: 503, body: { error: 'auth_unavailable' } }]);
+    const api = new ApiClient({ baseUrl: 'http://x', getToken: () => 't', fetch, onUnauthorized });
+    const e = (await api.getStatus('s').catch((err) => err)) as ApiError;
+    expect(e).toMatchObject({ status: 503, code: 'auth_unavailable' });
+    expect(e.message).toMatch(/still signed in/);
+    expect(onUnauthorized).not.toHaveBeenCalled();
+  });
+
   it('refuses a success answer it cannot read', async () => {
     const fetch: FetchLike = async () => new Response('<html>Gateway login</html>', { status: 200 });
     const api = new ApiClient({ baseUrl: 'http://x', getToken: () => 't', fetch });

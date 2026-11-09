@@ -6,9 +6,9 @@
 /**
  * The error bodies the panel meets: the studies and plugin routes answer
  * `{error, message}` (error is a slug); framework errors are RFC 9457
- * problem documents (`code` is the slug, `detail` the sentence, and `error`
- * repeats `detail`); the device flow passes Auth0's `{error, error_description}`
- * through.
+ * problem documents (`detail` is the sentence; the slug is in `error`, or in
+ * `code` on backends where `error` repeats `detail`); the device flow passes
+ * Auth0's `{error, error_description}` through.
  */
 export interface ApiErrorBody {
   error?: string;
@@ -95,6 +95,9 @@ export function normaliseBase(url: string): string {
 function friendlyMessage(status: number, body: ApiErrorBody | null, fallback: string): string {
   const text = errorText(body);
   if (text) return text;
+  // 503 auth_unavailable: the backend could not reach its sign in service.
+  // The token may be fine, so it is kept (only a 401 signs out).
+  if (errorCode(body) === 'auth_unavailable') return 'Archetype cannot check sign ins right now. You are still signed in; try again in a minute.';
   if (status >= 500) return 'Archetype had a problem on its side. Try again in a moment.';
   return fallback;
 }

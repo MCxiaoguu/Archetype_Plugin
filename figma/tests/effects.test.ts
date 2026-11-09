@@ -224,6 +224,21 @@ describe('panel effects', () => {
     expect(store.get().study).toBeNull();
   });
 
+  it('keeps the token and keeps watching through a sign in service outage', async () => {
+    let polls = 0;
+    installFetch((_m, path) => {
+      if (path === '/api/studies/s8/status' && polls++ === 0) return [200, { studyId: 's8', status: 'running' }];
+      return [503, { error: 'auth_unavailable', message: 'The sign in service is unavailable. Try again in a minute.' }];
+    });
+    const { store, fx } = initStore('tok');
+    store.dispatch({ type: 'open-study', record: { studyId: 's8', title: 't', startName: 'a', goalName: 'b', size: 'quick', launchedAt: 0, status: 'running' }, now: 0 });
+    fx.watch();
+    await until(() => !!store.get().study?.pollError);
+    expect(store.get()).toMatchObject({ token: 'tok', screen: 'progress', study: { error: null, pollError: 'The sign in service is unavailable. Try again in a minute.' } });
+    expect(sent.map((m) => m.type)).not.toContain('save-token');
+    fx.newTest();
+  });
+
   it('a 401 while watching signs out and clears the stored token', async () => {
     installFetch(() => [401, { error: 'Invalid token', message: 'bad' }]);
     const { store, fx } = initStore('tok');
