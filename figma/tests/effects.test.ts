@@ -157,6 +157,24 @@ describe('panel effects', () => {
     expect(sent.map((m) => m.type)).not.toContain('save-study');
   });
 
+  it('stops watching and shows the error when the study is gone', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let reads = 0;
+    const calls = installFetch((_m, path) => {
+      if (path === '/api/studies/s4/status' && reads++ === 0) return [200, { studyId: 's4', status: 'running' }];
+      return [404, { error: 'study_not_found', message: 'No study s4 for this user.' }];
+    });
+    const { store, fx } = initStore('tok');
+    store.dispatch({ type: 'open-study', record: { studyId: 's4', title: 't', startName: 'a', goalName: 'b', size: 'quick', launchedAt: 0, status: 'running' }, now: 0 });
+    fx.watch();
+    await vi.advanceTimersByTimeAsync(100);
+    expect(store.get().study?.error).toBe('No study s4 for this user.');
+    const before = calls.length;
+    await vi.advanceTimersByTimeAsync(60_000);
+    vi.useRealTimers();
+    expect(calls.length).toBe(before);
+  });
+
   it('a 401 while watching signs out and clears the stored token', async () => {
     installFetch(() => [401, { error: 'Invalid token', message: 'bad' }]);
     const { store, fx } = initStore('tok');

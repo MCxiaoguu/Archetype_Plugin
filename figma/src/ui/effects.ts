@@ -191,6 +191,11 @@ export function createEffects(store: Store) {
       } catch (err) {
         if (gen !== watchGen) return;
         if (err instanceof ApiError && err.status === 401) return;
+        if (err instanceof ApiError && err.status >= 400 && err.status < 500 && err.status !== 408 && err.status !== 429) {
+          // The study is gone or not this account's: polling cannot fix that.
+          store.dispatch({ type: 'launch-failed', message: message(err) });
+          return;
+        }
         store.dispatch({ type: 'poll-failed', message: message(err) });
       }
       const since = store.get().study?.watchingSince ?? Date.now();
