@@ -2429,8 +2429,32 @@ def case_56b_unsent_steps_ride_with_results(srv: ServerProc, data_dir: Path) -> 
                                       "status": "completed", "steps": [], "feedback": {"verdict": "pass"}})
     steps = STATE.last_for("/results")["body"]["steps"]
     expect([s["seq"] for s in steps] == [1, 2], f"both unsent steps ride along, got {steps}")
-    expect(steps[0]["actionText"] == "click Start free trial" and steps[0]["protocolV2"]["decide"]["intent"] == "start a trial",
-           "v1 fields plus the full v2 record")
+    # A v2 backend reads v2 records in steps: the success checks and the
+    # metrics need what the persona read and felt, which a v1 step drops.
+    first = steps[0]
+    expect(first["observe"]["visible_text_excerpt"] == "Start free trial" and first["observe"]["title"] == "Lumina",
+           f"what the persona read rides along, got {first.get('observe')}")
+    expect(first["after"]["progress"] == 20 and first["after"]["sentiment"] == 1, f"after block kept: {first.get('after')}")
+    expect(first["decide"]["intent"] == "start a trial" and first["scenario_id"] == "SC-1", "decide and scenario kept")
+    expect(first.get("client_ts") and "elapsed_s" in first, "the stamps the integrity check needs are kept")
+    expect("actionText" not in first and "protocolV2" not in first, f"sent as the v2 record, got {sorted(first)}")
+
+
+def case_56c_v2_steps_in_the_report_keep_their_keys(srv: ServerProc, data_dir: Path) -> None:
+    write_auth(data_dir)
+    start_v2_run(srv)
+    png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
+    (data_dir / "gave-up.png").write_bytes(png)
+    step = dict(v2_step(3), screenshot_path=str(data_dir / "gave-up.png"))
+    call_tool(srv, "report_result", {"run_id": V2_RUN_ID, "session_id": "plugin-v2-session",
+                                      "status": "completed", "steps": [step], "feedback": {"verdict": "pass"}})
+    sent = STATE.last_for("/results")["body"]["steps"][0]
+    import base64 as _b64
+    expect(sent.get("scenario_id") == "SC-1" and "scenarioId" not in sent,
+           f"a v2 record keeps scenario_id, the key the backend reads, got {sorted(sent)}")
+    expect(_b64.b64decode(sent.get("screenshot_b64") or "") == png and "screenshotB64" not in sent,
+           "the screenshot file goes as screenshot_b64")
+    expect("screenshot_path" not in sent, "the local path is never sent")
 
 
 def case_57_give_up_note(srv: ServerProc, data_dir: Path) -> None:
@@ -2481,14 +2505,38 @@ def case_57b_local_give_up_when_backend_down(srv: ServerProc, data_dir: Path) ->
 def case_57c_rejected_step(srv: ServerProc, data_dir: Path) -> None:
     write_auth(data_dir)
     start_v2_run(srv)
-    STATE.error_overrides["/steps"] = (400, {"error": "invalid_step", "message": "after.progress must be 0 to 100."})
-    result = call_tool(srv, "log_step", {"run_id": V2_RUN_ID, "step": v2_step(1, progress=400)})
+    STATE.error_overrides["/steps"] = (400, {"error": "bad_request", "message": "session_id does not match this run"})
+    result = call_tool(srv, "log_step", {"run_id": V2_RUN_ID, "step": v2_step(1)})
     expect(result.get("isError") is True, "a rejected step is the actor's to fix")
-    contains(result_text(result), "after.progress must be 0 to 100.", "reason relayed")
+    contains(result_text(result), "session_id does not match this run", "reason relayed")
     expect(not (data_dir / "runs" / f"{V2_RUN_ID}.steps.jsonl").exists(), "not buffered")
     expect(not (data_dir / "runs" / f"{V2_RUN_ID}.journal.jsonl").exists(), "not journaled")
     bad = call_tool(srv, "log_step", {"run_id": V2_RUN_ID, "step": "clicked"})
     expect(bad.get("isError") is True, "a step must be an object")
+
+
+def case_57d_invalid_step_refused_before_buffering(srv: ServerProc, data_dir: Path) -> None:
+    write_auth(data_dir)
+    start_v2_run(srv)
+    # A slow backend would buffer the step; a record the backend refuses
+    # must never get that far, or it would ride along with report_result
+    # and the backend would refuse the whole report over it.
+    STATE.delays["/steps"] = 3
+    cases = [
+        (v2_step(1, progress=400), "step.after.progress must be a number from 0 to 100"),
+        (dict(v2_step(1), observe={"page_type": "homepage"}), "step.observe.page_type must be one of landing, signup"),
+        (v2_step(1, trust_request={"kind": "credit_card", "decision": "refused"}), "step.after.trust_request.kind must be one of"),
+        (v2_step(1, sentiment=5), "step.after.sentiment must be a whole number from -2 to 2"),
+        (dict(v2_step(1), act={"result": "clicked"}), "step.act.result must be one of ok, failed, no_change"),
+        ({"seq": 1, "summary": "clicked the button"}, "observe, decide, act and after"),
+    ]
+    for step, why in cases:
+        result = call_tool(srv, "log_step", {"run_id": V2_RUN_ID, "step": step})
+        expect(result.get("isError") is True, f"refused: {why}")
+        contains(result_text(result), why, "the reason names the field")
+    expect(count_requests("/steps") == 0, "nothing invalid is posted")
+    expect(not (data_dir / "runs" / f"{V2_RUN_ID}.steps.jsonl").exists(), "nothing invalid is buffered")
+    expect(not (data_dir / "runs" / f"{V2_RUN_ID}.journal.jsonl").exists(), "nothing invalid is journaled")
 
 
 def case_58_report_abandoned_with_actions_and_video(srv: ServerProc, data_dir: Path) -> None:
@@ -2981,9 +3029,11 @@ CASES = [
     ("log_step buffers on timeout and flushes next time", case_55_log_step_buffers_on_timeout, STEP_FAST),
     ("report_result flushes buffered steps first", case_56_report_flushes_buffer_first, STEP_FAST),
     ("report_result carries steps the backend never took", case_56b_unsent_steps_ride_with_results, STEP_FAST),
+    ("report_result sends v2 records with their own keys", case_56c_v2_steps_in_the_report_keep_their_keys),
     ("log_step give up NOTE, backend note, ended run", case_57_give_up_note),
     ("log_step local give up while the backend is down", case_57b_local_give_up_when_backend_down, STEP_FAST),
     ("log_step relays a rejected step without keeping it", case_57c_rejected_step),
+    ("log_step refuses an invalid record before buffering it", case_57d_invalid_step_refused_before_buffering, STEP_FAST),
     ("report_result abandoned with raw actions, browser and video", case_58_report_abandoned_with_actions_and_video),
     ("log_step answer stays under 120 words", case_59_step_answer_stays_short),
     ("create_study: camelCase body, defaults, table, field errors", case_60_create_study),

@@ -1650,7 +1650,17 @@ def handle_start_run(arguments: dict[str, Any]) -> dict[str, Any]:
 # local state if the backend has not.
 STEP_TIMEOUT = _env_seconds("ARCHETYPE_STEP_TIMEOUT", 15)
 STEP_WORD_LIMIT = 120
+# The closed lists of a step record (backend services/run_protocol.py).
+_PAGE_TYPES = (
+    "landing", "signup", "login", "onboarding", "pricing", "checkout", "cart",
+    "dashboard", "settings", "search", "content", "form", "verification",
+    "error", "help", "other",
+)
 _FRICTION_LEVELS = ("none", "minor", "major", "blocked")
+_FRICTION_TYPES = ("navigation", "copy", "form", "trust", "performance", "error", "other")
+_ACT_RESULTS = ("ok", "failed", "no_change")
+_TRUST_KINDS = ("email", "phone", "address", "card", "permissions", "account", "upload", "social_login")
+_TRUST_DECISIONS = ("shared", "refused", "deferred")
 
 
 def _iso_now() -> str:
@@ -1660,6 +1670,72 @@ def _iso_now() -> str:
 def _step_part(step: dict[str, Any], key: str) -> dict[str, Any]:
     part = step.get(key)
     return part if isinstance(part, dict) else {}
+
+
+def _is_v2_record(step: dict[str, Any]) -> bool:
+    """A protocol v2 step record, as the backend tells one from a v1 step."""
+    return any(k in step for k in ("observe", "decide", "act", "after"))
+
+
+def _whole(value: Any) -> int | None:
+    """A whole number the way the backend reads one (ints, 3.0, "3")."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    if isinstance(value, str) and value.strip().lstrip("-").isdigit():
+        return int(value.strip())
+    return None
+
+
+def _step_problem(step: dict[str, Any]) -> str | None:
+    """Why the backend would refuse this step record, or None.
+
+    The same checks as the backend's normalize_step, made before a step is
+    sent or buffered: a buffered record rides along with report_result,
+    where one record the backend refuses would refuse the whole report."""
+    seq = _whole(step.get("seq"))
+    if seq is None or seq < 1:
+        return f"step.seq must be a whole number from 1 (got {step.get('seq')!r})."
+    if not _is_v2_record(step):
+        return "the step needs its observe, decide, act and after parts (recall too)."
+    for name in ("observe", "recall", "decide", "act", "after"):
+        if step.get(name) is not None and not isinstance(step[name], dict):
+            return f"step.{name} must be an object."
+    observe, decide, act, after = (_step_part(step, k) for k in ("observe", "decide", "act", "after"))
+    if observe.get("page_type") is not None and observe["page_type"] not in _PAGE_TYPES:
+        return f"step.observe.page_type must be one of {', '.join(_PAGE_TYPES)} (got {observe['page_type']!r})."
+    if "confidence" in decide and not 1 <= (_whole(decide["confidence"]) or 0) <= 5:
+        return "step.decide.confidence must be a whole number from 1 to 5."
+    if act.get("result", "ok") not in _ACT_RESULTS:
+        return f"step.act.result must be one of {', '.join(_ACT_RESULTS)} (got {act.get('result')!r})."
+    friction = after.get("friction")
+    if friction is not None:
+        if not isinstance(friction, dict):
+            return "step.after.friction must be an object {level, type?, note?}."
+        if friction.get("level", "none") not in _FRICTION_LEVELS:
+            return f"step.after.friction.level must be one of {', '.join(_FRICTION_LEVELS)}."
+        if friction.get("type") is not None and friction["type"] not in _FRICTION_TYPES:
+            return f"step.after.friction.type must be one of {', '.join(_FRICTION_TYPES)}."
+    if "sentiment" in after:
+        sentiment = _whole(after["sentiment"])
+        if sentiment is None or not -2 <= sentiment <= 2:
+            return "step.after.sentiment must be a whole number from -2 to 2."
+    if "progress" in after:
+        progress = after["progress"]
+        if isinstance(progress, bool) or not isinstance(progress, (int, float)) or not 0 <= progress <= 100:
+            return "step.after.progress must be a number from 0 to 100."
+    trust = after.get("trust_request")
+    if trust is not None:
+        if not isinstance(trust, dict):
+            return "step.after.trust_request must be an object {kind, decision, reason}."
+        if trust.get("kind") not in _TRUST_KINDS:
+            return f"step.after.trust_request.kind must be one of {', '.join(_TRUST_KINDS)}."
+        if trust.get("decision") not in _TRUST_DECISIONS:
+            return f"step.after.trust_request.decision must be one of {', '.join(_TRUST_DECISIONS)}."
+    return None
 
 
 def _apply_step_locally(state: dict[str, Any], step: dict[str, Any]) -> dict[str, Any]:
@@ -1901,6 +1977,14 @@ def handle_log_step(arguments: dict[str, Any]) -> dict[str, Any]:
         if arguments.get("session_id"):
             state["session_id"] = arguments["session_id"]
         prepared, shot_note = _prepare_step(step, state)
+        problem = _step_problem(prepared)
+        if problem:
+            # Nothing is kept: the state changes above stay in memory.
+            return tool_text(
+                f"Step {prepared.get('seq')} was not logged: {problem} Fix the "
+                "record and call log_step again for this step.",
+                is_error=True,
+            )
         local_state = _apply_step_locally(state, prepared)
 
         lead_bits = [shot_note] if shot_note else []
@@ -2050,15 +2134,19 @@ def _screenshot_from_path(raw: Any) -> tuple[str | None, str | None]:
 
 
 def _map_step(step: dict[str, Any], notes: list[str] | None = None) -> dict[str, Any]:
+    # A v2 record is read by its own snake_case keys (scenario_id,
+    # screenshot_b64); renaming them would file them under unknown keys.
+    v2 = _is_v2_record(step)
+    shot_key = "screenshot_b64" if v2 else "screenshotB64"
     out: dict[str, Any] = {}
     for key, value in step.items():
         if key == "screenshot_path":
             continue
-        out[_STEP_KEY_MAP.get(key, key)] = value
-    if "screenshot_path" in step and not out.get("screenshotB64"):
+        out[key if v2 else _STEP_KEY_MAP.get(key, key)] = value
+    if "screenshot_path" in step and not out.get(shot_key):
         encoded, why = _screenshot_from_path(step.get("screenshot_path"))
         if encoded:
-            out["screenshotB64"] = encoded
+            out[shot_key] = encoded
         elif notes is not None:
             notes.append(f"step {step.get('seq', '?')}: screenshot skipped ({why})")
     return out
@@ -2070,8 +2158,9 @@ _REPORT_STATUSES = ("completed", "failed", "aborted", "abandoned")
 
 
 def _v1_step(record: dict[str, Any]) -> dict[str, Any]:
-    """A protocol v2 step record in the v1 shape every backend accepts, with
-    the full record riding along as protocolV2 (plan 5.3 mapping)."""
+    """A protocol v2 step record in the v1 shape a backend before protocol 2
+    accepts, with the full record riding along as protocolV2 (plan 5.3
+    mapping). A v2 backend gets the record itself."""
     observe, decide, act = (_step_part(record, k) for k in ("observe", "decide", "act"))
     step: dict[str, Any] = {
         "seq": _int_or(record.get("seq"), 0),
@@ -2158,10 +2247,14 @@ def handle_report_result(arguments: dict[str, Any]) -> dict[str, Any]:
 
     steps = [_map_step(s, skipped) for s in (arguments.get("steps") or []) if isinstance(s, dict)]
     have = {s.get("seq") for s in steps}
-    # v2: steps the backend never took go with the results. v1: an actor
-    # that logged steps instead of keeping its own log still gets them sent.
-    extra = unsent if version >= 2 else (journal if not steps else [])
-    steps += [_v1_step(r) for r in extra if r.get("seq") not in have]
+    # v2: steps the backend never took go with the results, as the v2
+    # records they are (the backend's success checks read observe and after).
+    # v1: an actor that logged steps instead of keeping its own log still
+    # gets them sent, in the only shape an old backend takes.
+    if version >= 2:
+        steps += [r for r in unsent if r.get("seq") not in have]
+    elif not steps:
+        steps += [_v1_step(r) for r in journal]
     steps.sort(key=lambda s: _int_or(s.get("seq"), 0))
 
     # A completed run has no quit reason: drop the placeholders an actor
@@ -4148,10 +4241,7 @@ TOOLS: dict[str, dict[str, Any]] = {
                         "observe": {
                             "type": "object",
                             "properties": {
-                                "page_type": {"type": "string", "enum": [
-                                    "landing", "signup", "login", "onboarding", "pricing",
-                                    "checkout", "cart", "dashboard", "settings", "search",
-                                    "content", "form", "verification", "error", "help", "other"]},
+                                "page_type": {"type": "string", "enum": list(_PAGE_TYPES)},
                                 "summary": {"type": "string"},
                                 "stood_out": {"type": "string"},
                                 "visible_text_excerpt": {"type": "string"},
@@ -4174,7 +4264,7 @@ TOOLS: dict[str, dict[str, Any]] = {
                             "type": "object",
                             "properties": {
                                 "target": {"type": "string"},
-                                "result": {"type": "string", "enum": ["ok", "failed", "no_change"]},
+                                "result": {"type": "string", "enum": list(_ACT_RESULTS)},
                                 "error_message": {"type": "string"},
                             },
                         },
@@ -4185,9 +4275,7 @@ TOOLS: dict[str, dict[str, Any]] = {
                                     "type": "object",
                                     "properties": {
                                         "level": {"type": "string", "enum": list(_FRICTION_LEVELS)},
-                                        "type": {"type": "string", "enum": [
-                                            "navigation", "copy", "form", "trust",
-                                            "performance", "error", "other"]},
+                                        "type": {"type": "string", "enum": list(_FRICTION_TYPES)},
                                         "note": {"type": "string"},
                                     },
                                 },
@@ -4197,10 +4285,8 @@ TOOLS: dict[str, dict[str, Any]] = {
                                 "trust_request": {
                                     "type": "object",
                                     "properties": {
-                                        "kind": {"type": "string", "enum": [
-                                            "email", "phone", "address", "card", "permissions",
-                                            "account", "upload", "social_login"]},
-                                        "decision": {"type": "string", "enum": ["shared", "refused", "deferred"]},
+                                        "kind": {"type": "string", "enum": list(_TRUST_KINDS)},
+                                        "decision": {"type": "string", "enum": list(_TRUST_DECISIONS)},
                                         "reason": {"type": "string"},
                                     },
                                 },
