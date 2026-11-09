@@ -19,7 +19,7 @@ export interface BrokenIssue {
   frameName: string;
 }
 
-export type Blocker = 'no_start' | 'no_goal' | 'same_frame' | 'unreachable' | 'no_frames';
+export type Blocker = 'no_start' | 'no_goal' | 'same_frame' | 'unreachable' | 'goal_is_overlay' | 'no_frames';
 
 export interface Preflight {
   /** Launch is allowed. Only `blocker` stops it; everything else is advice. */
@@ -45,7 +45,14 @@ export const BLOCKER_TEXT: Record<Blocker, string> = {
   no_goal: 'Pick the screen that means the goal is reached.',
   same_frame: 'The goal screen is the start screen. Pick a goal further into the flow.',
   unreachable: 'No chain of hotspots leads from the start to the goal screen, so no one can finish. Connect the screens in Prototype mode and check again.',
+  goal_is_overlay:
+    'The goal screen only opens as an overlay. An overlay keeps the address of the screen under it, so Archetype cannot see anyone reach it. Pick the screen the flow navigates to next, or connect the goal with Navigate to.',
 };
+
+/** Blockers that mean no one could finish as the flow stands, rather than a choice still to make. */
+export function isFlowBlocker(blocker: Blocker | null): boolean {
+  return blocker === 'unreachable' || blocker === 'goal_is_overlay';
+}
 
 const MAX_KEY_FEATURES = 20;
 
@@ -107,6 +114,9 @@ export function runPreflight(doc: DocSnapshot, startId: string | null, goalId: s
   if (goalId === startId) return { ...base, blocker: 'same_frame' };
   const path = shortestPath(graph, startId, goalId);
   if (!path) return { ...base, blocker: 'unreachable' };
+  // The success check reads the goal frame from the step URL, which only a
+  // "Navigate to" from a screen in reach puts there.
+  if (![...(graph.navigatedFrom.get(goalId) ?? [])].some(inReach)) return { ...base, blocker: 'goal_is_overlay' };
 
   const names: string[] = [];
   for (const id of framesOnPaths(graph, startId, goalId)) {

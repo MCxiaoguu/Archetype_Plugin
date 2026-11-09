@@ -97,6 +97,7 @@ describe('form validation', () => {
     const errs = validateForm({ ...form, goalId: '4:1' }, runPreflight(doc, '1:2', '4:1'), 'SomeOtherKey12345');
     expect(errs.flow).toBeDefined();
     expect(errs.link).toMatch(/different file/);
+    expect(validateForm({ ...form, goalId: '3:1' }, runPreflight(doc, '1:2', '3:1'), null).flow).toMatch(/overlay/);
   });
 
   it('limits long text', () => {

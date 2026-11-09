@@ -62,7 +62,7 @@ export function validateForm(form: StudyForm, preflight: Preflight | null, known
   const link = checkShareLink(form.link, knownFileKey);
   if (!link.ok) errors.link = LINK_PROBLEM_TEXT[link.reason];
   if (preflight && !preflight.ok && form.startId && form.goalId) {
-    errors.flow = 'The goal screen cannot be reached from the start.';
+    errors.flow = preflight.blocker === 'goal_is_overlay' ? 'The goal screen only opens as an overlay.' : 'The goal screen cannot be reached from the start.';
   }
   return errors;
 }

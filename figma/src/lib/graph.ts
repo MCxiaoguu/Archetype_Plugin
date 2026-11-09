@@ -22,6 +22,12 @@ export interface FlowGraph {
   exits: Set<string>;
   /** Frames opened as an overlay somewhere. */
   overlays: Set<string>;
+  /**
+   * For each frame, the frames that "Navigate to" it. Only that changes the
+   * prototype's address: an overlay (opened or swapped) keeps the address of
+   * the screen under it.
+   */
+  navigatedFrom: Map<string, Set<string>>;
   broken: BrokenLink[];
   hotspotsByFrame: Map<string, HotspotInfo[]>;
 }
@@ -35,6 +41,7 @@ export function buildGraph(doc: Pick<DocSnapshot, 'frames' | 'hotspots' | 'desti
   const out = new Map<string, Edge[]>();
   const exits = new Set<string>();
   const overlays = new Set<string>();
+  const navigatedFrom = new Map<string, Set<string>>();
   const broken: BrokenLink[] = [];
   const hotspotsByFrame = new Map<string, HotspotInfo[]>();
   const seen = new Set<string>();
@@ -61,6 +68,11 @@ export function buildGraph(doc: Pick<DocSnapshot, 'frames' | 'hotspots' | 'desti
       if (!to || !frames.has(to)) continue;
       if (action.navigation === 'OVERLAY') overlays.add(to);
       if (to === h.frameId) continue;
+      if (action.navigation === 'NAVIGATE') {
+        const from = navigatedFrom.get(to) ?? new Set<string>();
+        from.add(h.frameId);
+        navigatedFrom.set(to, from);
+      }
       exits.add(h.frameId);
       const key = `${h.frameId}>${to}`;
       if (seen.has(key)) continue;
@@ -73,7 +85,7 @@ export function buildGraph(doc: Pick<DocSnapshot, 'frames' | 'hotspots' | 'desti
   for (const id of overlays) {
     if (frames.get(id)?.closesOnOutsideClick) exits.add(id);
   }
-  return { frames, out, exits, overlays, broken, hotspotsByFrame };
+  return { frames, out, exits, overlays, navigatedFrom, broken, hotspotsByFrame };
 }
 
 /** Breadth first distances (in clicks) from `start` to every reachable frame. */

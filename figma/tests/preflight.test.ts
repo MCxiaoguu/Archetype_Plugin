@@ -30,6 +30,19 @@ describe('preflight', () => {
     expect(runPreflight({ ...doc, frames: [] }, '1:2', '2:50')).toMatchObject({ ok: false, blocker: 'no_frames' });
   });
 
+  it('blocks a goal that only ever opens as an overlay', () => {
+    // An overlay keeps the address of the screen under it, so a frame_reached
+    // check on it could never be met. "Bank sign in error" opens over "Connect bank".
+    expect(runPreflight(doc, '1:2', '3:1')).toMatchObject({ ok: false, blocker: 'goal_is_overlay' });
+  });
+
+  it('accepts a goal that some reachable screen navigates to, even if it also opens as an overlay', () => {
+    const d = fixtureDoc();
+    d.hotspots.push({ id: 'h-nav', name: 'See error', type: 'INSTANCE', frameId: '2:30', trigger: 'ON_CLICK', actions: [{ kind: 'node', navigation: 'NAVIGATE', destinationId: '3:1' }] });
+    d.destinations['3:1'] = { exists: true, frameId: '3:1' };
+    expect(runPreflight(d, '1:2', '3:1')).toMatchObject({ ok: true, blocker: null });
+  });
+
   it('still reports advice while the goal is missing', () => {
     const pf = runPreflight(doc, '1:2', null);
     expect(pf.deadEnds.length).toBe(1);
