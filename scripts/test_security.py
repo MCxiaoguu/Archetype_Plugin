@@ -51,6 +51,23 @@ with tempfile.TemporaryDirectory() as tmp:
     check(mode == 0o600, f"auth file is 0600 (got {oct(mode)})")
     check(not list(target.parent.glob(".*.tmp")), "no temp file left behind")
 
+# The device flow carries no bearer token, but its last answer IS the token:
+# it must not run against a cleartext remote backend either.
+with tempfile.TemporaryDirectory() as tmp:
+    calls = []
+    real_post = core.backend_post
+    core.backend_post = lambda path, *a, **k: calls.append(path) or (200, {})
+    os.environ["CLAUDE_PLUGIN_DATA"] = tmp
+    core.BACKEND_IS_SAFE = False
+    try:
+        token, message = core.perform_device_login()
+    finally:
+        core.BACKEND_IS_SAFE = True
+        core.backend_post = real_post
+        del os.environ["CLAUDE_PLUGIN_DATA"]
+    check(token is None and "must use https" in message, f"login refused for an insecure backend ({message!r})")
+    check(calls == [], f"no device code or token request sent (sent {calls})")
+
 # Tool calls run on threads: two writes of one file at once must both land
 # whole, and run-log updates must not overwrite each other.
 with tempfile.TemporaryDirectory() as tmp:

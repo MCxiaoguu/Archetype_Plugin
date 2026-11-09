@@ -687,6 +687,9 @@ def perform_device_login(stale_token: str | None = None) -> tuple[str | None, st
 
 
 def _device_login_locked() -> tuple[str | None, str]:
+    if not BACKEND_IS_SAFE:
+        # The flow sends no bearer token, but its last answer is the token.
+        return None, f"{_INSECURE_BODY['message']} (now {BACKEND_BASE})"
     plugin_data = os.environ.get("CLAUDE_PLUGIN_DATA")
     if not plugin_data:
         return None, (
