@@ -1215,9 +1215,12 @@ inherits the environment of the Claude Code CLI, so export these **before** laun
 | `ARCHETYPE_STUDY_TIMEOUT` | `180` | Deadline for the study calls that run models (factors, archetypes, runs). |
 | `ARCHETYPE_BROWSER_IDLE_MINUTES` | `15` | Idle minutes before a plugin browser's real server is stopped (`browser-server.py`). |
 | `ARCHETYPE_BROWSER_START_TIMEOUT` | `180` | How long the proxy waits for the real browser server's handshake (first `npx` run downloads it). |
+| `ARCHETYPE_BROWSER_STOP_TIMEOUT` | `15` | Seconds the real browser server gets to close (and write its videos) after its stdin closes, before the proxy sends SIGTERM, then SIGKILL, to its process group. |
 | `ARCHETYPE_BROWSER_TRACE` | *(unset)* | A file the browser proxy appends every MCP method to, for debugging startup. |
 | `ARCHETYPE_CLAUDE_BIN` | `claude` | The CLI the swarm runner starts workers with. |
 | `ARCHETYPE_RUNNER_WAVE_WAIT` | `30` | Seconds the runner waits between next wave attempts while the backend answers 409. |
+| `ARCHETYPE_RUNNER_WATCH_S` | `30` | How often the runner checks each worker's stream for steps (stall and timeout checks). |
+| `ARCHETYPE_WATCH_POLL_S` | *(unset)* | Overrides `--poll-sec` of `study_runner.py --watch`. |
 | `CLAUDE_PLUGIN_DATA` | *(set by Claude Code)* | Directory holding `auth.json` (credentials), `runs.json` (run log), `runs/`, `browser/` and `studies/`; see below. |
 
 ### Plugin data files (`${CLAUDE_PLUGIN_DATA}`)
