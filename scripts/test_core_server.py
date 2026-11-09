@@ -1207,6 +1207,9 @@ def case_5_report_result_conflict(srv: ServerProc, data_dir: Path) -> None:
     result = call_tool(srv, "report_result", args)
     expect(result.get("isError") is True, "409 must be isError")
     contains(result_text(result), "This run is already completed.", "409 NL message surfaced")
+    # "Retry on error" is the actor's rule for report_result; a closed run
+    # must say that retrying cannot help.
+    contains(result_text(result), "Do not send them again", "no retry loop on a closed run")
 
 
 def case_6_401_declined_heal_appends_login_hint(srv: ServerProc, data_dir: Path) -> None:
@@ -1430,6 +1433,42 @@ def case_11_status_invalid_token(srv: ServerProc, data_dir: Path) -> None:
     )
     contains(text, "https://www.syntheticarchetype.com", "status portal link (stale token)")
     contains(text, "/archetype:setup", "status login hint (stale token)")
+
+
+AUTH_UNAVAILABLE = {"error": "auth_unavailable", "message": "Sign in cannot be checked right now. Retry in a minute."}
+
+
+def case_11b_auth_outage_is_not_a_bad_token(srv: ServerProc, data_dir: Path) -> None:
+    # The backend answers 503 auth_unavailable when it cannot check tokens
+    # (Auth0 down, not configured). Only a 401 means the token is bad: an
+    # outage must never send the user through the device login again.
+    write_auth(data_dir)
+    STATE.error_overrides["/api/oauth/validate-token"] = (503, dict(AUTH_UNAVAILABLE, valid=False))
+    result = call_tool(srv, "login", {})
+    text = result_text(result)
+    expect(result.get("isError") is True, f"the login tool cannot confirm the login: {text}")
+    contains(text, "Sign in cannot be checked right now", "the backend's reason")
+    contains(text, "kept", "the saved login is kept")
+    expect(count_requests("/api/oauth/device/code") == 0, "no device login on an outage")
+    expect((data_dir / "auth.json").exists(), "auth.json untouched")
+    text = result_text(call_tool(srv, "status", {}))
+    contains(text, "Sign in cannot be checked right now", "status names the outage")
+    expect("expired or invalid" not in text, f"an outage is not an expired token: {text}")
+    STATE.error_overrides["/api/features"] = (503, AUTH_UNAVAILABLE)
+    result = call_tool(srv, "list_features", {})
+    expect(result.get("isError") is True, "an authed tool reports the outage")
+    contains(result_text(result), "Sign in cannot be checked right now", "with the backend's message")
+    expect(count_requests("/api/oauth/device/code") == 0 and not srv.elicitations, "and opens no login")
+
+
+def case_11c_problem_documents_show_their_detail(srv: ServerProc, data_dir: Path) -> None:
+    write_auth(data_dir)
+    # A bare RFC 9457 document (no message): the detail is what to show.
+    STATE.error_overrides["/api/features"] = (405, {"type": "https://docs.syntheticarchetype.com/api#errors",
+                                                    "title": "Method Not Allowed", "status": 405, "code": "method_not_allowed",
+                                                    "detail": "/api/features does not accept GET; it accepts POST."})
+    text = result_text(call_tool(srv, "list_features", {}))
+    contains(text, "/api/features does not accept GET; it accepts POST.", "detail shown, not a generic line")
 
 
 def case_12_run_log_start_report_status(srv: ServerProc, data_dir: Path) -> None:
@@ -2304,6 +2343,14 @@ def case_52_claim(srv: ServerProc, data_dir: Path) -> None:
     expect((data_dir / "runs" / "queued0001.state.json").exists(), "claimed run state saved")
     bad = call_tool(srv, "start_run", {"run_id": "../features"})
     expect(bad.get("isError") and count_requests("/claim") == 1, "a bad run id never reaches the backend")
+    # A browser name nobody knows would claim the run with no browser config,
+    # and the study could no longer compare it with its other runs.
+    for args in ({"run_id": "queued0002", "browser": "firefox"},
+                 {"goal": "g", "url": "http://localhost:8321", "browser": "archetype-brower-2"}):
+        before = len(STATE.requests)
+        bad = call_tool(srv, "start_run", args)
+        expect(bad.get("isError") is True and len(STATE.requests) == before, f"unknown browser refused locally: {args}")
+        contains(result_text(bad), "archetype-browser-", "the names it takes")
 
 
 def case_52b_claimed_briefing_from_a_study(srv: ServerProc, data_dir: Path) -> None:
@@ -2429,8 +2476,32 @@ def case_56b_unsent_steps_ride_with_results(srv: ServerProc, data_dir: Path) -> 
                                       "status": "completed", "steps": [], "feedback": {"verdict": "pass"}})
     steps = STATE.last_for("/results")["body"]["steps"]
     expect([s["seq"] for s in steps] == [1, 2], f"both unsent steps ride along, got {steps}")
-    expect(steps[0]["actionText"] == "click Start free trial" and steps[0]["protocolV2"]["decide"]["intent"] == "start a trial",
-           "v1 fields plus the full v2 record")
+    # A v2 backend reads v2 records in steps: the success checks and the
+    # metrics need what the persona read and felt, which a v1 step drops.
+    first = steps[0]
+    expect(first["observe"]["visible_text_excerpt"] == "Start free trial" and first["observe"]["title"] == "Lumina",
+           f"what the persona read rides along, got {first.get('observe')}")
+    expect(first["after"]["progress"] == 20 and first["after"]["sentiment"] == 1, f"after block kept: {first.get('after')}")
+    expect(first["decide"]["intent"] == "start a trial" and first["scenario_id"] == "SC-1", "decide and scenario kept")
+    expect(first.get("client_ts") and "elapsed_s" in first, "the stamps the integrity check needs are kept")
+    expect("actionText" not in first and "protocolV2" not in first, f"sent as the v2 record, got {sorted(first)}")
+
+
+def case_56c_v2_steps_in_the_report_keep_their_keys(srv: ServerProc, data_dir: Path) -> None:
+    write_auth(data_dir)
+    start_v2_run(srv)
+    png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
+    (data_dir / "gave-up.png").write_bytes(png)
+    step = dict(v2_step(3), screenshot_path=str(data_dir / "gave-up.png"))
+    call_tool(srv, "report_result", {"run_id": V2_RUN_ID, "session_id": "plugin-v2-session",
+                                      "status": "completed", "steps": [step], "feedback": {"verdict": "pass"}})
+    sent = STATE.last_for("/results")["body"]["steps"][0]
+    import base64 as _b64
+    expect(sent.get("scenario_id") == "SC-1" and "scenarioId" not in sent,
+           f"a v2 record keeps scenario_id, the key the backend reads, got {sorted(sent)}")
+    expect(_b64.b64decode(sent.get("screenshot_b64") or "") == png and "screenshotB64" not in sent,
+           "the screenshot file goes as screenshot_b64")
+    expect("screenshot_path" not in sent, "the local path is never sent")
 
 
 def case_57_give_up_note(srv: ServerProc, data_dir: Path) -> None:
@@ -2478,17 +2549,139 @@ def case_57b_local_give_up_when_backend_down(srv: ServerProc, data_dir: Path) ->
     expect(len(buffered) == 3, f"all three steps kept for later, got {len(buffered)}")
 
 
+def case_57h_local_patience_after_a_backend_review(srv: ServerProc, data_dir: Path) -> None:
+    write_auth(data_dir)
+    start_v2_run(srv)
+
+    def failing(seq: int) -> dict:
+        step = v2_step(seq, progress=0, friction={"level": "major", "type": "form"})
+        step["act"] = {"target": "button Next", "result": "failed"}
+        return step
+
+    # The backend asks to decide at step 3 (budget 3 spent) and the persona
+    # goes on. The backend halves the counter on the next step and ends the
+    # run only at the second exhausted budget; the local mirror must agree
+    # when the next steps stay on this machine.
+    STATE.error_overrides["/steps"] = (200, dict(STEPS_RESPONSE, state=dict(
+        STEPS_RESPONSE["state"], seq=3, unproductive=3, progress=0, reviewGiveUp=True)))
+    contains(result_text(call_tool(srv, "log_step", {"run_id": V2_RUN_ID, "step": failing(3)})),
+             "NOTE: Your patience budget is exhausted", "the backend's review")
+    STATE.error_overrides["/steps"] = (502, {"error": "bad_gateway", "message": "proxy"})
+    text = result_text(call_tool(srv, "log_step", {"run_id": V2_RUN_ID, "step": failing(4)}))
+    contains(text, "unproductive 2 of 3", "halved after the review, then one more")
+    expect("NOTE:" not in text, f"no second review yet: {text}")
+    text = result_text(call_tool(srv, "log_step", {"run_id": V2_RUN_ID, "step": failing(5)}))
+    contains(text, "This run has ended (patience budget exhausted twice)", "the second exhausted budget ends it")
+
+
+def case_57i_no_progress_reported_is_no_signal(srv: ServerProc, data_dir: Path) -> None:
+    write_auth(data_dir)
+    start_v2_run(srv)
+    STATE.error_overrides["/steps"] = (502, {"error": "bad_gateway", "message": "proxy"})
+    # The backend's rule: progress is optional, and a step that does not
+    # report it is no evidence that progress stalled.
+    for seq in (1, 2, 3):
+        step = v2_step(seq)
+        del step["after"]["progress"]
+        text = result_text(call_tool(srv, "log_step", {"run_id": V2_RUN_ID, "step": step}))
+    contains(text, "unproductive 0 of 3", "steps without progress are not unproductive")
+    expect("NOTE:" not in text, f"no give-up review: {text}")
+
+
 def case_57c_rejected_step(srv: ServerProc, data_dir: Path) -> None:
     write_auth(data_dir)
     start_v2_run(srv)
-    STATE.error_overrides["/steps"] = (400, {"error": "invalid_step", "message": "after.progress must be 0 to 100."})
-    result = call_tool(srv, "log_step", {"run_id": V2_RUN_ID, "step": v2_step(1, progress=400)})
+    STATE.error_overrides["/steps"] = (400, {"error": "bad_request", "message": "session_id does not match this run"})
+    result = call_tool(srv, "log_step", {"run_id": V2_RUN_ID, "step": v2_step(1)})
     expect(result.get("isError") is True, "a rejected step is the actor's to fix")
-    contains(result_text(result), "after.progress must be 0 to 100.", "reason relayed")
+    contains(result_text(result), "session_id does not match this run", "reason relayed")
     expect(not (data_dir / "runs" / f"{V2_RUN_ID}.steps.jsonl").exists(), "not buffered")
     expect(not (data_dir / "runs" / f"{V2_RUN_ID}.journal.jsonl").exists(), "not journaled")
     bad = call_tool(srv, "log_step", {"run_id": V2_RUN_ID, "step": "clicked"})
     expect(bad.get("isError") is True, "a step must be an object")
+
+
+def case_57d_invalid_step_refused_before_buffering(srv: ServerProc, data_dir: Path) -> None:
+    write_auth(data_dir)
+    start_v2_run(srv)
+    # A slow backend would buffer the step; a record the backend refuses
+    # must never get that far, or it would ride along with report_result
+    # and the backend would refuse the whole report over it.
+    STATE.delays["/steps"] = 3
+    cases = [
+        (v2_step(1, progress=400), "step.after.progress must be a number from 0 to 100"),
+        (dict(v2_step(1), observe={"page_type": "homepage"}), "step.observe.page_type must be one of landing, signup"),
+        (v2_step(1, trust_request={"kind": "credit_card", "decision": "refused"}), "step.after.trust_request.kind must be one of"),
+        (v2_step(1, sentiment=5), "step.after.sentiment must be a whole number from -2 to 2"),
+        (dict(v2_step(1), act={"result": "clicked"}), "step.act.result must be one of ok, failed, no_change"),
+        ({"seq": 1, "summary": "clicked the button"}, "observe, decide, act and after"),
+    ]
+    for step, why in cases:
+        result = call_tool(srv, "log_step", {"run_id": V2_RUN_ID, "step": step})
+        expect(result.get("isError") is True, f"refused: {why}")
+        contains(result_text(result), why, "the reason names the field")
+    expect(count_requests("/steps") == 0, "nothing invalid is posted")
+    expect(not (data_dir / "runs" / f"{V2_RUN_ID}.steps.jsonl").exists(), "nothing invalid is buffered")
+    expect(not (data_dir / "runs" / f"{V2_RUN_ID}.journal.jsonl").exists(), "nothing invalid is journaled")
+
+
+def case_57e_closed_run_is_not_reported_again(srv: ServerProc, data_dir: Path) -> None:
+    write_auth(data_dir)
+    start_v2_run(srv)
+    # Not run_ended (the persona's patience): the run is already closed,
+    # for example aborted by the swarm runner. Reporting it "abandoned"
+    # would overwrite that outcome with a persona quit.
+    STATE.error_overrides["/steps"] = (409, {"error": "conflict",
+                                             "message": "run already aborted; steps are no longer accepted."})
+    result = call_tool(srv, "log_step", {"run_id": V2_RUN_ID, "step": v2_step(1)})
+    text = result_text(result)
+    expect(result.get("isError") is True, "the step was not taken")
+    contains(text, "run already aborted; steps are no longer accepted.", "the backend's reason")
+    contains(text, "do NOT call report_result", "no report for a closed run")
+    expect('status "abandoned"' not in text, f"never told to report abandoned: {text}")
+
+
+def case_57f_dropped_buffered_steps_are_named(srv: ServerProc, data_dir: Path) -> None:
+    write_auth(data_dir)
+    start_v2_run(srv)
+    STATE.delays["/steps"] = 3
+    call_tool(srv, "log_step", {"run_id": V2_RUN_ID, "step": v2_step(1)})
+    time.sleep(2.2)
+    STATE.delays.clear()
+    # The buffered step is refused when it finally goes out; the actor must
+    # hear about it, not lose it silently.
+    STATE.once_overrides["/steps"] = (400, {"error": "bad_request", "message": "session_id does not match this run"})
+    text = result_text(call_tool(srv, "log_step", {"run_id": V2_RUN_ID, "step": v2_step(2, progress=40)}))
+    contains(text, "Buffered step 1 was refused by the backend (session_id does not match this run)", "named")
+    expect(STATE.last_for("/steps")["body"]["step"]["seq"] == 2, "the new step still goes out")
+    expect(not (data_dir / "runs" / f"{V2_RUN_ID}.steps.jsonl").exists(), "a refused step is not resent")
+    # The same at report time.
+    STATE.delays["/steps"] = 3
+    call_tool(srv, "log_step", {"run_id": V2_RUN_ID, "step": v2_step(3, progress=60)})
+    time.sleep(2.2)
+    STATE.delays.clear()
+    STATE.once_overrides["/steps"] = (400, {"error": "bad_request", "message": "session_id does not match this run"})
+    text = result_text(call_tool(srv, "report_result", {"run_id": V2_RUN_ID, "session_id": "plugin-v2-session",
+                                                        "status": "completed", "steps": [],
+                                                        "feedback": {"verdict": "pass", "summary": "ok"}}))
+    contains(text, "Buffered step 3 was refused by the backend (session_id does not match this run)", "named in the report")
+
+
+def case_57g_rejected_login_is_not_a_slow_backend(srv: ServerProc, data_dir: Path) -> None:
+    write_auth(data_dir)
+    start_v2_run(srv)
+    STATE.error_overrides["/steps"] = (401, {"error": "Invalid token", "message": "Token validation failed"})
+    result = call_tool(srv, "log_step", {"run_id": V2_RUN_ID, "step": v2_step(1)})
+    text = result_text(result)
+    expect(not result.get("isError"), "the step is kept, so the actor goes on")
+    contains(text, "Step 1 saved on this machine", "kept")
+    contains(text, "Token validation failed", "the backend's reason")
+    contains(text, "/archetype:setup", "how the login is renewed")
+    expect("slow" not in text, f"a refused login is not a slow backend: {text}")
+    STATE.error_overrides["/steps"] = (503, {"error": "unavailable", "message": "maintenance window"})
+    text = result_text(call_tool(srv, "log_step", {"run_id": V2_RUN_ID, "step": v2_step(2, progress=40)}))
+    contains(text, "Step 2 saved on this machine", "kept")
+    contains(text, "maintenance window", "why the backend did not take it")
 
 
 def case_58_report_abandoned_with_actions_and_video(srv: ServerProc, data_dir: Path) -> None:
@@ -2529,6 +2722,66 @@ def case_58_report_abandoned_with_actions_and_video(srv: ServerProc, data_dir: P
     bad = call_tool(srv, "report_result", {"run_id": "r1", "session_id": "s", "status": "gave_up",
                                            "steps": [], "feedback": {}})
     expect(bad.get("isError") is True and "status must be one of" in result_text(bad), "unknown status refused locally")
+    # No local state for the run (its files are gone): nothing says the
+    # backend is old, so an abandoned run is not quietly recorded as failed.
+    call_tool(srv, "report_result", {"run_id": "queued0006", "session_id": "plugin-v2-session",
+                                      "status": "abandoned", "steps": [], "feedback": feedback})
+    expect(STATE.last_for("/results")["body"]["status"] == "abandoned", "abandoned kept without local state")
+
+
+# A browser the plugin's servers can find (any existing file passes as
+# Chrome), and one where they find none: the recorded engine label comes
+# from the same detection the servers launch with.
+WITH_BROWSER = {"ARCHETYPE_CHROME_PATHS": sys.executable}
+NO_BROWSER = {"ARCHETYPE_CHROME_PATHS": "", "PLAYWRIGHT_BROWSERS_PATH": "/nonexistent-archetype-browsers"}
+
+
+def case_58b_unknown_engine_is_an_error_not_a_guess(srv: ServerProc, data_dir: Path) -> None:
+    write_auth(data_dir)
+    # No engine to name: claiming on a plugin browser would record a label
+    # nobody checked ("chrome channel" used to be guessed).
+    result = call_tool(srv, "start_run", {"run_id": "queued0007", "browser": "archetype-browser-2"})
+    text = result_text(result)
+    expect(result.get("isError") is True, f"refused: {text}")
+    contains(text, "No browser for the plugin's Playwright servers", "the detection's own reason")
+    expect(count_requests("/claim") == 0, "nothing claimed")
+    # A browser that needs no engine detection still works, and a report
+    # whose actions name a plugin browser keeps its results: the config
+    # recorded at the claim goes, with a note saying why.
+    expect(not call_tool(srv, "start_run", {"run_id": "queued0008", "browser": "chrome"}).get("isError"), "chrome claim")
+    action = {"ts": "2026-11-03T10:00:00.000Z", "tool_name": "mcp__plugin_archetype_archetype-browser-2__browser_click",
+              "tool_input": {}, "result_ok": True, "error": None}
+    (data_dir / "runs" / "queued0008.actions.jsonl").write_text(json.dumps(action) + "\n")
+    result = call_tool(srv, "report_result", {"run_id": "queued0008", "session_id": "plugin-v2-session",
+                                               "status": "completed", "steps": [], "feedback": {"verdict": "pass"}})
+    expect(not result.get("isError"), f"the results are stored: {result_text(result)}")
+    contains(result_text(result), "No browser for the plugin's Playwright servers", "the note says why")
+    expect(STATE.last_for("/results")["body"]["browser"]["engine"] == "chrome", "the config recorded at claim")
+
+
+def case_58c_broken_pin_is_an_error(srv: ServerProc, data_dir: Path) -> None:
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("core_pin", SERVER)
+    core = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(core)
+    old = dict(os.environ)
+    os.environ.update(WITH_BROWSER)
+    try:
+        good = core.browser_config("archetype-browser-3")
+        expect(good["user_agent"] and good["viewport"] and "chrome channel" in good["version"], f"pinned config: {good}")
+        for content in ("{not json", json.dumps({"package": "@playwright/mcp@0.0.84"})):
+            core.PINNED_FILE = data_dir / "pinned.json"
+            core.PINNED_FILE.write_text(content)
+            try:
+                got = core.browser_config("archetype-browser-3")
+            except core.BrowserConfigError as exc:
+                expect("pinned.json" in str(exc), f"names the file: {exc}")
+            else:
+                raise CaseFail(f"a broken pin must not give a config: {got}")
+        expect(core.browser_config("chrome")["engine"] == "chrome", "chrome needs no pin")
+    finally:
+        os.environ.clear()
+        os.environ.update(old)
 
 
 def case_59_step_answer_stays_short(srv: ServerProc, data_dir: Path) -> None:
@@ -2597,6 +2850,36 @@ def case_60b_update_study_confirms_checks(srv: ServerProc, data_dir: Path) -> No
     text = result_text(result)
     contains(text, "Study updated.", "update said")
     expect("not confirmed yet" not in text, "confirmed check no longer flagged")
+
+
+def case_60c_study_design_and_checks_reach_the_backend_whole(srv: ServerProc, data_dir: Path) -> None:
+    write_auth(data_dir)
+    # PATCH merges into the stored design, whose budget is the old mode's
+    # (7 for ofat_stress); factorial and half fraction take exactly 8.
+    call_tool(srv, "create_study", {"study_id": STUDY_ID, "design_mode": "factorial"})
+    sent = STATE.last_for(f"/api/studies/{STUDY_ID}")["body"]
+    expect(sent["design"] == {"mode": "factorial", "archetypeBudget": 8}, f"8 archetypes for factorial: {sent}")
+    call_tool(srv, "create_study", {"study_id": STUDY_ID, "design_mode": "half_fraction", "archetype_budget": 6,
+                                    "include_opposite_poles": "false"})
+    sent = STATE.last_for(f"/api/studies/{STUDY_ID}")["body"]
+    expect(sent["design"]["archetypeBudget"] == 6, "an explicit budget is the backend's to refuse, not ours to change")
+    expect(sent["design"]["includeOppositePoles"] == "false", "not coerced: bool('false') would turn it on")
+    # Checks go as given: the backend validates them and names the field.
+    call_tool(srv, "create_study", {"study_id": STUDY_ID, "success_checks": [
+        {"type": "frame_reached", "value": "71:616"}, {"type": "text_visible", "value": "Done", "required": "false"}]})
+    checks = STATE.last_for(f"/api/studies/{STUDY_ID}")["body"]["success"]["checks"]
+    expect(checks == [{"type": "frame_reached", "value": "71:616"},
+                      {"type": "text_visible", "value": "Done", "required": "false"}],
+           f"checks untouched, frame_reached included: {checks}")
+    before = len(STATE.requests)
+    bad = call_tool(srv, "create_study", {"study_id": STUDY_ID, "success_checks": [{"value": "/welcome"}]})
+    expect(bad.get("isError") is True and len(STATE.requests) == before, "a check without a type is refused, not dropped")
+    contains(result_text(bad), "success_checks[0]", "names the check")
+    STATE.error_overrides["/api/plugin/runs"] = (201, dict(RUN_V2_RESPONSE, instructions=dict(
+        RUN_V2_RESPONSE["instructions"], success={"criterion": "Reach the plan screen",
+                                                  "checks": [{"type": "frame_reached", "value": "71:616"}]})))
+    text = result_text(call_tool(srv, "start_run", {"goal": "g", "url": "https://www.figma.com/proto/abc"}))
+    contains(text, "you reach the prototype screen: 71:616", "frame_reached in words in the briefing")
 
 
 def case_61_generate_factors(srv: ServerProc, data_dir: Path) -> None:
@@ -2797,6 +3080,40 @@ def case_69_get_study_resumes_at_every_stage(srv: ServerProc, data_dir: Path) ->
     expect(bad.get("isError") is True, "id checked locally")
 
 
+def case_69b_get_study_without_its_run_listing(srv: ServerProc, data_dir: Path) -> None:
+    write_auth(data_dir)
+    study_path = f"/api/studies/{STUDY_ID}"
+    runs_path = f"/api/studies/{STUDY_ID}/runs"
+    ready = dict(STUDY_RESPONSE, status="running", factorSpec=FACTORS_RESPONSE["factorSpec"],
+                 archetypes=ARCHETYPES_RESPONSE["archetypes"],
+                 runs=[{k: r[k] for k in ("runId", "archetypeId", "archetypeName", "repeatIndex")}
+                       for r in WAVE1_RESPONSE["runs"]])
+    # A failing listing is an error: without live statuses every run looks
+    # finished and the advice would be to ask for the next wave.
+    STATE.error_overrides[runs_path] = (500, {"error": "internal_error",
+                                              "message": "An unexpected server error occurred while listing the study runs."})
+    STATE.once_overrides[study_path] = (200, ready)
+    result = call_tool(srv, "get_study", {"study_id": STUDY_ID})
+    text = result_text(result)
+    expect(result.get("isError") is True, f"the failed listing is an error: {text[:200]}")
+    contains(text, "while listing the study runs", "the backend's message")
+    expect("next_study_wave" not in text, "no advice drawn from missing statuses")
+    # A backend without the listing route (problem+json 404) still resumes
+    # from the study's own run refs.
+    STATE.error_overrides[runs_path] = (404, {"type": "https://docs.syntheticarchetype.com/api#errors",
+                                              "title": "Not Found", "status": 404, "code": "not_found",
+                                              "detail": f"No route matches GET {runs_path}.",
+                                              "error": "not_found",
+                                              "message": f"No route matches GET {runs_path}."})
+    STATE.once_overrides[study_path] = (200, ready)
+    result = call_tool(srv, "get_study", {"study_id": STUDY_ID})
+    expect(not result.get("isError"), f"an old backend resumes: {result_text(result)[:200]}")
+    text = result_text(result)
+    contains(text, "| unknown |", "run refs without a live status")
+    contains(text, "Stage: unknown.", "no stage guessed from unknown statuses")
+    expect("call next_study_wave" not in text, f"no next wave on a guess: {text[-400:]}")
+
+
 def case_66b_study_status_waits_for_a_change(srv: ServerProc, data_dir: Path) -> None:
     write_auth(data_dir)
     running = dict(STUDY_STATUS_RESPONSE, runs={"allTerminal": False, "byStatus": {"running": 2, "completed": 3},
@@ -2932,6 +3249,8 @@ CASES = [
     ("status: not connected, no login modal", case_9_status_not_connected),
     ("status: connected dashboard (account, features, portal)", case_10_status_connected),
     ("status: stale token degrades gracefully", case_11_status_invalid_token),
+    ("an auth outage (503) keeps the login and opens no device login", case_11b_auth_outage_is_not_a_bad_token),
+    ("problem documents show their detail", case_11c_problem_documents_show_their_detail),
     ("run log: start_run appends, report_result updates, status renders", case_12_run_log_start_report_status),
     ("run log: caps at 20 entries", case_13_run_log_truncation),
     ("run log: corrupt file tolerated", case_14_run_log_corrupt),
@@ -2981,10 +3300,19 @@ CASES = [
     ("log_step buffers on timeout and flushes next time", case_55_log_step_buffers_on_timeout, STEP_FAST),
     ("report_result flushes buffered steps first", case_56_report_flushes_buffer_first, STEP_FAST),
     ("report_result carries steps the backend never took", case_56b_unsent_steps_ride_with_results, STEP_FAST),
+    ("report_result sends v2 records with their own keys", case_56c_v2_steps_in_the_report_keep_their_keys),
     ("log_step give up NOTE, backend note, ended run", case_57_give_up_note),
     ("log_step local give up while the backend is down", case_57b_local_give_up_when_backend_down, STEP_FAST),
     ("log_step relays a rejected step without keeping it", case_57c_rejected_step),
-    ("report_result abandoned with raw actions, browser and video", case_58_report_abandoned_with_actions_and_video),
+    ("a step without progress is no progress signal locally", case_57i_no_progress_reported_is_no_signal),
+    ("local patience after a backend review matches the backend", case_57h_local_patience_after_a_backend_review),
+    ("log_step refuses an invalid record before buffering it", case_57d_invalid_step_refused_before_buffering, STEP_FAST),
+    ("log_step on a closed run: stop, no second report", case_57e_closed_run_is_not_reported_again),
+    ("buffered steps the backend refuses are named, not lost silently", case_57f_dropped_buffered_steps_are_named, STEP_FAST),
+    ("log_step says a refused login is not a slow backend", case_57g_rejected_login_is_not_a_slow_backend),
+    ("report_result abandoned with raw actions, browser and video", case_58_report_abandoned_with_actions_and_video, WITH_BROWSER),
+    ("no browser engine to name: start_run refuses, report_result notes it", case_58b_unknown_engine_is_an_error_not_a_guess, NO_BROWSER),
+    ("a broken browser pin is an error, not an empty config", case_58c_broken_pin_is_an_error),
     ("log_step answer stays under 120 words", case_59_step_answer_stays_short),
     ("create_study: camelCase body, defaults, table, field errors", case_60_create_study),
     ("create_study with study_id patches and confirms checks", case_60b_update_study_confirms_checks),
@@ -3000,6 +3328,8 @@ CASES = [
     ("dispatch_study shows the estimate and waits for confirm", case_70_dispatch_study_needs_confirm),
     ("dispatch_study runs the swarm: workers, browsers, waves, status", case_71_dispatch_study_runs_the_swarm),
     ("get_study resumes a study at every stage", case_69_get_study_resumes_at_every_stage),
+    ("get_study: a failed run listing is an error, a missing route is not", case_69b_get_study_without_its_run_listing),
+    ("study design and checks reach the backend whole", case_60c_study_design_and_checks_reach_the_backend_whole),
     ("update_factors only: exactly these factors in one PATCH", case_62b_update_factors_only),
 ]
 

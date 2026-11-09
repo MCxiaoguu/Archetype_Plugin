@@ -136,22 +136,33 @@ What the server does:
 1. Stamps `client_ts` (ISO, UTC, milliseconds) and `elapsed_s` (since
    `start_run` returned), fills a missing `seq`, and turns a
    `screenshot_path` into `screenshot_b64` (images only, 1 MB, 6 per run).
+   Then checks the record the way the backend's `normalize_step` does
+   (closed lists and ranges): a record it would refuse is an error here,
+   before anything is sent or buffered.
 2. Sends any steps still buffered for this run, oldest first, then this
    one, to `POST /api/plugin/runs/<run_id>/steps` with body
    `{session_id, step}` (snake_case, as plan 5.3). The whole call, flush
    included, finishes inside `ARCHETYPE_STEP_TIMEOUT` (15 s).
-3. Timeout, network error, 5xx, a missing route or no token: the step is
-   appended to `runs/<run_id>.steps.jsonl` and goes out with the next step
-   or with `report_result`. The actor is told the step was saved and keeps
-   going. A 400 (or 404 `run_not_found`) is the actor's to fix: returned as
-   an error, nothing kept. A 409 means the backend stopped taking steps:
-   the NOTE says the run has ended.
+3. Timeout, network error, 5xx, a missing route, a refused login (401) or
+   no token: the step is appended to `runs/<run_id>.steps.jsonl` and goes
+   out with the next step or with `report_result`. The actor is told why
+   (a refused login goes out once the user logs in again) and keeps going;
+   a step that cannot even be saved locally is an error. A 400 (or 404
+   `run_not_found`) is the actor's to fix: returned as an error, nothing
+   kept. A 409 `run_ended` means the persona's patience ran out: the NOTE
+   says the run has ended and to report it abandoned. Any other 409 means
+   the run is already closed (reported, or aborted by the swarm runner):
+   an error telling the actor to stop and not report. A buffered step the
+   backend later refuses, or takes no more, is named in the answer.
 4. Answers with the backend's `state`, `activeRules`, `recall` and `note`,
    or, when the backend did not answer in time, with local state computed
    from the same rules (unproductive grows on a failed action, major or
-   blocked friction, no progress or a refused trust request, and resets
+   blocked friction, a reported progress that did not rise (a step without
+   progress is no signal) or a refused trust request, and resets
    when progress rises by 10 or more; the review fires on the budget, the
-   step cap or a repeated error; a second exhausted budget ends the run).
+   step cap or a repeated error and halves the counter; a second exhausted
+   budget ends the run). The local counters follow the backend's whenever
+   it answered, its reviews included.
 
 The answer is a fenced STATE line plus at most 120 words:
 
@@ -171,12 +182,15 @@ Rules and recall are clipped and dropped (recall first) until the text fits.
 ### `report_result` in protocol v2
 
 Before posting, the server flushes the step buffer. Steps the backend never
-acknowledged ride along in `steps` in the v1 shape (`actionText`,
-`narration`, `url`, `observationPageType`, `success`) with the full record
-under `protocolV2`. The body adds:
+acknowledged ride along in `steps` as the v2 records they are, which the
+backend's success checks and metrics read (`observe`, `after`, `client_ts`).
+On a protocol 1 backend, steps logged with `log_step` go in the v1 shape
+(`actionText`, `narration`, `url`, `observationPageType`, `success`) with
+the full record under `protocolV2`. The body adds:
 
 - `status: "abandoned"` (on an older backend it becomes `failed`, with the
-  outcome kept in feedback),
+  outcome kept in feedback; without local state for the run it is sent as
+  given),
 - `feedback.outcome {completed, in_their_words, quit_reason?,
   abandoned_at_step?}` with the backend's quit reasons (`price_barrier`,
   `trust_refused`, `confusion`, `feature_not_found`, `goal_completed`,
@@ -1183,7 +1197,7 @@ inherits the environment of the Claude Code CLI, so export these **before** laun
 
 | Variable | Default | Effect |
 | :--- | :--- | :--- |
-| `ARCHETYPE_BACKEND_URL` | `https://api.syntheticarchetype.com` | Base URL for every backend call (device-flow OAuth, `/api/plugin/*`, `/api/features`, `/api/persona/*`). Trailing slashes are stripped. Set to `http://localhost:5001` for local backend development. |
+| `ARCHETYPE_BACKEND_URL` | `https://api.syntheticarchetype.com` | Base URL for every backend call (device-flow OAuth, `/api/plugin/*`, `/api/features`, `/api/persona/*`). Trailing slashes are stripped. Set to `http://localhost:5001` for local backend development. Must be https; plain http only on `localhost`, `127.0.0.1` or `::1`, else every call (login included) is refused. Redirects are followed only within the same origin. |
 | `ARCHETYPE_PORTAL_URL` | `https://www.syntheticarchetype.com` | Portal link rendered in the `/archetype:status` dashboard. Trailing slashes are stripped. |
 | `ARCHETYPE_PLUGIN_USER_AGENT` | `archetype-claude-plugin/<server version>` (currently `archetype-claude-plugin/0.6.0`, from the `SERVER_VERSION` constant in `core-server.py`) | HTTP `User-Agent` sent on every backend request. The Cloudflare WAF in front of `api.syntheticarchetype.com` returns HTTP 403 (error 1010) for the default Python-urllib UA; any real, identifiable UA passes. If you override this and hit a 1010, switch back to the default. |
 | `ARCHETYPE_HTTP_TIMEOUT` | `15` | Wall-clock deadline in seconds for ordinary backend calls. |

@@ -53,6 +53,7 @@ import queue
 import re
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.error
@@ -162,8 +163,10 @@ def _write_private(path: Path, text: str) -> None:
         os.chmod(path.parent, 0o700)
     except OSError:
         pass
-    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    # mkstemp: 0600 and a name of its own, so two tool-call threads writing
+    # the same file never share (and truncate) one temp file.
+    fd, name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    tmp = Path(name)
     try:
         with os.fdopen(fd, "w") as fh:
             fh.write(text)
@@ -297,6 +300,28 @@ class _DeadlineExceeded(Exception):
     pass
 
 
+class _RedirectRefused(Exception):
+    pass
+
+
+class _SameOriginRedirects(urllib.request.HTTPRedirectHandler):
+    """Follow a redirect only within the request's own origin.
+
+    urllib copies every header, Authorization included, to wherever a
+    redirect points, so one to another host or to plain http would hand that
+    host the token the https check above withheld from it."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[override]
+        old, new = urllib.parse.urlsplit(req.full_url), urllib.parse.urlsplit(newurl)
+        if (old.scheme, old.hostname, old.port) != (new.scheme, new.hostname, new.port):
+            fp.close()
+            raise _RedirectRefused(newurl)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+_OPENER = urllib.request.build_opener(_SameOriginRedirects)
+
+
 def _read_until(resp: Any, deadline: float) -> bytes:
     """Read a response body, checking the wall clock between socket reads.
 
@@ -329,10 +354,20 @@ def _exchange(
     req: urllib.request.Request, timeout: float, deadline: float
 ) -> tuple[int, dict[str, Any]]:
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with _OPENER.open(req, timeout=timeout) as resp:
             return resp.status, _parse_body(_read_until(resp, deadline).decode())
     except _DeadlineExceeded:
         return 0, _deadline_body(req, timeout)
+    except _RedirectRefused as exc:
+        return 0, {
+            "error": "redirect_refused",
+            "message": (
+                f"The Archetype backend redirected {req.get_method()} "
+                f"{req.full_url[len(BACKEND_BASE):] or '/'} to {exc}, another origin, "
+                f"so the call was stopped before your login went there. Check "
+                f"ARCHETYPE_BACKEND_URL (now {BACKEND_BASE})."
+            ),
+        }
     except urllib.error.HTTPError as exc:
         return exc.code, _parse_body(exc.read().decode())
     except urllib.error.URLError as exc:
@@ -445,26 +480,33 @@ def tool_text(text: str, is_error: bool = False) -> dict[str, Any]:
 
 def existing_token_is_valid(
     auth_path: Path,
-) -> tuple[bool, str | None, dict[str, Any] | None]:
-    """Return (is_valid, token, validate-response-body)."""
+) -> tuple[str, str | None, dict[str, Any] | None, int]:
+    """Return (verdict, token, validate-response-body, status).
+
+    verdict is "valid", "invalid" (no token, or the backend refused it with
+    a 401) or "unverified": the backend could not check it (503
+    auth_unavailable during an Auth0 outage, any 5xx, no answer). An
+    unverified token is not a bad one and must not trigger a new login.
+    """
     if not auth_path.exists():
-        return False, None, None
+        return "invalid", None, None, 0
     try:
         data = json.loads(auth_path.read_text())
     except Exception as exc:
         log(f"could not parse {auth_path}: {exc}")
-        return False, None, None
+        return "invalid", None, None, 0
     token = data.get("access_token")
     if not token:
-        return False, None, data
+        return "invalid", None, data, 0
     status, body = backend_post("/api/oauth/validate-token", {}, auth_token=token)
     if status == 200 and body.get("valid") is True:
-        return True, token, body
+        return "valid", token, body, status
     log(
         f"validate-token said not valid (status={status}, "
         f"error={body.get('error')}, reason={body.get('reason')})"
     )
-    return False, token, body
+    verdict = "invalid" if status in (200, 401) else "unverified"
+    return verdict, token, body, status
 
 
 def _login_prompt(verify_url: str, user_code: str, browser_opened: bool) -> str:
@@ -684,6 +726,9 @@ def perform_device_login(stale_token: str | None = None) -> tuple[str | None, st
 
 
 def _device_login_locked() -> tuple[str | None, str]:
+    if not BACKEND_IS_SAFE:
+        # The flow sends no bearer token, but its last answer is the token.
+        return None, f"{_INSECURE_BODY['message']} (now {BACKEND_BASE})"
     plugin_data = os.environ.get("CLAUDE_PLUGIN_DATA")
     if not plugin_data:
         return None, (
@@ -792,12 +837,19 @@ def handle_login() -> dict[str, Any]:
         )
     auth_path = Path(plugin_data) / "auth.json"
 
-    valid, _token, info = existing_token_is_valid(auth_path)
-    if valid:
+    verdict, _token, info, status = existing_token_is_valid(auth_path)
+    if verdict == "valid":
         user_id = (info or {}).get("user_id", "unknown user")
         return tool_text(
             f"Already connected to Archetype as {user_id}.\n"
             f"Token at {auth_path}. To re-login, delete that file and re-run /archetype:setup."
+        )
+    if verdict == "unverified":
+        return tool_text(
+            f"Could not check your saved Archetype login: "
+            f"{backend_error_message(status, info or {})} Your saved login is kept "
+            "and no new login was started; try again in a minute.",
+            is_error=True,
         )
 
     token, message = perform_device_login()
@@ -891,8 +943,12 @@ def _save_run_log(entries: list[dict[str, Any]]) -> None:
         log(f"could not write run log: {exc}")
 
 
+# Parallel actors share this process: every read-modify-write of runs.json
+# holds this lock, or one actor's entry overwrites another's.
+_run_log_lock = threading.Lock()
+
+
 def record_run_start(run_body: dict[str, Any], arguments: dict[str, Any]) -> None:
-    entries = load_run_log()
     entry = {
         "run_id": run_body.get("runId"),
         "session_id": run_body.get("sessionId"),
@@ -902,29 +958,32 @@ def record_run_start(run_body: dict[str, Any], arguments: dict[str, Any]) -> Non
         "pool_id": arguments.get("pool_id"),
         "started_at": int(time.time()),
     }
-    entries.append({k: v for k, v in entry.items() if v is not None})
-    _save_run_log(entries)
+    with _run_log_lock:
+        entries = load_run_log()
+        entries.append({k: v for k, v in entry.items() if v is not None})
+        _save_run_log(entries)
 
 
 def record_run_result(run_id: str, status_str: str | None, verdict: str | None) -> None:
-    entries = load_run_log()
-    for entry in reversed(entries):
-        if entry.get("run_id") == run_id:
-            entry["status"] = status_str
-            entry["verdict"] = verdict
-            entry["reported_at"] = int(time.time())
-            break
-    _save_run_log(entries)
+    with _run_log_lock:
+        entries = load_run_log()
+        for entry in reversed(entries):
+            if entry.get("run_id") == run_id:
+                entry["status"] = status_str
+                entry["verdict"] = verdict
+                entry["reported_at"] = int(time.time())
+                break
+        _save_run_log(entries)
 
 
 def backend_error_message(status: int, body: dict[str, Any]) -> str:
     """The user-facing line for a non-2xx backend response.
 
-    Prefers the backend's natural-language ``message``, falling back to the
-    ``error`` slug. A 401 always gets the login hint appended so the actor
-    knows the remedy.
+    Prefers the backend's natural-language ``message`` (a problem document
+    carries it too, and ``detail``), falling back to the ``error`` slug. A
+    401 always gets the login hint appended so the actor knows the remedy.
     """
-    message = body.get("message") or body.get("error") or f"backend returned {status}"
+    message = body.get("message") or body.get("detail") or body.get("error") or f"backend returned {status}"
     if status == 401:
         message = f"{message} {LOGIN_HINT}"
     return message
@@ -1048,15 +1107,19 @@ def _write_jsonl(path: Path | None, items: list[dict[str, Any]]) -> None:
         log(f"could not write {path}: {exc}")
 
 
-def _append_jsonl(path: Path | None, item: dict[str, Any]) -> None:
+def _append_jsonl(path: Path | None, item: dict[str, Any]) -> bool:
+    """Append one line; False (logged) when it could not be written."""
     if path is None:
-        return
+        log("CLAUDE_PLUGIN_DATA is not set: nothing can be kept for this run")
+        return False
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a") as fh:
             fh.write(json.dumps(item) + "\n")
     except Exception as exc:
         log(f"could not append to {path}: {exc}")
+        return False
+    return True
 
 
 def _pick(d: Any, *keys: str, default: Any = None) -> Any:
@@ -1103,16 +1166,29 @@ BROWSER_PROFILES: dict[str, dict[str, Any]] = {
 }
 
 
+PINNED_FILE = Path(__file__).resolve().parent.parent / "browser" / "pinned.json"
+# What the plugin's servers launch with (browser-server.py) and the version
+# a run records: none of it is optional.
+_PINNED_KEYS = ("package", "playwright_version", "user_agent", "viewport")
+
+
+class BrowserConfigError(RuntimeError):
+    """The config of a plugin browser cannot be stated. It is never guessed:
+    a study compares only runs with the same config."""
+
+
 def _pinned_browser() -> dict[str, Any]:
-    """browser/pinned.json: the one source of the plugin browsers' settings."""
+    """browser/pinned.json: the one source of the plugin browsers' settings.
+    Read when a config is needed, so a broken install fails the run that
+    uses a plugin browser, not every tool of this server."""
     try:
-        data = json.loads((Path(__file__).resolve().parent.parent / "browser" / "pinned.json").read_text())
-        return data if isinstance(data, dict) else {}
-    except Exception:
-        return {}
-
-
-PINNED_BROWSER = _pinned_browser()
+        data = json.loads(PINNED_FILE.read_text())
+    except (OSError, ValueError) as exc:
+        raise BrowserConfigError(f"{PINNED_FILE} is unreadable ({exc}); reinstall the plugin.") from None
+    missing = [k for k in _PINNED_KEYS if not (isinstance(data, dict) and data.get(k))]
+    if missing:
+        raise BrowserConfigError(f"{PINNED_FILE} has no {', '.join(missing)}; reinstall the plugin.")
+    return data
 
 
 def _browser_name_from_tool(tool_name: str) -> str | None:
@@ -1129,18 +1205,25 @@ def _browser_name_from_tool(tool_name: str) -> str | None:
 
 def _browser_engine_label() -> str:
     """The engine the plugin's servers launch here (browser_engine.py):
-    "chrome channel", or "bundled chromium <revision>" without Chrome."""
+    "chrome channel", or "bundled chromium <revision>" without Chrome.
+    Raises BrowserConfigError when there is none to name."""
+    here = str(Path(__file__).resolve().parent)
+    if here not in sys.path:
+        sys.path.insert(0, here)
     try:
-        sys.path.insert(0, str(Path(__file__).resolve().parent))
         import browser_engine
-
-        return str(browser_engine.pick().get("label") or "no browser installed")
-    except Exception:
-        return "chrome channel"
+    except ImportError as exc:
+        raise BrowserConfigError(f"scripts/browser_engine.py could not be loaded ({exc}); reinstall the plugin.") from None
+    picked = browser_engine.pick()
+    if picked.get("error"):
+        raise BrowserConfigError(str(picked["error"]))
+    return str(picked["label"])
 
 
 def browser_config(name: Any) -> dict[str, Any] | None:
-    """The recorded browser config for a browser name, or None if unknown."""
+    """The recorded browser config for a browser name, or None if unknown.
+    Raises BrowserConfigError for a plugin browser whose pin or engine
+    cannot be read."""
     if isinstance(name, dict):
         return name or None
     if not isinstance(name, str) or not name.strip():
@@ -1154,13 +1237,11 @@ def browser_config(name: Any) -> dict[str, Any] | None:
         # The plugin's own isolated Playwright servers: headless for
         # archetype-browser-N, headed for archetype-watch-N, all on the
         # pinned package, user agent and viewport (browser/pinned.json).
-        pinned = PINNED_BROWSER
-        version = pinned.get("package")
-        if version and pinned.get("playwright_version"):
-            version = f"{version} (playwright {pinned['playwright_version']}, {_browser_engine_label()})"
+        pinned = _pinned_browser()
+        version = f"{pinned['package']} (playwright {pinned['playwright_version']}, {_browser_engine_label()})"
         profile = dict(
             BROWSER_PROFILES["playwright"], headless=match.group(1) == "browser",
-            version=version, user_agent=pinned.get("user_agent"), viewport=pinned.get("viewport"),
+            version=version, user_agent=pinned["user_agent"], viewport=pinned["viewport"],
         )
     # Unknown values are left out rather than sent as null: the claim route
     # answers 400 for a malformed browser config.
@@ -1270,6 +1351,7 @@ _CHECK_WORDS = {
     "text_visible": "you can read the text",
     "element_present": "you can see the element",
     "page_type_reached": "you reach a page of type",
+    "frame_reached": "you reach the prototype screen",
     "actor_confirms": "you yourself confirm",
 }
 
@@ -1534,13 +1616,12 @@ def _deadline_advice(pool: bool) -> str:
     return advice
 
 
-def handle_claim_run(arguments: dict[str, Any]) -> dict[str, Any]:
+def handle_claim_run(arguments: dict[str, Any], browser: dict[str, Any] | None) -> dict[str, Any]:
     """start_run(run_id=...): claim a run a study created in advance."""
     run_id = arguments.get("run_id")
     bad = _bad_run_id(run_id)
     if bad:
         return bad
-    browser = browser_config(arguments.get("browser"))
     claim_body: dict[str, Any] = {"browser": browser} if browser else {}
     result = authed_call(
         lambda token: backend_post(
@@ -1585,8 +1666,26 @@ def handle_claim_run(arguments: dict[str, Any]) -> dict[str, Any]:
 
 
 def handle_start_run(arguments: dict[str, Any]) -> dict[str, Any]:
+    name = arguments.get("browser")
+    try:
+        browser = browser_config(name)
+    except BrowserConfigError as exc:
+        return tool_text(
+            f"The config of browser {name} cannot be recorded: {exc} Nothing was started.",
+            is_error=True,
+        )
+    if name not in (None, "") and browser is None:
+        # Unknown, the run would be recorded with no browser config and a
+        # study could no longer tell which of its runs compare.
+        return tool_text(
+            f"{name!r} is not a browser this plugin knows. Pass the server name "
+            "the dispatch prompt gave (archetype-browser-1 to 4, "
+            "archetype-watch-1 or 2), chrome for Claude in Chrome, or playwright "
+            "for a self-registered Playwright server. Nothing was started.",
+            is_error=True,
+        )
     if arguments.get("run_id"):
-        return handle_claim_run(arguments)
+        return handle_claim_run(arguments, browser)
     if not arguments.get("url") and not arguments.get("feature_id"):
         return tool_text(
             "start_run needs a url, or a feature_id whose feature has a url "
@@ -1639,7 +1738,7 @@ def handle_start_run(arguments: dict[str, Any]) -> dict[str, Any]:
         )
 
     record_run_start(resp, arguments)
-    save_run_state(resp, browser_config(arguments.get("browser")))
+    save_run_state(resp, browser)
     return tool_text(_render_run(resp, preconditions))
 
 
@@ -1650,7 +1749,17 @@ def handle_start_run(arguments: dict[str, Any]) -> dict[str, Any]:
 # local state if the backend has not.
 STEP_TIMEOUT = _env_seconds("ARCHETYPE_STEP_TIMEOUT", 15)
 STEP_WORD_LIMIT = 120
+# The closed lists of a step record (backend services/run_protocol.py).
+_PAGE_TYPES = (
+    "landing", "signup", "login", "onboarding", "pricing", "checkout", "cart",
+    "dashboard", "settings", "search", "content", "form", "verification",
+    "error", "help", "other",
+)
 _FRICTION_LEVELS = ("none", "minor", "major", "blocked")
+_FRICTION_TYPES = ("navigation", "copy", "form", "trust", "performance", "error", "other")
+_ACT_RESULTS = ("ok", "failed", "no_change")
+_TRUST_KINDS = ("email", "phone", "address", "card", "permissions", "account", "upload", "social_login")
+_TRUST_DECISIONS = ("shared", "refused", "deferred")
 
 
 def _iso_now() -> str:
@@ -1662,12 +1771,78 @@ def _step_part(step: dict[str, Any], key: str) -> dict[str, Any]:
     return part if isinstance(part, dict) else {}
 
 
+def _is_v2_record(step: dict[str, Any]) -> bool:
+    """A protocol v2 step record, as the backend tells one from a v1 step."""
+    return any(k in step for k in ("observe", "decide", "act", "after"))
+
+
+def _whole(value: Any) -> int | None:
+    """A whole number the way the backend reads one (ints, 3.0, "3")."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    if isinstance(value, str) and value.strip().lstrip("-").isdigit():
+        return int(value.strip())
+    return None
+
+
+def _step_problem(step: dict[str, Any]) -> str | None:
+    """Why the backend would refuse this step record, or None.
+
+    The same checks as the backend's normalize_step, made before a step is
+    sent or buffered: a buffered record rides along with report_result,
+    where one record the backend refuses would refuse the whole report."""
+    seq = _whole(step.get("seq"))
+    if seq is None or seq < 1:
+        return f"step.seq must be a whole number from 1 (got {step.get('seq')!r})."
+    if not _is_v2_record(step):
+        return "the step needs its observe, decide, act and after parts (recall too)."
+    for name in ("observe", "recall", "decide", "act", "after"):
+        if step.get(name) is not None and not isinstance(step[name], dict):
+            return f"step.{name} must be an object."
+    observe, decide, act, after = (_step_part(step, k) for k in ("observe", "decide", "act", "after"))
+    if observe.get("page_type") is not None and observe["page_type"] not in _PAGE_TYPES:
+        return f"step.observe.page_type must be one of {', '.join(_PAGE_TYPES)} (got {observe['page_type']!r})."
+    if "confidence" in decide and not 1 <= (_whole(decide["confidence"]) or 0) <= 5:
+        return "step.decide.confidence must be a whole number from 1 to 5."
+    if act.get("result", "ok") not in _ACT_RESULTS:
+        return f"step.act.result must be one of {', '.join(_ACT_RESULTS)} (got {act.get('result')!r})."
+    friction = after.get("friction")
+    if friction is not None:
+        if not isinstance(friction, dict):
+            return "step.after.friction must be an object {level, type?, note?}."
+        if friction.get("level", "none") not in _FRICTION_LEVELS:
+            return f"step.after.friction.level must be one of {', '.join(_FRICTION_LEVELS)}."
+        if friction.get("type") is not None and friction["type"] not in _FRICTION_TYPES:
+            return f"step.after.friction.type must be one of {', '.join(_FRICTION_TYPES)}."
+    if "sentiment" in after:
+        sentiment = _whole(after["sentiment"])
+        if sentiment is None or not -2 <= sentiment <= 2:
+            return "step.after.sentiment must be a whole number from -2 to 2."
+    if "progress" in after:
+        progress = after["progress"]
+        if isinstance(progress, bool) or not isinstance(progress, (int, float)) or not 0 <= progress <= 100:
+            return "step.after.progress must be a number from 0 to 100."
+    trust = after.get("trust_request")
+    if trust is not None:
+        if not isinstance(trust, dict):
+            return "step.after.trust_request must be an object {kind, decision, reason}."
+        if trust.get("kind") not in _TRUST_KINDS:
+            return f"step.after.trust_request.kind must be one of {', '.join(_TRUST_KINDS)}."
+        if trust.get("decision") not in _TRUST_DECISIONS:
+            return f"step.after.trust_request.decision must be one of {', '.join(_TRUST_DECISIONS)}."
+    return None
+
+
 def _apply_step_locally(state: dict[str, Any], step: dict[str, Any]) -> dict[str, Any]:
     """Advance the local patience counters with one step and return the
     resulting state, mirroring the backend's rules (plan 5.4):
     unproductive grows when the action failed, friction was major or
-    blocked, progress did not rise, or a trust request was refused; it
-    resets when progress rises by 10 or more. The give-up review fires on an
+    blocked, a reported progress did not rise, or a trust request was
+    refused; it resets when progress rises by 10 or more. The give-up review fires on an
     exhausted budget, the step cap or a repeated error; after a review the
     counter is halved, and a second exhausted budget ends the run."""
     local = state.setdefault("local", {})
@@ -1676,7 +1851,11 @@ def _apply_step_locally(state: dict[str, Any], step: dict[str, Any]) -> dict[str
     trust = after.get("trust_request") if isinstance(after.get("trust_request"), dict) else {}
     seq = _int_or(step.get("seq"), local.get("seq", 0) + 1)
     prev_progress = _int_or(local.get("progress"), 0)
-    progress = max(0, min(100, _int_or(after.get("progress"), prev_progress)))
+    # progress is optional: a step that does not report it is no evidence
+    # that progress stalled (the backend's rule).
+    raw_progress = after.get("progress")
+    reported = isinstance(raw_progress, (int, float)) and not isinstance(raw_progress, bool)
+    progress = max(0, min(100, int(raw_progress))) if reported else prev_progress
     unproductive = _int_or(local.get("unproductive"), 0)
 
     if progress - prev_progress >= 10:
@@ -1684,7 +1863,7 @@ def _apply_step_locally(state: dict[str, Any], step: dict[str, Any]) -> dict[str
     elif (
         str(act.get("result") or "ok") != "ok"
         or str(friction.get("level") or "none") in ("major", "blocked")
-        or progress <= prev_progress
+        or (reported and progress <= prev_progress)
         or str(trust.get("decision") or "") == "refused"
     ):
         unproductive += 1
@@ -1713,7 +1892,7 @@ def _apply_step_locally(state: dict[str, Any], step: dict[str, Any]) -> dict[str
             ended, ended_reason = True, "patience budget exhausted twice"
         elif seq >= max_steps + 5:
             ended, ended_reason = True, "step limit passed"
-        unproductive = unproductive // 2 if unproductive >= max_unproductive else unproductive
+        unproductive //= 2
 
     local.update(seq=max(seq, _int_or(local.get("seq"), 0)), progress=progress,
                  unproductive=unproductive)
@@ -1835,9 +2014,11 @@ def _post_step(run_id: str, session_id: Any, step: dict[str, Any], token: str | 
                timeout: float) -> tuple[str, int, dict[str, Any]]:
     """One step to the backend: ("ok"|"retry"|"ended"|"rejected", status, body).
 
-    "retry" (timeout, network, 5xx, no token, missing route) keeps the step
-    in the buffer; "rejected" (400, 404 run) is the actor's to fix;
-    "ended" (409) means the backend stopped taking steps for this run."""
+    "retry" (timeout, network, 5xx, a refused login or none, missing route)
+    keeps the step in the buffer; "rejected" (400, 404 run) is the actor's
+    to fix; "ended" (409) means the backend stopped taking steps for this
+    run: error run_ended when the persona's patience ran out, any other
+    error when the run is already closed."""
     if not token or timeout <= 0:
         return "retry", 0, {"error": "no_token" if not token else "deadline_exceeded"}
     status, resp = backend_post(
@@ -1853,29 +2034,53 @@ def _post_step(run_id: str, session_id: Any, step: dict[str, Any], token: str | 
     return "retry", status, resp
 
 
-def flush_step_buffer(run_id: str, state: dict[str, Any], budget: float) -> tuple[int, int, str | None]:
+def _held_back(status: int, resp: dict[str, Any]) -> str:
+    """Why a step stayed on this machine, and when it goes out, for the actor."""
+    later = "it goes out once the user logs in again with /archetype:setup in the main session, at the latest with report_result"
+    if resp.get("error") == "no_token":
+        return f"this session is not logged in; {later}"
+    if status == 401:
+        return f"the backend refused this session's login ({resp.get('message') or resp.get('error') or 401}); {later}"
+    if resp.get("error") == "deadline_exceeded":
+        return "the backend was slow; it goes out with your next step"
+    return f"the backend did not take it ({backend_error_message(status, resp)}); it goes out with your next step"
+
+
+def flush_step_buffer(run_id: str, state: dict[str, Any], budget: float) -> dict[str, Any]:
     """Send buffered steps oldest first within ``budget`` seconds.
-    Returns (sent, left, why the rest stayed). Caller holds the run lock."""
+
+    Returns {sent, left, stuck, dropped}: ``stuck`` is the (status, body)
+    that stopped the flush with ``left`` steps still buffered, and
+    ``dropped`` names, for the actor, each buffered step the backend refused
+    or no longer takes (never resent). Caller holds the run lock."""
     path = _run_file(run_id, "steps.jsonl")
     pending = _read_jsonl(path)
+    out: dict[str, Any] = {"sent": 0, "left": 0, "stuck": None, "dropped": []}
     if not pending:
-        return 0, 0, None
+        return out
     token = load_token()
     deadline = time.monotonic() + budget
-    sent, why = 0, None
     while pending:
         outcome, status, resp = _post_step(
             run_id, state.get("session_id"), pending[0], token,
             min(STEP_TIMEOUT, deadline - time.monotonic()),
         )
         if outcome == "retry":
-            why = resp.get("error") or f"status {status}"
+            out["stuck"] = (status, resp)
             break
-        pending.pop(0)  # sent, ended or rejected: not worth resending
+        step = pending.pop(0)
         if outcome == "ok":
-            sent += 1
+            out["sent"] += 1
+        elif resp.get("error") == "run_ended":
+            out["dropped"].append(f"Buffered step {step.get('seq')} came after this run ended, so the backend did not keep it.")
+        else:
+            out["dropped"].append(
+                f"Buffered step {step.get('seq')} was refused by the backend "
+                f"({backend_error_message(status, resp)}) and is not in the run's record."
+            )
     _write_jsonl(path, pending)
-    return sent, len(pending), why
+    out["left"] = len(pending)
+    return out
 
 
 def handle_log_step(arguments: dict[str, Any]) -> dict[str, Any]:
@@ -1901,37 +2106,63 @@ def handle_log_step(arguments: dict[str, Any]) -> dict[str, Any]:
         if arguments.get("session_id"):
             state["session_id"] = arguments["session_id"]
         prepared, shot_note = _prepare_step(step, state)
+        problem = _step_problem(prepared)
+        if problem:
+            # Nothing is kept: the state changes above stay in memory.
+            return tool_text(
+                f"Step {prepared.get('seq')} was not logged: {problem} Fix the "
+                "record and call log_step again for this step.",
+                is_error=True,
+            )
+        reviews_before = _int_or(state.setdefault("local", {}).get("reviews"), 0)
         local_state = _apply_step_locally(state, prepared)
 
         lead_bits = [shot_note] if shot_note else []
+        seq = prepared.get("seq")
         remote: dict[str, Any] | None = None
-        if _int_or(state.get("protocol_version"), 1) < 2:
+        legacy = _int_or(state.get("protocol_version"), 1) < 2
+        if legacy:
             lead_bits.append(
                 "Saved on this machine: this backend predates live steps, so "
                 "the steps go out with report_result."
             )
         else:
-            _sent, left, _why = flush_step_buffer(run_id, state, STEP_TIMEOUT * 0.5)
+            flushed = flush_step_buffer(run_id, state, STEP_TIMEOUT * 0.5)
+            lead_bits += flushed["dropped"]
             remaining = STEP_TIMEOUT - (time.monotonic() - started)
-            outcome, status, resp = ("retry", 0, {})
-            if left == 0:
+            if flushed["left"]:
+                outcome, (status, resp) = "retry", flushed["stuck"]
+            else:
                 outcome, status, resp = _post_step(
                     run_id, state.get("session_id"), prepared, load_token(), remaining
                 )
             if outcome == "rejected":
                 # Nothing is kept: the state changes above stay in memory.
-                return tool_text(
-                    f"The backend rejected step {prepared.get('seq')}: "
+                return tool_text(" ".join(lead_bits + [
+                    f"The backend rejected step {seq}: "
                     f"{backend_error_message(status, resp)} Fix the record and "
-                    "call log_step again for this step.",
+                    "call log_step again for this step."]),
+                    is_error=True,
+                )
+            if outcome == "ended" and resp.get("error") != "run_ended":
+                # Already closed: reported, or aborted by the swarm runner. A
+                # report now would overwrite that outcome with this actor's.
+                return tool_text(" ".join(lead_bits + [
+                    f"The backend no longer takes steps for this run: "
+                    f"{backend_error_message(status, resp)} Stop: take no further "
+                    "action, close the browser, and do NOT call report_result for "
+                    "this run, which is already closed. Tell the caller why you stopped."]),
                     is_error=True,
                 )
             if outcome == "retry":
-                _append_jsonl(_run_file(run_id, "steps.jsonl"), prepared)
-                lead_bits.append(
-                    f"Step {prepared.get('seq')} saved on this machine (the backend "
-                    "was slow); it goes out with your next step. Keep going."
-                )
+                if not _append_jsonl(_run_file(run_id, "steps.jsonl"), prepared):
+                    return tool_text(" ".join(lead_bits + [
+                        f"Step {seq} was not logged: the backend did not take it "
+                        f"({backend_error_message(status, resp)}) and it could not be "
+                        "saved on this machine. Call log_step again for this step."]),
+                        is_error=True,
+                    )
+                lead_bits.append(f"Step {seq} saved on this machine: {_held_back(status, resp)}. Keep going.")
             elif outcome == "ended":
                 # 409 run_ended carries the backend's state and note.
                 ended_state = dict(resp["state"] if isinstance(resp.get("state"), dict) else local_state)
@@ -1942,7 +2173,13 @@ def handle_log_step(arguments: dict[str, Any]) -> dict[str, Any]:
             else:
                 remote = resp
 
-        _append_jsonl(_run_file(run_id, "journal.jsonl"), prepared)
+        if not _append_jsonl(_run_file(run_id, "journal.jsonl"), prepared) and legacy:
+            # On protocol 1 the journal is the only record of the step.
+            return tool_text(
+                f"Step {seq} could not be saved on this machine, so it is not "
+                "recorded. Keep your own step log and send it with report_result.",
+                is_error=True,
+            )
         rules = list(state.get("rules") or [])[:5]
         recall: list[Any] = list(state.get("last_recall") or [])
         note: str | None = None
@@ -1951,8 +2188,16 @@ def handle_log_step(arguments: dict[str, Any]) -> dict[str, Any]:
             remote_state = remote.get("state") if isinstance(remote.get("state"), dict) else None
             if remote_state:
                 shown = remote_state
-                state["local"]["unproductive"] = _int_or(
-                    _pick(remote_state, "unproductive"), state["local"].get("unproductive", 0))
+                # Follow the backend's counters, so a later step answered
+                # only locally continues from them: its review count, and
+                # its counter halved after a review the way the backend
+                # halves it on the next step.
+                unproductive = _int_or(_pick(remote_state, "unproductive"), state["local"].get("unproductive", 0))
+                reviewed = bool(_pick(remote_state, "reviewGiveUp", "review_give_up"))
+                if reviewed:
+                    unproductive //= 2
+                state["local"]["unproductive"] = unproductive
+                state["local"]["reviews"] = reviews_before + (1 if reviewed else 0)
                 state["local"]["progress"] = _int_or(
                     _pick(remote_state, "progress"), state["local"].get("progress", 0))
             active = _pick(remote, "activeRules", "active_rules")
@@ -2050,15 +2295,19 @@ def _screenshot_from_path(raw: Any) -> tuple[str | None, str | None]:
 
 
 def _map_step(step: dict[str, Any], notes: list[str] | None = None) -> dict[str, Any]:
+    # A v2 record is read by its own snake_case keys (scenario_id,
+    # screenshot_b64); renaming them would file them under unknown keys.
+    v2 = _is_v2_record(step)
+    shot_key = "screenshot_b64" if v2 else "screenshotB64"
     out: dict[str, Any] = {}
     for key, value in step.items():
         if key == "screenshot_path":
             continue
-        out[_STEP_KEY_MAP.get(key, key)] = value
-    if "screenshot_path" in step and not out.get("screenshotB64"):
+        out[key if v2 else _STEP_KEY_MAP.get(key, key)] = value
+    if "screenshot_path" in step and not out.get(shot_key):
         encoded, why = _screenshot_from_path(step.get("screenshot_path"))
         if encoded:
-            out["screenshotB64"] = encoded
+            out[shot_key] = encoded
         elif notes is not None:
             notes.append(f"step {step.get('seq', '?')}: screenshot skipped ({why})")
     return out
@@ -2070,8 +2319,9 @@ _REPORT_STATUSES = ("completed", "failed", "aborted", "abandoned")
 
 
 def _v1_step(record: dict[str, Any]) -> dict[str, Any]:
-    """A protocol v2 step record in the v1 shape every backend accepts, with
-    the full record riding along as protocolV2 (plan 5.3 mapping)."""
+    """A protocol v2 step record in the v1 shape a backend before protocol 2
+    accepts, with the full record riding along as protocolV2 (plan 5.3
+    mapping). A v2 backend gets the record itself."""
     observe, decide, act = (_step_part(record, k) for k in ("observe", "decide", "act"))
     step: dict[str, Any] = {
         "seq": _int_or(record.get("seq"), 0),
@@ -2145,23 +2395,34 @@ def handle_report_result(arguments: dict[str, Any]) -> dict[str, Any]:
 
     with _run_lock(run_id):
         state = load_run_state(run_id)
-        version = _int_or(state.get("protocol_version"), 1) if state else 1
+        # Without local state nothing says the backend is old (log_step
+        # assumes protocol 2 too): never rewrite abandoned to failed on a guess.
+        version = _int_or(state.get("protocol_version"), 1) if state else 2
         if version >= 2:
-            sent, left, why = flush_step_buffer(run_id, state, RESULT_TIMEOUT * 0.5)
-            if sent:
-                notes.append(f"{sent} buffered step(s) sent first")
-            if left:
-                notes.append(f"{left} step(s) the backend never acknowledged ride along with the results ({why})")
+            flushed = flush_step_buffer(run_id, state, RESULT_TIMEOUT * 0.5)
+            if flushed["sent"]:
+                notes.append(f"{flushed['sent']} buffered step(s) sent first")
+            notes += flushed["dropped"]
+            if flushed["left"]:
+                status, resp = flushed["stuck"]
+                notes.append(
+                    f"{flushed['left']} step(s) the backend never acknowledged ride along "
+                    f"with the results ({backend_error_message(status, resp)})"
+                )
         unsent = _read_jsonl(_run_file(run_id, "steps.jsonl"))
         journal = _read_jsonl(_run_file(run_id, "journal.jsonl"))
         actions = _read_jsonl(_run_file(run_id, "actions.jsonl"), RAW_ACTIONS_LIMIT)
 
     steps = [_map_step(s, skipped) for s in (arguments.get("steps") or []) if isinstance(s, dict)]
     have = {s.get("seq") for s in steps}
-    # v2: steps the backend never took go with the results. v1: an actor
-    # that logged steps instead of keeping its own log still gets them sent.
-    extra = unsent if version >= 2 else (journal if not steps else [])
-    steps += [_v1_step(r) for r in extra if r.get("seq") not in have]
+    # v2: steps the backend never took go with the results, as the v2
+    # records they are (the backend's success checks read observe and after).
+    # v1: an actor that logged steps instead of keeping its own log still
+    # gets them sent, in the only shape an old backend takes.
+    if version >= 2:
+        steps += [r for r in unsent if r.get("seq") not in have]
+    elif not steps:
+        steps += [_v1_step(r) for r in journal]
     steps.sort(key=lambda s: _int_or(s.get("seq"), 0))
 
     # A completed run has no quit reason: drop the placeholders an actor
@@ -2194,10 +2455,17 @@ def handle_report_result(arguments: dict[str, Any]) -> dict[str, Any]:
 
     if version >= 2:
         used = _browser_used(actions)
-        browser = (
-            browser_config(used) or state.get("browser")
-            or browser_config(arguments.get("browser"))
-        )
+        try:
+            browser = (
+                browser_config(used) or state.get("browser")
+                or browser_config(arguments.get("browser"))
+            )
+        except BrowserConfigError as exc:
+            # The results must still be stored: the config recorded when the
+            # run started goes, and the note says why it was not recomputed.
+            browser = state.get("browser")
+            notes.append(f"the browser config was not recomputed ({exc}); "
+                         + ("the one recorded at the start was sent" if browser else "none was sent"))
         if browser:
             body["browser"] = browser
         body["rawActions"] = actions
@@ -2222,6 +2490,15 @@ def handle_report_result(arguments: dict[str, Any]) -> dict[str, Any]:
             f"{resp['message']}\n\nThe backend may still have stored these "
             f"results. Call get_run for {run_id} first: if it shows the run as "
             "finished, do NOT re-send; otherwise retry with the same payload.",
+            is_error=True,
+        )
+    if status == 409:
+        # The actor's rule is to retry report_result on an error; a closed
+        # run answers 409 to every retry.
+        return tool_text(
+            f"{backend_error_message(status, resp)} The run is already closed on "
+            "the backend, so these results were not stored. Do not send them "
+            "again: tell the caller.",
             is_error=True,
         )
     if not (200 <= status < 300):
@@ -2888,8 +3165,10 @@ STATUS_MAX_WAIT = 300
 STATUS_POLL = _env_seconds("ARCHETYPE_STATUS_POLL", 10)
 
 DESIGN_MODES = ("ofat_stress", "ofat", "factorial", "half_fraction", "composites")
+EIGHT_ARCHETYPE_MODES = ("factorial", "half_fraction")
 REPEAT_POLICIES = ("confirm", "explore", "decide")
-CHECK_TYPES = ("url_matches", "text_visible", "element_present", "page_type_reached", "actor_confirms")
+CHECK_TYPES = ("url_matches", "text_visible", "element_present", "page_type_reached", "frame_reached",
+               "actor_confirms")
 
 # What one run costs, for the estimate shown before runs are created or
 # dispatched (plan 8): 15 to 40 steps, about 8 to 15 minutes of wall time
@@ -2972,18 +3251,24 @@ def _study_dir(study_id: str) -> Path | None:
     return Path(plugin_data) / "studies" / study_id if plugin_data else None
 
 
+def _checks_problem(raw: Any) -> str | None:
+    """Why the success_checks argument cannot be sent, or None. Everything
+    else about a check (known type, value, required as a boolean) is the
+    backend's to validate: it names the field, where a quiet fix here would
+    send a check the user did not write, or none at all."""
+    if raw is None:
+        return None
+    for i, item in enumerate(raw if isinstance(raw, list) else [raw]):
+        if not isinstance(item, dict) or not item.get("type"):
+            return f"success_checks[{i}] needs a type ({', '.join(CHECK_TYPES)}) and a value; got {item!r}."
+    return None
+
+
 def _checks_from_args(raw: Any) -> list[dict[str, Any]] | None:
     if raw is None:
         return None
     items = raw if isinstance(raw, list) else [raw]
-    checks = []
-    for item in items:
-        if isinstance(item, dict) and item.get("type"):
-            check = {"type": item["type"], "value": item.get("value")}
-            if "required" in item:
-                check["required"] = bool(item["required"])
-            checks.append(check)
-    return checks
+    return [{k: item[k] for k in ("type", "value", "required", "rationale") if k in item} for item in items]
 
 
 def _study_body(arguments: dict[str, Any], creating: bool) -> dict[str, Any]:
@@ -3031,9 +3316,14 @@ def _study_body(arguments: dict[str, Any], creating: bool) -> dict[str, Any]:
     design: dict[str, Any] = {}
     put(design, "mode", arguments.get("design_mode") or ("ofat_stress" if creating else None))
     put(design, "repeatPolicy", arguments.get("repeat_policy") or ("confirm" if creating else None))
-    put(design, "archetypeBudget", arguments.get("archetype_budget"))
+    budget = arguments.get("archetype_budget")
+    if budget is None and design.get("mode") in EIGHT_ARCHETYPE_MODES:
+        # A PATCH merges into the stored design, whose budget is the old
+        # mode's; these designs take exactly 8 and the backend refuses less.
+        budget = 8
+    put(design, "archetypeBudget", budget)
     if arguments.get("include_opposite_poles") is not None:
-        design["includeOppositePoles"] = bool(arguments["include_opposite_poles"])
+        design["includeOppositePoles"] = arguments["include_opposite_poles"]
     if design:
         body["design"] = design
     return body
@@ -3086,6 +3376,9 @@ def _render_study(study: dict[str, Any], lead: str) -> str:
 
 def handle_create_study(arguments: dict[str, Any]) -> dict[str, Any]:
     study_id = arguments.get("study_id")
+    problem = _checks_problem(arguments.get("success_checks"))
+    if problem:
+        return tool_text(problem, is_error=True)
     if study_id:
         bad = _bad_study_id(study_id)
         if bad:
@@ -3523,6 +3816,9 @@ def _study_next_step(study: dict[str, Any], runs: list[dict[str, Any]]) -> tuple
         return "runs", ["Create wave 1: create_study_runs."]
     wave = max((_int_or(r.get("wave"), 1) for r in runs), default=1)
     current = [r for r in runs if _int_or(r.get("wave"), 1) == wave]
+    if any(r.get("status") == "unknown" for r in current):
+        return "unknown", ["This backend lists no run statuses, so whether the wave has finished is "
+                           "unknown: check study_status before dispatching runs or asking for the next wave."]
     queued = [r for r in current if r.get("status") == "queued"]
     running = [r for r in current if r.get("status") == "running"]
     if queued:
@@ -3560,13 +3856,20 @@ def handle_get_study(arguments: dict[str, Any]) -> dict[str, Any]:
         return out
     study = out[1]
     listing = authed_call(lambda t: backend_get(f"/api/studies/{study_id}/runs", auth_token=t))
-    if isinstance(listing, tuple) and 200 <= listing[0] < 300 and isinstance(listing[1].get("runs"), list):
-        runs = [r for r in listing[1]["runs"] if isinstance(r, dict)]
-    else:
+    if isinstance(listing, str):
+        return not_connected(listing)
+    status, resp = listing
+    if status == 404 and resp.get("error") != "study_not_found":
         # An older backend without the run listing: the study's run refs
         # (no live status) stand in.
         runs = [dict(r, status=r.get("status") or "unknown") for r in (study.get("runs") or [])
                 if isinstance(r, dict)]
+    elif 200 <= status < 300 and isinstance(resp.get("runs"), list):
+        runs = [r for r in resp["runs"] if isinstance(r, dict)]
+    else:
+        # Without live statuses every run would look finished and the next
+        # step would be the wrong one, so a failed listing is an error.
+        return _study_error(status, resp)
     lines = [_render_study(study, f"Study {_clip(study.get('title') or study_id, 120)} (resumed).")]
     spec = study.get("factorSpec") or {}
     chosen = [f for f in (spec.get("factors") or []) if isinstance(f, dict) and f.get("selected")]
@@ -3917,6 +4220,13 @@ def handle_status(_arguments: dict[str, Any]) -> dict[str, Any]:
             lines.append(f"Features: {len(fbody.get('features') or [])} saved")
         else:
             lines.append("Features: unavailable")
+    elif status >= 500:
+        # 503 auth_unavailable: the backend cannot check tokens right now
+        # (an Auth0 outage). Not a verdict on this token, so no login hint.
+        who = " ".join(identity_bits) if identity_bits else "unverified"
+        lines.append(f"Account: {who} (could not verify)")
+        lines.append(f"Token:   could not verify: {backend_error_message(status, body)}")
+        lines.append(f"Backend: {BACKEND_BASE} — reachable, but it cannot check sign-in right now")
     elif status == 0:
         who = " ".join(identity_bits) if identity_bits else "unverified"
         lines.append(f"Account: {who} (could not verify)")
@@ -4148,10 +4458,7 @@ TOOLS: dict[str, dict[str, Any]] = {
                         "observe": {
                             "type": "object",
                             "properties": {
-                                "page_type": {"type": "string", "enum": [
-                                    "landing", "signup", "login", "onboarding", "pricing",
-                                    "checkout", "cart", "dashboard", "settings", "search",
-                                    "content", "form", "verification", "error", "help", "other"]},
+                                "page_type": {"type": "string", "enum": list(_PAGE_TYPES)},
                                 "summary": {"type": "string"},
                                 "stood_out": {"type": "string"},
                                 "visible_text_excerpt": {"type": "string"},
@@ -4174,7 +4481,7 @@ TOOLS: dict[str, dict[str, Any]] = {
                             "type": "object",
                             "properties": {
                                 "target": {"type": "string"},
-                                "result": {"type": "string", "enum": ["ok", "failed", "no_change"]},
+                                "result": {"type": "string", "enum": list(_ACT_RESULTS)},
                                 "error_message": {"type": "string"},
                             },
                         },
@@ -4185,9 +4492,7 @@ TOOLS: dict[str, dict[str, Any]] = {
                                     "type": "object",
                                     "properties": {
                                         "level": {"type": "string", "enum": list(_FRICTION_LEVELS)},
-                                        "type": {"type": "string", "enum": [
-                                            "navigation", "copy", "form", "trust",
-                                            "performance", "error", "other"]},
+                                        "type": {"type": "string", "enum": list(_FRICTION_TYPES)},
                                         "note": {"type": "string"},
                                     },
                                 },
@@ -4197,10 +4502,8 @@ TOOLS: dict[str, dict[str, Any]] = {
                                 "trust_request": {
                                     "type": "object",
                                     "properties": {
-                                        "kind": {"type": "string", "enum": [
-                                            "email", "phone", "address", "card", "permissions",
-                                            "account", "upload", "social_login"]},
-                                        "decision": {"type": "string", "enum": ["shared", "refused", "deferred"]},
+                                        "kind": {"type": "string", "enum": list(_TRUST_KINDS)},
+                                        "decision": {"type": "string", "enum": list(_TRUST_DECISIONS)},
                                         "reason": {"type": "string"},
                                     },
                                 },
