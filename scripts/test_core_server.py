@@ -1207,6 +1207,9 @@ def case_5_report_result_conflict(srv: ServerProc, data_dir: Path) -> None:
     result = call_tool(srv, "report_result", args)
     expect(result.get("isError") is True, "409 must be isError")
     contains(result_text(result), "This run is already completed.", "409 NL message surfaced")
+    # "Retry on error" is the actor's rule for report_result; a closed run
+    # must say that retrying cannot help.
+    contains(result_text(result), "Do not send them again", "no retry loop on a closed run")
 
 
 def case_6_401_declined_heal_appends_login_hint(srv: ServerProc, data_dir: Path) -> None:

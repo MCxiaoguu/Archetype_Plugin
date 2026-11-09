@@ -2434,6 +2434,15 @@ def handle_report_result(arguments: dict[str, Any]) -> dict[str, Any]:
             "finished, do NOT re-send; otherwise retry with the same payload.",
             is_error=True,
         )
+    if status == 409:
+        # The actor's rule is to retry report_result on an error; a closed
+        # run answers 409 to every retry.
+        return tool_text(
+            f"{backend_error_message(status, resp)} The run is already closed on "
+            "the backend, so these results were not stored. Do not send them "
+            "again: tell the caller.",
+            is_error=True,
+        )
     if not (200 <= status < 300):
         return backend_error_text(status, resp)
 
