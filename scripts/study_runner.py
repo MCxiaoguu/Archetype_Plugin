@@ -226,12 +226,51 @@ def log_steps(stream: Path) -> int:
     return len(re.findall(r'"name":\s*"mcp__plugin_archetype_core__log_step"', text))
 
 
-def claimed(stream: Path) -> bool:
+START_RUN = "mcp__plugin_archetype_core__start_run"
+
+
+def _text(content: Any) -> str:
+    """The text of a tool_result's content (a string or a list of blocks)."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "\n".join(_text(b.get("text") if isinstance(b, dict) else b) for b in content)
+    return ""
+
+
+def claim_outcome(stream: Path, run_id: str) -> str:
+    """How this worker's own claim of ``run_id`` went, from its stream:
+    "won" when start_run handed it the run's briefing (which ends with
+    ``runId: <id>``), "lost" when start_run answered with an error (another
+    actor holds the run, it already ran, or the claim timed out), "pending"
+    when the call has no answer yet, "none" when it never asked."""
     try:
-        text = stream.read_text(errors="replace")
+        lines = stream.read_text(errors="replace").splitlines()
     except OSError:
-        return False
-    return "mcp__plugin_archetype_core__start_run" in text
+        return "none"
+    briefing = re.compile(rf"\brunId:\s*{re.escape(run_id)}(?![A-Za-z0-9_-])")
+    asked: set[str] = set()
+    outcome = "none"
+    for line in lines:
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        message = event.get("message") if isinstance(event, dict) else None
+        content = message.get("content") if isinstance(message, dict) else None
+        for block in content if isinstance(content, list) else []:
+            if not isinstance(block, dict):
+                continue
+            args = block.get("input")
+            if (block.get("type") == "tool_use" and block.get("name") == START_RUN
+                    and isinstance(args, dict) and args.get("run_id") == run_id):
+                asked.add(str(block.get("id")))
+                outcome = "pending"
+            elif block.get("type") == "tool_result" and str(block.get("tool_use_id")) in asked:
+                if block.get("is_error") is not True and briefing.search(_text(block.get("content"))):
+                    return "won"
+                outcome = "lost"
+    return outcome
 
 
 class Runner:
@@ -252,6 +291,16 @@ class Runner:
         self.shadow: Path | None = None
         self.started = 0
         self.stalled: set[str] = set()
+        # What went wrong in this pass (the exit code is 1 when any did).
+        self.problems: list[str] = []
+        # Runs whose worker exited before claiming: still queued, so the
+        # current wave cannot finish in this pass.
+        self.left_queued: set[str] = set()
+
+    def problem(self, msg: str) -> None:
+        log(msg)
+        with self.lock:
+            self.problems.append(msg)
 
     # ---- status ----
 
@@ -273,28 +322,43 @@ class Runner:
         return backend_call(self.opts.backend, self.data_dir, method, path, body, timeout)
 
     def run_row(self, run_id: str) -> dict[str, Any] | None:
+        """The run's row in the study's run list (live status, sessionId), or
+        None, logged as a problem, when the backend cannot say."""
         status, body = self.request("GET", f"/api/studies/{self.opts.study}/runs")
         if status != 200:
+            self.problem(f"run {run_id}: could not read the study's runs "
+                         f"({status} {body.get('message') or body.get('error')})")
             return None
-        return next((r for r in body.get("runs") or [] if isinstance(r, dict) and r.get("runId") == run_id), None)
+        row = next((r for r in body.get("runs") or [] if isinstance(r, dict) and r.get("runId") == run_id), None)
+        if row is None:
+            self.problem(f"run {run_id}: not in the study's run list")
+        return row
 
-    def abort(self, run_id: str, reason: str) -> bool:
+    def abort(self, run_id: str, reason: str, row: dict[str, Any], open_states: tuple[str, ...]) -> bool:
         """Report a run the runner gave up on as aborted, with the reason, so
-        the wave can finish. Only runs still queued or running."""
-        row = self.run_row(run_id)
-        if not row or row.get("status") not in ("queued", "running") or not row.get("sessionId"):
+        the wave can finish. Only a run in ``open_states``: a worker's own
+        claimed run while it is running, a run skipped by the budget while
+        it is queued. Anything else belongs to another actor or is done."""
+        if row.get("status") not in open_states:
+            return False
+        if not row.get("sessionId"):
+            self.problem(f"run {run_id} is {row.get('status')} but its row has no sessionId: not aborted ({reason})")
             return False
         status, body = self.request("POST", f"/api/plugin/runs/{run_id}/results", {
             "status": "aborted", "steps": [], "sessionId": row["sessionId"], "abortReason": reason,
             "feedback": {"verdict": "fail", "summary": f"Aborted by the swarm runner: {reason}."},
         })
-        ok = 200 <= status < 300
-        log(f"run {run_id} aborted ({reason}): {'ok' if ok else f'{status} ' + str(body.get('message'))}")
-        self.worker(run_id, aborted=reason if ok else None)
-        return ok
+        if not 200 <= status < 300:
+            self.problem(f"run {run_id}: aborting it ({reason}) failed: {status} "
+                         f"{body.get('message') or body.get('error')}")
+            return False
+        log(f"run {run_id} aborted ({reason})")
+        self.worker(run_id, aborted=reason)
+        return True
 
     def next_wave(self) -> list[str] | None:
-        """Run ids of the next wave, or None when the study has no more."""
+        """Run ids of the next wave, or None when the study has no more (or
+        the backend would not say: a problem)."""
         for _ in range(NEXT_WAVE_TRIES):
             status, body = self.request("POST", f"/api/studies/{self.opts.study}/runs/next", timeout=120)
             if status == 409 or status == 0:
@@ -302,7 +366,7 @@ class Runner:
                 time.sleep(NEXT_WAVE_WAIT)
                 continue
             if not (200 <= status < 300):
-                log(f"next wave failed: {status} {body.get('message') or body.get('error')}")
+                self.problem(f"next wave failed: {status} {body.get('message') or body.get('error')}")
                 return None
             if body.get("done"):
                 log(f"no more waves: {body.get('reason') or 'done'}")
@@ -310,6 +374,7 @@ class Runner:
             runs = prioritized(body)
             self.status["waves"].append({"wave": body.get("wave"), "runs": runs})
             return [r for r in runs if isinstance(r, str) and _ID.match(r)]
+        self.problem(f"the next wave was not ready after {NEXT_WAVE_TRIES} tries; the study is not finished")
         return None
 
     # ---- workers ----
@@ -343,15 +408,32 @@ class Runner:
                 self.children.pop(run_id, None)
         stalled = run_id in self.stalled
         state = "stalled" if stalled else "timed_out" if timed_out else "finished" if code == 0 else "failed"
-        self.worker(run_id, state=state, exit_code=code, finished_at=time.time(),
+        claim = claim_outcome(run_dir / "stream.jsonl", run_id)
+        self.worker(run_id, state=state, claim=claim, exit_code=code, finished_at=time.time(),
                     stream_events=self._count_lines(run_dir / "stream.jsonl"))
-        log(f"run {run_id} {state} (exit {code})")
-        # A worker that is gone while its run is still open would hold the
-        # next wave forever: report the run as aborted, with why.
-        reason = (f"claimed but no step for {self.opts.stall_min:g} minutes" if stalled
-                  else f"worker timed out after {self.opts.timeout_min:g} minutes" if timed_out
-                  else "worker exited without reporting")
-        self.abort(run_id, reason)
+        log(f"run {run_id} {state} (exit {code}, claim {claim})")
+        if state != "finished":
+            self.problem(f"run {run_id}: worker {state} (exit {code})")
+        row = self.run_row(run_id)
+        if row is None:
+            return
+        if claim == "won":
+            # A worker that is gone while the run it claimed is still open
+            # would hold the next wave forever: report the run as aborted,
+            # with why.
+            reason = (f"claimed but no step for {self.opts.stall_min:g} minutes" if stalled
+                      else f"worker timed out after {self.opts.timeout_min:g} minutes" if timed_out
+                      else "worker exited without reporting")
+            if self.abort(run_id, reason, row, ("running",)):
+                self.problem(f"run {run_id}: aborted ({reason})")
+        elif row.get("status") == "queued":
+            # Never claimed by anyone: leave it queued for the next worker
+            # (a later dispatch, or the next --watch pass).
+            self.left_queued.add(run_id)
+            self.problem(f"run {run_id}: its worker exited before claiming it; the run stays queued")
+        elif row.get("status") == "running":
+            # Another actor's claim: never abort a run this runner does not hold.
+            log(f"run {run_id} is running under another actor (claim {claim}); left alone")
 
     def watch(self, run_id: str, child: subprocess.Popen, stream: Path) -> Any:
         """Wait for a worker; stop it when it times out or stalls after its claim."""
@@ -370,7 +452,7 @@ class Runner:
             steps = log_steps(stream)
             if steps != last_steps:
                 last_steps, last_change = steps, now
-            elif claimed(stream) and now - last_change >= self.opts.stall_min * 60:
+            elif claim_outcome(stream, run_id) == "won" and now - last_change >= self.opts.stall_min * 60:
                 log(f"run {run_id}: no step for {self.opts.stall_min:g} min after the claim; stopping its worker")
                 self.stalled.add(run_id)
                 self.kill(child)
@@ -406,7 +488,10 @@ class Runner:
                 run_id = self.queue.pop(0)
                 if self.opts.max_runs and self.started >= self.opts.max_runs:
                     self.worker(run_id, state="not_started")
-                    self.abort(run_id, f"not run: the run budget of {self.opts.max_runs} was spent")
+                    row = self.run_row(run_id)
+                    if row is not None and not self.abort(
+                            run_id, f"not run: the run budget of {self.opts.max_runs} was spent", row, ("queued",)):
+                        log(f"run {run_id} is {row.get('status')}, not queued: left to whoever holds it")
                     continue
                 self.started += 1
                 slot = self.free_slots.pop(0)
@@ -464,6 +549,10 @@ class Runner:
             self.drain()
             if self.opts.no_next_wave or (self.folder / "stop").exists():
                 break
+            if self.left_queued:
+                self.problem(f"{len(self.left_queued)} run(s) of this wave were never claimed and are still "
+                             "queued, so the next wave cannot start: dispatch the study again to run them")
+                break
             more = self.next_wave()
             if not more:
                 break
@@ -476,9 +565,12 @@ class Runner:
         self.status["summary"] = {s: sum(1 for w in workers if w.get("state") == s)
                                   for s in ("finished", "failed", "timed_out", "stalled", "not_started")}
         self.status["summary"]["aborted"] = sum(1 for w in workers if w.get("aborted"))
+        self.status["problems"] = list(self.problems)
         self.save()
         log(f"done: {self.status['summary']}")
-        return 0
+        for msg in self.problems:
+            log(f"problem: {msg}")
+        return 1 if self.problems else 0
 
 
 def queued_work(opts: argparse.Namespace) -> list[tuple[str, list[str]]]:

@@ -386,21 +386,38 @@ def case_recorded_config_names_the_engine(tmp: Path) -> None:
 # ---- swarm runner against a stub backend ----
 
 RUNNER_WORKER = r"""#!/usr/bin/env python3
-import json, os, sys, time, urllib.request
+import json, os, sys, time, urllib.error, urllib.request
 prompt = sys.argv[sys.argv.index("-p") + 1]
 run_id = prompt.split("--run ")[1].split()[0]
 plan = json.load(open(os.environ["RUNNER_PLAN"])).get(run_id, "report")
 base = os.environ["ARCHETYPE_BACKEND_URL"]
-def say(name):
-    print(json.dumps({"type": "assistant", "message": {"content": [{"type": "tool_use", "name": name}]}}), flush=True)
+calls = []
+def emit(event):
+    print(json.dumps(event), flush=True)
+def call(name, args=None):
+    calls.append(name)
+    tool_id = f"toolu_{len(calls)}"
+    emit({"type": "assistant", "message": {"content": [{"type": "tool_use", "id": tool_id, "name": name,
+                                                        "input": args or {}}]}})
+    return tool_id
+def answer(tool_id, text, error=False):
+    emit({"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": tool_id,
+                                                   "is_error": error, "content": [{"type": "text", "text": text}]}]}})
 if plan == "exit":
     sys.exit(0)
-say("mcp__plugin_archetype_core__start_run")
-urllib.request.urlopen(urllib.request.Request(f"{base}/claim/{run_id}", data=b"{}", method="POST"))
-if plan == "stall":
-    say("mcp__plugin_archetype_core__log_step")
+claim = call("mcp__plugin_archetype_core__start_run", {"run_id": run_id, "browser": "archetype-browser-1"})
+try:
+    urllib.request.urlopen(urllib.request.Request(f"{base}/claim/{run_id}", data=b"{}", method="POST"))
+except urllib.error.HTTPError:
+    answer(claim, f"Run {run_id} cannot be claimed: it is running, not queued. Another actor owns it.", error=True)
+    sys.exit(0)
+answer(claim, f"YOUR PERSONA\n...\nrunId: {run_id}\nsessionId: s-{run_id}")
+if plan == "claim-exit":
+    sys.exit(0)
+if plan in ("stall", "slow"):
+    call("mcp__plugin_archetype_core__log_step")
     time.sleep(60)
-say("mcp__plugin_archetype_core__log_step")
+call("mcp__plugin_archetype_core__log_step")
 urllib.request.urlopen(urllib.request.Request(f"{base}/done/{run_id}", data=b"{}", method="POST"))
 """
 
@@ -442,6 +459,8 @@ class StubStudy:
                 body = json.loads(self.rfile.read(length) or b"{}")
                 parts = self.path.strip("/").split("/")
                 if parts[0] == "claim":
+                    if stub.status.get(parts[1]) != "queued":
+                        return self.reply(409, {"error": "already_claimed", "message": "not queued"})
                     stub.status[parts[1]] = "running"
                     return self.reply(200, {})
                 if parts[0] == "done":
@@ -451,6 +470,8 @@ class StubStudy:
                     if stub.wave2 and not any(r in stub.status for r in stub.wave2["runs_ids"]):
                         for r in stub.wave2["runs_ids"]:
                             stub.status[r] = "queued"
+                        for r in stub.wave2.get("taken", []):
+                            stub.status[r] = "running"  # claimed by another actor right away
                         return self.reply(201, stub.wave2["body"])
                     return self.reply(200, {"done": True, "reason": "no more"})
                 if self.path.endswith("/results"):
@@ -469,7 +490,7 @@ class StubStudy:
         self.server.shutdown()
 
 
-def run_runner(tmp: Path, stub: StubStudy, runs: list[str], plan: dict, *extra: str) -> dict:
+def run_runner(tmp: Path, stub: StubStudy, runs: list[str], plan: dict, *extra: str, code: int = 0) -> dict:
     worker = tmp / "claude"
     worker.write_text(RUNNER_WORKER)
     worker.chmod(0o755)
@@ -482,22 +503,40 @@ def run_runner(tmp: Path, stub: StubStudy, runs: list[str], plan: dict, *extra: 
     args = [sys.executable, str(HERE / "study_runner.py"), "--study", "s1", "--data-dir", str(data),
             "--backend", stub.url, "--runs", ",".join(runs), "--parallel", "2", "--claude", str(worker), *extra]
     out = subprocess.run(args, env=env, capture_output=True, text=True, timeout=120)
-    expect(out.returncode == 0, f"runner exit {out.returncode}: {out.stdout[-600:]} {out.stderr[-600:]}")
+    expect(out.returncode == code, f"runner exit {out.returncode}, not {code}: {out.stdout[-600:]} {out.stderr[-600:]}")
     return json.loads((data / "studies" / "s1" / "runner.json").read_text())
 
 
 def case_runner_aborts_orphans(tmp: Path) -> None:
-    stub = StubStudy(["r-ok", "r-exit", "r-stall"])
+    stub = StubStudy(["r-ok", "r-gone", "r-stall"])
     try:
         started = time.monotonic()
-        status = run_runner(tmp, stub, ["r-ok", "r-exit", "r-stall"], {"r-exit": "exit", "r-stall": "stall"},
-                            "--stall-min", "0.05")
+        status = run_runner(tmp, stub, ["r-ok", "r-gone", "r-stall"], {"r-gone": "claim-exit", "r-stall": "stall"},
+                            "--stall-min", "0.05", code=1)
         expect(time.monotonic() - started < 30, "the stalled worker did not hold the study")
-        expect(stub.status == {"r-ok": "completed", "r-exit": "aborted", "r-stall": "aborted"}, f"statuses: {stub.status}")
-        expect(stub.aborts == {"r-exit": "worker exited without reporting",
+        expect(stub.status == {"r-ok": "completed", "r-gone": "aborted", "r-stall": "aborted"}, f"statuses: {stub.status}")
+        expect(stub.aborts == {"r-gone": "worker exited without reporting",
                                "r-stall": "claimed but no step for 0.05 minutes"}, f"reasons: {stub.aborts}")
         expect(status["workers"]["r-stall"]["state"] == "stalled", f"stalled state: {status['workers']['r-stall']}")
+        expect(status["workers"]["r-ok"]["claim"] == "won", f"claim recorded: {status['workers']['r-ok']}")
         expect(status["summary"]["aborted"] == 2, f"summary: {status['summary']}")
+    finally:
+        stub.close()
+
+
+def case_runner_aborts_only_runs_its_workers_claimed(tmp: Path) -> None:
+    stub = StubStudy(["r-ok", "r-taken", "r-early"])
+    stub.status["r-taken"] = "running"  # another runner's worker claimed it a moment ago
+    try:
+        status = run_runner(tmp, stub, ["r-ok", "r-taken", "r-early"], {"r-early": "exit"}, code=1)
+        expect(stub.aborts == {}, f"no run aborted: {stub.aborts}")
+        expect(stub.status == {"r-ok": "completed", "r-taken": "running", "r-early": "queued"},
+               f"the other actor's run is still running, the unclaimed one still queued: {stub.status}")
+        workers = status["workers"]
+        expect(workers["r-taken"]["claim"] == "lost" and workers["r-early"]["claim"] == "none",
+               f"claims: {workers['r-taken']} {workers['r-early']}")
+        expect(any("r-early" in p for p in status["problems"]) and not any("r-taken" in p for p in status["problems"]),
+               f"the unclaimed run is a problem, the lost claim is not: {status['problems']}")
     finally:
         stub.close()
 
@@ -509,14 +548,15 @@ def case_runner_budget_runs_the_highest_priority_wave_two_runs(tmp: Path) -> Non
                  {"runId": "w2-frus", "archetypeId": "C"}, {"runId": "w2-out-b", "archetypeId": "B"}],
         "reasons": [{"archetypeId": "A", "reason": "14 steps vs baseline median 10"},
                     {"archetypeId": "B", "reason": "did not complete while the baseline majority completed"},
-                    {"archetypeId": "C", "reason": "frustration 35 vs baseline median 10"}]}}
+                    {"archetypeId": "C", "reason": "frustration 35 vs baseline median 10"}]},
+        "taken": ["w2-steps"]}
     stub = StubStudy(["w1-a", "w1-b"], wave2=wave2)
     try:
         status = run_runner(tmp, stub, ["w1-a", "w1-b"], {}, "--max-runs", "4")
         ran = sorted(r for r, w in status["workers"].items() if w.get("state") == "finished")
         expect(ran == ["w1-a", "w1-b", "w2-out-a", "w2-out-b"], f"outcome disagreements first: {ran}")
-        expect(stub.aborts == {"w2-frus": "not run: the run budget of 4 was spent",
-                               "w2-steps": "not run: the run budget of 4 was spent"}, f"budget: {stub.aborts}")
+        expect(stub.aborts == {"w2-frus": "not run: the run budget of 4 was spent"}, f"budget: {stub.aborts}")
+        expect(stub.status["w2-steps"] == "running", "a run another actor claimed is never aborted for the budget")
     finally:
         stub.close()
 
@@ -612,6 +652,7 @@ CASES = [
     ("proxy without any browser answers with the install command", case_proxy_without_a_browser_says_how_to_install),
     ("the recorded browser config names the engine that runs", case_recorded_config_names_the_engine),
     ("runner aborts runs whose worker exited or stalled, with the reason", case_runner_aborts_orphans),
+    ("runner aborts only the runs its own workers claimed", case_runner_aborts_only_runs_its_workers_claimed),
     ("runner budget runs the highest priority wave 2 runs, the rest not run", case_runner_budget_runs_the_highest_priority_wave_two_runs),
     ("runner --watch serves every queued run of remote studies", case_runner_watch_serves_remote_studies),
     ("runner sends the token only to an https or loopback backend", case_runner_sends_the_token_only_over_https),
