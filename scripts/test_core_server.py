@@ -1435,6 +1435,42 @@ def case_11_status_invalid_token(srv: ServerProc, data_dir: Path) -> None:
     contains(text, "/archetype:setup", "status login hint (stale token)")
 
 
+AUTH_UNAVAILABLE = {"error": "auth_unavailable", "message": "Sign in cannot be checked right now. Retry in a minute."}
+
+
+def case_11b_auth_outage_is_not_a_bad_token(srv: ServerProc, data_dir: Path) -> None:
+    # The backend answers 503 auth_unavailable when it cannot check tokens
+    # (Auth0 down, not configured). Only a 401 means the token is bad: an
+    # outage must never send the user through the device login again.
+    write_auth(data_dir)
+    STATE.error_overrides["/api/oauth/validate-token"] = (503, dict(AUTH_UNAVAILABLE, valid=False))
+    result = call_tool(srv, "login", {})
+    text = result_text(result)
+    expect(result.get("isError") is True, f"the login tool cannot confirm the login: {text}")
+    contains(text, "Sign in cannot be checked right now", "the backend's reason")
+    contains(text, "kept", "the saved login is kept")
+    expect(count_requests("/api/oauth/device/code") == 0, "no device login on an outage")
+    expect((data_dir / "auth.json").exists(), "auth.json untouched")
+    text = result_text(call_tool(srv, "status", {}))
+    contains(text, "Sign in cannot be checked right now", "status names the outage")
+    expect("expired or invalid" not in text, f"an outage is not an expired token: {text}")
+    STATE.error_overrides["/api/features"] = (503, AUTH_UNAVAILABLE)
+    result = call_tool(srv, "list_features", {})
+    expect(result.get("isError") is True, "an authed tool reports the outage")
+    contains(result_text(result), "Sign in cannot be checked right now", "with the backend's message")
+    expect(count_requests("/api/oauth/device/code") == 0 and not srv.elicitations, "and opens no login")
+
+
+def case_11c_problem_documents_show_their_detail(srv: ServerProc, data_dir: Path) -> None:
+    write_auth(data_dir)
+    # A bare RFC 9457 document (no message): the detail is what to show.
+    STATE.error_overrides["/api/features"] = (405, {"type": "https://docs.syntheticarchetype.com/api#errors",
+                                                    "title": "Method Not Allowed", "status": 405, "code": "method_not_allowed",
+                                                    "detail": "/api/features does not accept GET; it accepts POST."})
+    text = result_text(call_tool(srv, "list_features", {}))
+    contains(text, "/api/features does not accept GET; it accepts POST.", "detail shown, not a generic line")
+
+
 def case_12_run_log_start_report_status(srv: ServerProc, data_dir: Path) -> None:
     write_auth(data_dir)
     call_tool(srv, "start_run", {"goal": "test signup", "url": "http://localhost:8321"})
@@ -2998,7 +3034,8 @@ def case_69b_get_study_without_its_run_listing(srv: ServerProc, data_dir: Path) 
     STATE.error_overrides[runs_path] = (404, {"type": "https://docs.syntheticarchetype.com/api#errors",
                                               "title": "Not Found", "status": 404, "code": "not_found",
                                               "detail": f"No route matches GET {runs_path}.",
-                                              "error": f"No route matches GET {runs_path}."})
+                                              "error": "not_found",
+                                              "message": f"No route matches GET {runs_path}."})
     STATE.once_overrides[study_path] = (200, ready)
     result = call_tool(srv, "get_study", {"study_id": STUDY_ID})
     expect(not result.get("isError"), f"an old backend resumes: {result_text(result)[:200]}")
@@ -3143,6 +3180,8 @@ CASES = [
     ("status: not connected, no login modal", case_9_status_not_connected),
     ("status: connected dashboard (account, features, portal)", case_10_status_connected),
     ("status: stale token degrades gracefully", case_11_status_invalid_token),
+    ("an auth outage (503) keeps the login and opens no device login", case_11b_auth_outage_is_not_a_bad_token),
+    ("problem documents show their detail", case_11c_problem_documents_show_their_detail),
     ("run log: start_run appends, report_result updates, status renders", case_12_run_log_start_report_status),
     ("run log: caps at 20 entries", case_13_run_log_truncation),
     ("run log: corrupt file tolerated", case_14_run_log_corrupt),

@@ -480,26 +480,33 @@ def tool_text(text: str, is_error: bool = False) -> dict[str, Any]:
 
 def existing_token_is_valid(
     auth_path: Path,
-) -> tuple[bool, str | None, dict[str, Any] | None]:
-    """Return (is_valid, token, validate-response-body)."""
+) -> tuple[str, str | None, dict[str, Any] | None, int]:
+    """Return (verdict, token, validate-response-body, status).
+
+    verdict is "valid", "invalid" (no token, or the backend refused it with
+    a 401) or "unverified": the backend could not check it (503
+    auth_unavailable during an Auth0 outage, any 5xx, no answer). An
+    unverified token is not a bad one and must not trigger a new login.
+    """
     if not auth_path.exists():
-        return False, None, None
+        return "invalid", None, None, 0
     try:
         data = json.loads(auth_path.read_text())
     except Exception as exc:
         log(f"could not parse {auth_path}: {exc}")
-        return False, None, None
+        return "invalid", None, None, 0
     token = data.get("access_token")
     if not token:
-        return False, None, data
+        return "invalid", None, data, 0
     status, body = backend_post("/api/oauth/validate-token", {}, auth_token=token)
     if status == 200 and body.get("valid") is True:
-        return True, token, body
+        return "valid", token, body, status
     log(
         f"validate-token said not valid (status={status}, "
         f"error={body.get('error')}, reason={body.get('reason')})"
     )
-    return False, token, body
+    verdict = "invalid" if status in (200, 401) else "unverified"
+    return verdict, token, body, status
 
 
 def _login_prompt(verify_url: str, user_code: str, browser_opened: bool) -> str:
@@ -830,12 +837,19 @@ def handle_login() -> dict[str, Any]:
         )
     auth_path = Path(plugin_data) / "auth.json"
 
-    valid, _token, info = existing_token_is_valid(auth_path)
-    if valid:
+    verdict, _token, info, status = existing_token_is_valid(auth_path)
+    if verdict == "valid":
         user_id = (info or {}).get("user_id", "unknown user")
         return tool_text(
             f"Already connected to Archetype as {user_id}.\n"
             f"Token at {auth_path}. To re-login, delete that file and re-run /archetype:setup."
+        )
+    if verdict == "unverified":
+        return tool_text(
+            f"Could not check your saved Archetype login: "
+            f"{backend_error_message(status, info or {})} Your saved login is kept "
+            "and no new login was started; try again in a minute.",
+            is_error=True,
         )
 
     token, message = perform_device_login()
@@ -965,11 +979,11 @@ def record_run_result(run_id: str, status_str: str | None, verdict: str | None) 
 def backend_error_message(status: int, body: dict[str, Any]) -> str:
     """The user-facing line for a non-2xx backend response.
 
-    Prefers the backend's natural-language ``message``, falling back to the
-    ``error`` slug. A 401 always gets the login hint appended so the actor
-    knows the remedy.
+    Prefers the backend's natural-language ``message`` (a problem document
+    carries it too, and ``detail``), falling back to the ``error`` slug. A
+    401 always gets the login hint appended so the actor knows the remedy.
     """
-    message = body.get("message") or body.get("error") or f"backend returned {status}"
+    message = body.get("message") or body.get("detail") or body.get("error") or f"backend returned {status}"
     if status == 401:
         message = f"{message} {LOGIN_HINT}"
     return message
@@ -4171,6 +4185,13 @@ def handle_status(_arguments: dict[str, Any]) -> dict[str, Any]:
             lines.append(f"Features: {len(fbody.get('features') or [])} saved")
         else:
             lines.append("Features: unavailable")
+    elif status >= 500:
+        # 503 auth_unavailable: the backend cannot check tokens right now
+        # (an Auth0 outage). Not a verdict on this token, so no login hint.
+        who = " ".join(identity_bits) if identity_bits else "unverified"
+        lines.append(f"Account: {who} (could not verify)")
+        lines.append(f"Token:   could not verify: {backend_error_message(status, body)}")
+        lines.append(f"Backend: {BACKEND_BASE} — reachable, but it cannot check sign-in right now")
     elif status == 0:
         who = " ".join(identity_bits) if identity_bits else "unverified"
         lines.append(f"Account: {who} (could not verify)")
