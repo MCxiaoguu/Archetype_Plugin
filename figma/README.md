@@ -80,16 +80,19 @@ screen reader mode on so hotspots read as named links). Success is a required
 `frame_reached` check on the goal frame's node id: met when a step URL's
 `node-id` names that frame, whatever else the URL carries.
 
-Until the hosted runner ships, someone runs the runner from this repository:
+Until the hosted runner ships, someone runs the runner from this repository,
+signed in (through the Claude Code plugin) to the same Archetype account as the
+designer, since a study is only visible to its owner:
 
 ```sh
-python3 scripts/study_runner.py --watch --backend http://localhost:5013
+python3 scripts/study_runner.py --watch --data-dir <folder with the plugin's auth.json> \
+  --backend http://localhost:5013
 ```
 
-(`--watch` is the polling mode the runner is gaining for remote studies; today
-`--study <id>` runs one study.) While nobody is running it, the panel says
-"Waiting for a runner" rather than showing an error, and you can close Figma: the
-tests are queued on the backend.
+It polls for the account's running remote studies, claims their queued runs and
+asks for the next wave until the backend says the study is complete. While
+nobody is running it, the panel says "Waiting for a runner" rather than showing
+an error, and you can close Figma: the tests are queued on the backend.
 
 ## Privacy: what leaves the file
 
