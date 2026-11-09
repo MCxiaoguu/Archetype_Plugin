@@ -152,12 +152,19 @@ export class ApiClient {
     }
     const text = await res.text();
     let data: unknown = null;
+    let readable = false;
     if (text) {
       try {
         data = JSON.parse(text);
+        readable = true;
       } catch {
         data = null;
       }
+    }
+    if (res.ok && !readable) {
+      // Every route the panel calls answers JSON; anything else (a proxy's
+      // login page, an empty body) is not a result to act on.
+      throw new ApiError(res.status, 'bad_response', `Archetype at ${this.base} sent an answer the panel could not read (HTTP ${res.status}).`);
     }
     if (res.status === 401 && auth) {
       this.opts.onUnauthorized?.();

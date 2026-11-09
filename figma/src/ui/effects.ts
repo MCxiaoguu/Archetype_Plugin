@@ -114,6 +114,9 @@ export function createEffects(store: Store) {
     try {
       const study = await api().createStudy<StudyLike>(body);
       if (gen !== watchGen) return;
+      if (!study || typeof study.studyId !== 'string' || !study.studyId) {
+        throw new Error('Archetype did not return the study id, so the panel cannot follow the test. Try again.');
+      }
       const record: StudyRecord = {
         studyId: study.studyId,
         title: study.title || body.title,

@@ -141,6 +141,22 @@ describe('panel effects', () => {
     fx.newTest();
   });
 
+  it('shows an error when the created study comes back without an id', async () => {
+    const calls = installFetch((method, path) => {
+      if (method === 'POST' && path === '/api/studies') return [201, { title: 'Pay', status: 'draft' }];
+      return [404, {}];
+    });
+    const { store, fx } = initStore('tok');
+    store.dispatch({ type: 'pick', role: 'goal', nodeId: '2:50' });
+    store.dispatch({ type: 'field', field: 'goal', value: 'Pay' });
+    store.dispatch({ type: 'field', field: 'who', value: 'Founders' });
+    store.dispatch({ type: 'field', field: 'link', value: 'https://www.figma.com/design/AbCdEfGh1234567890XyZ/x' });
+    await fx.launch();
+    expect(store.get().study?.error).toMatch(/did not return the study/);
+    expect(calls).toEqual(['POST /api/studies']);
+    expect(sent.map((m) => m.type)).not.toContain('save-study');
+  });
+
   it('a 401 while watching signs out and clears the stored token', async () => {
     installFetch(() => [401, { error: 'Invalid token', message: 'bad' }]);
     const { store, fx } = initStore('tok');

@@ -102,6 +102,12 @@ describe('api client', () => {
     expect(e2).toMatchObject({ status: 403, code: 'unauthorized_client', message: 'Grant type device_code not allowed for the client.' });
   });
 
+  it('refuses a success answer it cannot read', async () => {
+    const fetch: FetchLike = async () => new Response('<html>Gateway login</html>', { status: 200 });
+    const api = new ApiClient({ baseUrl: 'http://x', getToken: () => 't', fetch });
+    await expect(api.getStatus('s')).rejects.toMatchObject({ status: 200, code: 'bad_response' });
+  });
+
   it('turns network failures into a plain message', async () => {
     const { fetch } = mockFetch([new TypeError('Failed to fetch')]);
     const api = new ApiClient({ baseUrl: 'http://localhost:5013', getToken: () => 't', fetch });
