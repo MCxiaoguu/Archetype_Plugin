@@ -8,11 +8,13 @@ figma.showUI(__html__, { width: 380, height: 620, themeColors: true, title: 'Arc
 
 const controller = createController(figma, __PLUGIN_VERSION__);
 
+function reportError(err: unknown) {
+  const text = err instanceof Error ? err.message : String(err);
+  figma.notify(`Archetype: ${text}`, { error: true });
+}
+
 figma.ui.onmessage = (msg: UiToMain) => {
-  controller.handle(msg).catch((err: unknown) => {
-    const text = err instanceof Error ? err.message : String(err);
-    figma.notify(`Archetype: ${text}`, { error: true });
-  });
+  controller.handle(msg).catch(reportError);
 };
 
 figma.on('selectionchange', () => controller.pushSelection());
@@ -23,7 +25,8 @@ function scheduleRefresh() {
   if (timer) clearTimeout(timer);
   timer = setTimeout(() => {
     timer = null;
-    controller.refreshDoc().catch(() => undefined);
+    // A failed read leaves the panel on the old flow, so say so.
+    controller.refreshDoc().catch(reportError);
   }, 800);
 }
 
