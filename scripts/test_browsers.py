@@ -287,6 +287,8 @@ def case_permission_hook(_tmp: Path) -> None:
     not_allowed = [
         ("mcp__plugin_archetype_archetype-browser-3__browser_click", None),
         ("mcp__plugin_archetype_archetype-browser-3__browser_click", "general-purpose"),
+        ("mcp__plugin_archetype_archetype-browser-3__browser_click", "other-plugin:feature-validator"),
+        ("mcp__plugin_archetype_core__report_result", "other-plugin:feature-validator-headless"),
         ("mcp__plugin_archetype_archetype-browser-3__browser_run_code_unsafe", actor),
         ("mcp__plugin_archetype_archetype-browser-3__browser_evaluate", actor),
         ("mcp__plugin_archetype_archetype-browser-3__browser_file_upload", actor),

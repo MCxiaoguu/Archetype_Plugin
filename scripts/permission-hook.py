@@ -26,7 +26,9 @@ import json
 import re
 import sys
 
-ACTOR_TYPE = re.compile(r"(^|:)feature-validator(-headless)?$")
+# This plugin's actors only: "archetype:<agent>" (or the bare name), never
+# another plugin's agent that happens to share the name.
+ACTOR_TYPE = re.compile(r"^(archetype:)?feature-validator(-headless)?$")
 BROWSER_TOOL = re.compile(r"^mcp__plugin_archetype_archetype-(?:browser|watch)-\d+__(browser_[a-z_]+)$")
 NOT_AUTO = {
     "browser_run_code_unsafe", "browser_evaluate", "browser_file_upload",
