@@ -245,7 +245,9 @@ def live_runner(folder: Path) -> int | None:
         status = json.loads((folder / "runner.json").read_text())
     except (OSError, ValueError):
         return None
-    pid = status.get("pid") if isinstance(status, dict) else None
+    if not isinstance(status, dict):
+        return None
+    pid = status.get("pid")
     if status.get("state") not in ("starting", "running") or not isinstance(pid, int) or pid == os.getpid():
         return None
     try:
