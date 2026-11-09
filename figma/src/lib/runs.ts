@@ -19,6 +19,16 @@ export interface PersonaRow {
   steps: number | null;
 }
 
+/**
+ * The persona outcome of a finished run, as the backend's report scores it:
+ * an aborted run, or one without a recorded outcome, is none.
+ */
+function personaOutcome(r: RunRowApi): boolean | null {
+  if (!isTerminalRun(r.status) || r.status === 'aborted') return null;
+  const completed = r.outcome?.completed;
+  return typeof completed === 'boolean' ? completed : null;
+}
+
 /** The URL of a run's newest step, or null before its first step. */
 export function rowUrl(row: RunRowApi): string | null {
   return row.lastStep?.url ?? null;
@@ -38,8 +48,8 @@ export function personaRows(runs: RunRowApi[], frames: FrameIndex): PersonaRow[]
   for (const [archetypeId, list] of groups) {
     const first = list[0] as RunRowApi;
     const finished = list.filter((r) => isTerminalRun(r.status)).length;
-    const completed = list.filter((r) => isTerminalRun(r.status) && (r.outcome?.completed ?? r.status === 'completed')).length;
-    const gaveUp = finished - completed;
+    const completed = list.filter((r) => personaOutcome(r) === true).length;
+    const gaveUp = list.filter((r) => personaOutcome(r) === false).length;
     const live = list.find((r) => r.status === 'running');
     const phase: PersonaPhase = live ? 'running' : finished === list.length ? 'done' : 'waiting';
     const focus = live ?? [...list].reverse().find((r) => isTerminalRun(r.status)) ?? first;
@@ -48,7 +58,7 @@ export function personaRows(runs: RunRowApi[], frames: FrameIndex): PersonaRow[]
     let statusText: string;
     if (phase === 'running') statusText = frame ? `On ${frame.name}` : 'Clicking through';
     else if (phase === 'waiting') statusText = finished > 0 ? `${finished} of ${list.length} tries done` : 'Waiting to start';
-    else if (list.length === 1) statusText = completed === 1 ? 'Reached the goal' : 'Gave up';
+    else if (list.length === 1) statusText = completed === 1 ? 'Reached the goal' : gaveUp === 1 ? 'Gave up' : 'Stopped before the end';
     else statusText = `Reached the goal ${completed} of ${list.length} times`;
     rows.push({
       archetypeId,

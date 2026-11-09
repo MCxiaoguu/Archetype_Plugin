@@ -79,8 +79,24 @@ describe('persona rows', () => {
   it('says what a single finished try did', () => {
     const rows = personaRows([run({ status: 'abandoned', outcome: { completed: false } })], index);
     expect(rows[0]?.statusText).toBe('Gave up');
-    const ok = personaRows([run({ status: 'completed' })], index);
+    const ok = personaRows([run({ status: 'completed', outcome: { completed: true } })], index);
     expect(ok[0]?.statusText).toBe('Reached the goal');
+  });
+
+  it('does not count a try without a persona outcome as reached or given up', () => {
+    // As the backend's report scores runs: an aborted run, or one with no
+    // recorded outcome, is not a persona outcome.
+    for (const r of [
+      run({ status: 'aborted', outcome: null }),
+      run({ status: 'aborted', outcome: { completed: false } }),
+      run({ status: 'completed', outcome: null }),
+      run({ status: 'failed' }),
+    ]) {
+      const [row] = personaRows([r], index);
+      expect(row).toMatchObject({ phase: 'done', finished: 1, completed: 0, gaveUp: 0, statusText: 'Stopped before the end' });
+    }
+    const [mixed] = personaRows([run({ runId: 'a', status: 'completed', outcome: { completed: true } }), run({ runId: 'b', status: 'aborted' })], index);
+    expect(mixed).toMatchObject({ completed: 1, gaveUp: 0, statusText: 'Reached the goal 1 of 2 times' });
   });
 
   it('counts partial progress while waiting', () => {
