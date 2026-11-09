@@ -311,7 +311,7 @@ class Runner:
         self.status_file = self.folder / "runner.json"
         self.lock = threading.Lock()
         self.queue: list[str] = []
-        self.free_slots = list(range(1, max(1, min(opts.parallel, MAX_PARALLEL)) + 1))
+        self.free_slots = list(range(1, opts.parallel + 1))
         self.children: dict[str, subprocess.Popen] = {}
         self.status: dict[str, Any] = {
             "study_id": opts.study, "state": "starting", "pid": os.getpid(),
@@ -718,6 +718,13 @@ def main(argv: list[str]) -> int:
     if not is_safe_url(opts.backend):
         parser.error(f"--backend {opts.backend} must use https (http is allowed only for localhost): "
                      "the runner and its workers send the login token to it")
+    if not 1 <= opts.parallel <= MAX_PARALLEL:
+        parser.error(f"--parallel must be 1 to {MAX_PARALLEL}: each worker drives its own plugin browser")
+    if opts.max_runs < 0:
+        parser.error("--max-runs must be 0 (no cap) or more")
+    for flag, value in (("--timeout-min", opts.timeout_min), ("--stall-min", opts.stall_min)):
+        if not value > 0:
+            parser.error(f"{flag} must be more than 0 minutes")
     if opts.watch:
         if opts.study or opts.runs:
             parser.error("--watch finds its own studies: leave out --study and --runs")

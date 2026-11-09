@@ -759,6 +759,21 @@ def case_runner_sends_the_token_only_over_https(tmp: Path) -> None:
     expect(not (data / "studies" / "s1").exists(), "nothing prepared for it")
 
 
+def case_runner_refuses_options_it_cannot_honor(tmp: Path) -> None:
+    data = tmp / "data"
+    data.mkdir()
+    (data / "auth.json").write_text(json.dumps({"access_token": "t"}))
+    base = [sys.executable, str(HERE / "study_runner.py"), "--study", "s1", "--data-dir", str(data),
+            "--backend", "http://127.0.0.1:1", "--runs", "r-1", "--dry-run"]
+    for extra, why in ((["--parallel", "8"], "--parallel"), (["--parallel", "0"], "--parallel"),
+                       (["--max-runs", "-1"], "--max-runs"), (["--stall-min", "0"], "--stall-min"),
+                       (["--timeout-min", "0"], "--timeout-min")):
+        out = subprocess.run(base + extra, capture_output=True, text=True, timeout=30)
+        expect(out.returncode == 2 and why in out.stderr, f"{extra} refused, not coerced: {out.returncode} {out.stderr[-200:]}")
+    out = subprocess.run(base + ["--parallel", "4", "--max-runs", "0"], capture_output=True, text=True, timeout=30)
+    expect(out.returncode == 0, f"the limits themselves are fine: {out.stderr[-200:]}")
+
+
 def case_runner_watch_serves_remote_studies(tmp: Path) -> None:
     stub = StubStudy(["q-a", "q-b"])
     stub.status["done-1"] = "completed"
@@ -811,6 +826,7 @@ CASES = [
     ("runner --watch stops on Ctrl-C after a study and serves it again later", case_runner_watch_stops_on_ctrl_c_and_serves_again),
     ("runner --watch on SIGTERM stops its live worker and aborts that run", case_runner_watch_sigterm_stops_its_live_worker),
     ("runner leaves a study to the live runner already serving it here", case_runner_leaves_a_study_to_its_live_runner),
+    ("runner refuses options it cannot honor instead of coercing them", case_runner_refuses_options_it_cannot_honor),
 ]
 
 
