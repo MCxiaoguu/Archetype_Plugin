@@ -184,7 +184,13 @@ class Proxy:
                 log(engine["error"])
                 return False
             self.start_error = None
-            cmd = child_command(self.name, self.headed, engine)
+            try:
+                cmd = child_command(self.name, self.headed, engine)
+            except OSError as exc:
+                # No folder for the config and the video: no recorded session.
+                self.start_error = f"could not prepare the browser's video folder and config: {exc}"
+                log(self.start_error)
+                return False
             log(f"starting {' '.join(cmd[:4])} ... for {self.name} on {engine['label']}")
             try:
                 child = subprocess.Popen(

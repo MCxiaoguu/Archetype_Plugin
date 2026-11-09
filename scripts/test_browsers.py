@@ -246,6 +246,20 @@ def case_proxy_never_leaves_a_hung_browser_behind(tmp: Path) -> None:
             pass
 
 
+def case_proxy_answers_when_the_video_folder_cannot_be_made(tmp: Path) -> None:
+    blocker = tmp / "not-a-folder"
+    blocker.write_text("")
+    proxy = Proxy(tmp, env_extra={"CLAUDE_PLUGIN_DATA": str(blocker)})
+    try:
+        handshake(proxy)
+        answer = proxy.rpc("tools/call", {"name": "browser_navigate", "arguments": {}})
+        message = answer.get("error", {}).get("message", "")
+        expect("archetype-browser-2" in message and "video" in message, f"the call is answered with why: {answer}")
+        expect(proxy.child_events() == [], "no browser started without its video folder")
+    finally:
+        proxy.close()
+
+
 def case_watch_server_is_headed(tmp: Path) -> None:
     proxy = Proxy(tmp, name="archetype-watch-1", headed=True)
     try:
@@ -864,6 +878,7 @@ CASES = [
     ("proxy answers a call the crashed server never will, then restarts", case_proxy_survives_a_crash),
     ("watch servers are headed and still isolated", case_watch_server_is_headed),
     ("proxy kills a browser server that hangs on close", case_proxy_never_leaves_a_hung_browser_behind),
+    ("proxy answers a call when the video folder cannot be made", case_proxy_answers_when_the_video_folder_cannot_be_made),
     (".mcp.json declares the six servers on the proxy", case_mcp_json_declares_six_servers),
     ("permission hook allows only actor browser and run tools", case_permission_hook),
     ("runner shadow plugin, scrubbed env and worker command", case_runner_shadow_and_command),
