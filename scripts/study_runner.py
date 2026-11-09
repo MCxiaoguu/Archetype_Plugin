@@ -53,6 +53,7 @@ Usage: study_runner.py --watch --data-dir DIR --backend URL [--once]
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import os
 import re
@@ -63,6 +64,7 @@ import sys
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -78,6 +80,64 @@ _ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 def log(msg: str) -> None:
     print(f"[study-runner] {time.strftime('%H:%M:%S')} {msg}", flush=True)
+
+
+def is_safe_url(url: str) -> bool:
+    """True for https URLs, or plain http only on the loopback interface:
+    the rule of core-server.py's _is_safe_url, so the runner never sends the
+    bearer token in cleartext either."""
+    try:
+        parts = urllib.parse.urlsplit(url)
+    except ValueError:
+        return False
+    if parts.scheme == "https" and parts.hostname:
+        return True
+    return parts.scheme == "http" and parts.hostname in ("127.0.0.1", "localhost", "::1")
+
+
+INSECURE_BODY = {
+    "error": "insecure_backend",
+    "message": "the backend URL must use https (http is allowed only for localhost).",
+}
+
+
+def read_token(data_dir: Path) -> str | None:
+    try:
+        return json.loads((Path(data_dir) / "auth.json").read_text()).get("access_token")
+    except (OSError, ValueError):
+        return None
+
+
+def backend_call(backend: str, data_dir: Path, method: str, path: str,
+                 body: dict[str, Any] | None = None, timeout: float = 60) -> tuple[int, dict[str, Any]]:
+    """One JSON call to the backend with the user's token. (0, error body)
+    when the call never got an answer, or when the token would go to a
+    backend that is not https."""
+    token = read_token(data_dir)
+    if token and not is_safe_url(backend):
+        log(f"refusing to send credentials to non-https backend {backend}")
+        return 0, dict(INSECURE_BODY)
+    if body is None and method == "POST":
+        body = {}
+    req = urllib.request.Request(
+        f"{backend.rstrip('/')}{path}", method=method,
+        data=json.dumps(body).encode() if body is not None else None,
+        headers={"Content-Type": "application/json", "Accept": "application/json",
+                 "User-Agent": "archetype-claude-plugin/study-runner",
+                 **({"Authorization": f"Bearer {token}"} if token else {})},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.status, json.loads(resp.read().decode() or "{}")
+    except urllib.error.HTTPError as exc:
+        try:
+            return exc.code, json.loads(exc.read().decode() or "{}")
+        except ValueError:
+            return exc.code, {}
+    except ValueError as exc:
+        return 0, {"error": "bad_response", "message": f"the backend answered with no JSON: {exc}"}
+    except (OSError, http.client.HTTPException) as exc:
+        return 0, {"error": "network_error", "message": str(exc)}
 
 
 def clean_child_env(base: dict[str, str], extra: dict[str, str]) -> dict[str, str]:
@@ -208,31 +268,12 @@ class Runner:
 
     # ---- backend ----
 
-    def get(self, path: str) -> tuple[int, dict[str, Any]]:
-        return self.request("GET", path, None)
-
-    def request(self, method: str, path: str, body: dict[str, Any] | None) -> tuple[int, dict[str, Any]]:
-        token = self.token()
-        req = urllib.request.Request(
-            f"{self.opts.backend.rstrip('/')}{path}", method=method,
-            data=json.dumps(body).encode() if body is not None else None,
-            headers={"Content-Type": "application/json", "Accept": "application/json",
-                     "User-Agent": "archetype-claude-plugin/study-runner",
-                     **({"Authorization": f"Bearer {token}"} if token else {})},
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=60) as resp:
-                return resp.status, json.loads(resp.read().decode() or "{}")
-        except urllib.error.HTTPError as exc:
-            try:
-                return exc.code, json.loads(exc.read().decode() or "{}")
-            except ValueError:
-                return exc.code, {}
-        except Exception as exc:
-            return 0, {"error": "network_error", "message": str(exc)}
+    def request(self, method: str, path: str, body: dict[str, Any] | None = None,
+                timeout: float = 60) -> tuple[int, dict[str, Any]]:
+        return backend_call(self.opts.backend, self.data_dir, method, path, body, timeout)
 
     def run_row(self, run_id: str) -> dict[str, Any] | None:
-        status, body = self.get(f"/api/studies/{self.opts.study}/runs")
+        status, body = self.request("GET", f"/api/studies/{self.opts.study}/runs")
         if status != 200:
             return None
         return next((r for r in body.get("runs") or [] if isinstance(r, dict) and r.get("runId") == run_id), None)
@@ -252,35 +293,10 @@ class Runner:
         self.worker(run_id, aborted=reason if ok else None)
         return ok
 
-    def token(self) -> str | None:
-        try:
-            return json.loads((self.data_dir / "auth.json").read_text()).get("access_token")
-        except (OSError, ValueError):
-            return None
-
-    def post(self, path: str) -> tuple[int, dict[str, Any]]:
-        token = self.token()
-        req = urllib.request.Request(
-            f"{self.opts.backend.rstrip('/')}{path}", data=b"{}", method="POST",
-            headers={"Content-Type": "application/json", "Accept": "application/json",
-                     "User-Agent": "archetype-claude-plugin/study-runner",
-                     **({"Authorization": f"Bearer {token}"} if token else {})},
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=120) as resp:
-                return resp.status, json.loads(resp.read().decode() or "{}")
-        except urllib.error.HTTPError as exc:
-            try:
-                return exc.code, json.loads(exc.read().decode() or "{}")
-            except ValueError:
-                return exc.code, {}
-        except Exception as exc:
-            return 0, {"error": "network_error", "message": str(exc)}
-
     def next_wave(self) -> list[str] | None:
         """Run ids of the next wave, or None when the study has no more."""
         for _ in range(NEXT_WAVE_TRIES):
-            status, body = self.post(f"/api/studies/{self.opts.study}/runs/next")
+            status, body = self.request("POST", f"/api/studies/{self.opts.study}/runs/next", timeout=120)
             if status == 409 or status == 0:
                 log(f"next wave not ready ({body.get('message') or status}); waiting {NEXT_WAVE_WAIT:g} s")
                 time.sleep(NEXT_WAVE_WAIT)
@@ -465,33 +481,10 @@ class Runner:
         return 0
 
 
-def api(opts: argparse.Namespace, method: str, path: str) -> tuple[int, dict[str, Any]]:
-    """One backend call with the user's token, for the watcher (no study yet)."""
-    try:
-        token = json.loads((Path(opts.data_dir) / "auth.json").read_text()).get("access_token")
-    except (OSError, ValueError):
-        token = None
-    req = urllib.request.Request(
-        f"{opts.backend.rstrip('/')}{path}", method=method, data=b"{}" if method == "POST" else None,
-        headers={"Content-Type": "application/json", "Accept": "application/json",
-                 "User-Agent": "archetype-claude-plugin/study-runner",
-                 **({"Authorization": f"Bearer {token}"} if token else {})},
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            return resp.status, json.loads(resp.read().decode() or "{}")
-    except urllib.error.HTTPError as exc:
-        try:
-            return exc.code, json.loads(exc.read().decode() or "{}")
-        except ValueError:
-            return exc.code, {}
-    except Exception as exc:
-        return 0, {"error": "network_error", "message": str(exc)}
-
-
 def queued_work(opts: argparse.Namespace) -> list[tuple[str, list[str]]]:
     """Remote studies with queued runs, oldest first: [(study_id, [run ids])]."""
-    status, body = api(opts, "GET", "/api/studies?execution=remote&status=running&limit=50")
+    status, body = backend_call(opts.backend, Path(opts.data_dir), "GET",
+                                "/api/studies?execution=remote&status=running&limit=50")
     if status != 200:
         log(f"listing remote studies failed: {status} {body.get('message') or body.get('error')}")
         return []
@@ -500,7 +493,7 @@ def queued_work(opts: argparse.Namespace) -> list[tuple[str, list[str]]]:
         study_id = study.get("studyId") if isinstance(study, dict) else None
         if not isinstance(study_id, str) or not _ID.match(study_id):
             continue
-        code, runs = api(opts, "GET", f"/api/studies/{study_id}/runs")
+        code, runs = backend_call(opts.backend, Path(opts.data_dir), "GET", f"/api/studies/{study_id}/runs")
         if code != 200:
             continue
         queued = [r["runId"] for r in runs.get("runs") or []
@@ -558,6 +551,9 @@ def main(argv: list[str]) -> int:
     opts = parser.parse_args(argv)
     if not opts.data_dir:
         parser.error("--data-dir (or CLAUDE_PLUGIN_DATA) is required: it holds auth.json")
+    if not is_safe_url(opts.backend):
+        parser.error(f"--backend {opts.backend} must use https (http is allowed only for localhost): "
+                     "the runner and its workers send the login token to it")
     if opts.watch:
         if opts.study or opts.runs:
             parser.error("--watch finds its own studies: leave out --study and --runs")

@@ -521,6 +521,53 @@ def case_runner_budget_runs_the_highest_priority_wave_two_runs(tmp: Path) -> Non
         stub.close()
 
 
+def case_runner_sends_the_token_only_over_https(tmp: Path) -> None:
+    runner = load_runner()
+    spec = importlib.util.spec_from_file_location("core_server", HERE / "core-server.py")
+    core = importlib.util.module_from_spec(spec)
+    assert spec.loader
+    spec.loader.exec_module(core)
+    for url in ("https://api.syntheticarchetype.com", "http://127.0.0.1:5001", "http://localhost:5001",
+                "http://[::1]:5001", "http://api.example.com", "http://10.0.0.5:5001", "https://",
+                "file:///etc/passwd", "javascript:alert(1)", "ftp://api.example.com", ""):
+        expect(runner.is_safe_url(url) == core._is_safe_url(url), f"same rule as the core server for {url!r}")
+    data = tmp / "data"
+    data.mkdir()
+    (data / "auth.json").write_text(json.dumps({"access_token": "secret-token"}))
+    sent: list = []
+
+    class Answer:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self):
+            return b'{"ok": true}'
+
+    def fake_urlopen(req, timeout=None):
+        sent.append(req)
+        return Answer()
+
+    runner.urllib.request.urlopen = fake_urlopen
+    status, body = runner.backend_call("http://api.example.com", data, "GET", "/api/studies")
+    expect(status == 0 and body.get("error") == "insecure_backend" and not sent,
+           f"no request to a cleartext remote backend: {status} {body} {len(sent)}")
+    for url in ("https://api.example.com", "http://127.0.0.1:5001"):
+        status, body = runner.backend_call(url, data, "POST", "/api/studies/s1/runs/next")
+        expect(status == 200 and body == {"ok": True}, f"{url}: {status} {body}")
+        expect(sent[-1].get_header("Authorization") == "Bearer secret-token", f"{url} gets the token")
+        expect(sent[-1].data == b"{}" and sent[-1].get_method() == "POST", "a POST sends an empty object")
+    out = subprocess.run([sys.executable, str(HERE / "study_runner.py"), "--study", "s1", "--data-dir", str(data),
+                          "--backend", "http://api.example.com", "--runs", "r-1", "--dry-run"],
+                         capture_output=True, text=True, timeout=30)
+    expect(out.returncode == 2 and "https" in out.stderr, f"refuses a cleartext backend up front: {out.stderr[-300:]}")
+    expect(not (data / "studies" / "s1").exists(), "nothing prepared for it")
+
+
 def case_runner_watch_serves_remote_studies(tmp: Path) -> None:
     stub = StubStudy(["q-a", "q-b"])
     stub.status["done-1"] = "completed"
@@ -567,6 +614,7 @@ CASES = [
     ("runner aborts runs whose worker exited or stalled, with the reason", case_runner_aborts_orphans),
     ("runner budget runs the highest priority wave 2 runs, the rest not run", case_runner_budget_runs_the_highest_priority_wave_two_runs),
     ("runner --watch serves every queued run of remote studies", case_runner_watch_serves_remote_studies),
+    ("runner sends the token only to an https or loopback backend", case_runner_sends_the_token_only_over_https),
 ]
 
 
