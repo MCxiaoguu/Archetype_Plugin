@@ -2636,6 +2636,11 @@ def case_58_report_abandoned_with_actions_and_video(srv: ServerProc, data_dir: P
     bad = call_tool(srv, "report_result", {"run_id": "r1", "session_id": "s", "status": "gave_up",
                                            "steps": [], "feedback": {}})
     expect(bad.get("isError") is True and "status must be one of" in result_text(bad), "unknown status refused locally")
+    # No local state for the run (its files are gone): nothing says the
+    # backend is old, so an abandoned run is not quietly recorded as failed.
+    call_tool(srv, "report_result", {"run_id": "queued0006", "session_id": "plugin-v2-session",
+                                      "status": "abandoned", "steps": [], "feedback": feedback})
+    expect(STATE.last_for("/results")["body"]["status"] == "abandoned", "abandoned kept without local state")
 
 
 def case_59_step_answer_stays_short(srv: ServerProc, data_dir: Path) -> None:

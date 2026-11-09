@@ -2333,7 +2333,9 @@ def handle_report_result(arguments: dict[str, Any]) -> dict[str, Any]:
 
     with _run_lock(run_id):
         state = load_run_state(run_id)
-        version = _int_or(state.get("protocol_version"), 1) if state else 1
+        # Without local state nothing says the backend is old (log_step
+        # assumes protocol 2 too): never rewrite abandoned to failed on a guess.
+        version = _int_or(state.get("protocol_version"), 1) if state else 2
         if version >= 2:
             flushed = flush_step_buffer(run_id, state, RESULT_TIMEOUT * 0.5)
             if flushed["sent"]:
