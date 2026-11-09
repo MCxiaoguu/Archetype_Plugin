@@ -466,6 +466,8 @@ class Runner:
                       else "worker exited without reporting")
             if self.abort(run_id, reason, row, ("running",)):
                 self.problem(f"run {run_id}: aborted ({reason})")
+            elif row.get("status") == "queued":
+                self.problem(f"run {run_id}: its worker claimed it, yet the backend shows it queued")
         elif row.get("status") == "queued":
             # Never claimed by anyone: leave it queued for the next worker
             # (a later dispatch, or the next --watch pass).

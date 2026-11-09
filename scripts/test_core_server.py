@@ -2841,6 +2841,13 @@ time.sleep(0.3)
 print(json.dumps({"type": "system", "argv": sys.argv[1:],
                   "nested": [k for k in os.environ if k == "CLAUDECODE" or k.startswith("CLAUDE_CODE_")],
                   "backend": os.environ.get("ARCHETYPE_BACKEND_URL")}))
+# The worker's claim as the runner reads it from the stream: only a run its
+# own worker claimed is ever aborted by the runner.
+run_id = sys.argv[sys.argv.index("-p") + 1].split("--run ")[1].split()[0]
+print(json.dumps({"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "toolu_1",
+      "name": "mcp__plugin_archetype_core__start_run", "input": {"run_id": run_id}}]}}))
+print(json.dumps({"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "toolu_1",
+      "content": [{"type": "text", "text": "runId: " + run_id + "\\nsessionId: s-" + run_id}]}]}}))
 print(json.dumps({"type": "result", "subtype": "success"}))
 """
 
