@@ -121,6 +121,18 @@ describe('api client', () => {
     await expect(api.getStatus('s')).rejects.toMatchObject({ code: 'timeout' });
   });
 
+  it('times out a body that stops arriving after the headers', async () => {
+    // A real fetch aborts the body stream with the signal; this fake does the same.
+    const fetch: FetchLike = async (_url, init) =>
+      ({
+        ok: true,
+        status: 200,
+        text: () => new Promise<string>((_res, rej) => init?.signal?.addEventListener('abort', () => rej(new DOMException('aborted', 'AbortError')))),
+      }) as unknown as Response;
+    const api = new ApiClient({ baseUrl: 'http://x', getToken: () => 't', fetch, timeoutMs: 10 });
+    await expect(api.getStatus('s')).rejects.toMatchObject({ code: 'timeout' });
+  });
+
   it('normalises the base URL', () => {
     expect(normaliseBase('https://api.x.com/')).toBe('https://api.x.com');
     expect(normaliseBase(' https://api.x.com/api ')).toBe('https://api.x.com');

@@ -131,6 +131,7 @@ export class ApiClient {
     const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
     const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
     let res: Response;
+    let text: string;
     try {
       res = await this.doFetch(`${this.base}${path}`, {
         method,
@@ -138,6 +139,8 @@ export class ApiClient {
         body: body === undefined ? undefined : JSON.stringify(body),
         signal: controller?.signal,
       });
+      // The timeout covers the body too: headers can arrive and the body stall.
+      text = await res.text();
     } catch (err) {
       const aborted = controller?.signal.aborted;
       throw new ApiError(
@@ -150,7 +153,6 @@ export class ApiClient {
     } finally {
       if (timer) clearTimeout(timer);
     }
-    const text = await res.text();
     let data: unknown = null;
     let readable = false;
     if (text) {
