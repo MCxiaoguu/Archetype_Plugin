@@ -236,6 +236,25 @@ def log_steps(stream: Path) -> int:
 START_RUN = "mcp__plugin_archetype_core__start_run"
 
 
+def live_runner(folder: Path) -> int | None:
+    """The pid of another runner process still serving this study folder
+    (its runner.json says starting or running and the pid is alive), as
+    core-server's dispatch_study checks. Two runners in one folder would
+    overwrite each other's runner.json and shadow plugin."""
+    try:
+        status = json.loads((folder / "runner.json").read_text())
+    except (OSError, ValueError):
+        return None
+    pid = status.get("pid") if isinstance(status, dict) else None
+    if status.get("state") not in ("starting", "running") or not isinstance(pid, int) or pid == os.getpid():
+        return None
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return None
+    return pid
+
+
 def _text(content: Any) -> str:
     """The text of a tool_result's content (a string or a list of blocks)."""
     if isinstance(content, str):
@@ -655,6 +674,10 @@ def watch(opts: argparse.Namespace) -> int:
                         log(f"study {study_id}: skipped while {studies / study_id / 'stop'} exists")
                         skipped.add(study_id)
                     continue
+                other = live_runner(studies / study_id)
+                if other:
+                    log(f"study {study_id}: runner pid {other} on this machine is serving it; left to it")
+                    continue
                 log(f"study {study_id}: {len(runs)} queued run(s)")
                 study_opts = argparse.Namespace(**{**vars(opts), "study": study_id, "runs": ",".join(runs)})
                 pass_failed |= Runner(study_opts, stop).run() != 0
@@ -701,6 +724,11 @@ def main(argv: list[str]) -> int:
         return watch(opts)
     if not opts.study or not _ID.match(opts.study):
         parser.error("--study must be a study id (or use --watch)")
+    other = live_runner(Path(opts.data_dir).resolve() / "studies" / opts.study)
+    if other:
+        log(f"runner pid {other} is already serving study {opts.study}; follow it with study_status "
+            "(or create the stop file in its study folder) instead of starting another")
+        return 2
     return Runner(opts).run()
 
 

@@ -637,6 +637,34 @@ def case_runner_watch_sigterm_stops_its_live_worker(tmp: Path) -> None:
         stub.close()
 
 
+def case_runner_leaves_a_study_to_its_live_runner(tmp: Path) -> None:
+    stub = StubStudy(["q-a"])
+    try:
+        worker = tmp / "claude"
+        worker.write_text(RUNNER_WORKER)
+        worker.chmod(0o755)
+        (tmp / "plan.json").write_text("{}")
+        data = tmp / "data"
+        (data / "studies" / "s1").mkdir(parents=True)
+        (data / "auth.json").write_text(json.dumps({"access_token": "t"}))
+        # A dispatch_study runner (this test process stands in for it) is serving s1 on this machine.
+        live = {"study_id": "s1", "state": "running", "pid": os.getpid(), "workers": {"q-a": {"state": "running"}}}
+        (data / "studies" / "s1" / "runner.json").write_text(json.dumps(live))
+        env = dict(os.environ, RUNNER_PLAN=str(tmp / "plan.json"), ARCHETYPE_RUNNER_WATCH_S="0.2")
+        common = ["--data-dir", str(data), "--backend", stub.url, "--claude", str(worker)]
+        out = subprocess.run([sys.executable, str(HERE / "study_runner.py"), "--watch", "--once", *common],
+                             env=env, capture_output=True, text=True, timeout=60)
+        expect(out.returncode == 0 and stub.status["q-a"] == "queued", f"watch leaves it alone: {stub.status} {out.stdout[-400:]}")
+        expect(json.loads((data / "studies" / "s1" / "runner.json").read_text()) == live, "its runner.json untouched")
+        expect(not (data / "studies" / "s1" / "plugin").exists(), "its shadow plugin untouched")
+        out = subprocess.run([sys.executable, str(HERE / "study_runner.py"), "--study", "s1", "--runs", "q-a", *common],
+                             env=env, capture_output=True, text=True, timeout=60)
+        expect(out.returncode == 2 and str(os.getpid()) in out.stdout + out.stderr and stub.status["q-a"] == "queued",
+               f"a second runner refuses: {out.returncode} {out.stdout[-300:]} {out.stderr[-300:]}")
+    finally:
+        stub.close()
+
+
 def case_runner_sends_the_token_only_over_https(tmp: Path) -> None:
     runner = load_runner()
     spec = importlib.util.spec_from_file_location("core_server", HERE / "core-server.py")
@@ -734,6 +762,7 @@ CASES = [
     ("runner sends the token only to an https or loopback backend", case_runner_sends_the_token_only_over_https),
     ("runner --watch stops on Ctrl-C after a study and serves it again later", case_runner_watch_stops_on_ctrl_c_and_serves_again),
     ("runner --watch on SIGTERM stops its live worker and aborts that run", case_runner_watch_sigterm_stops_its_live_worker),
+    ("runner leaves a study to the live runner already serving it here", case_runner_leaves_a_study_to_its_live_runner),
 ]
 
 
