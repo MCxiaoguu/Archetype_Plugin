@@ -47,7 +47,9 @@ runs every queued run of each study (oldest first) with the same workers,
 waves and orphan handling, then polls again. --once makes one pass and
 exits (for cron or CI; 1 when the pass had a problem). A file named `stop`
 in <data>/studies stops it between studies; a study whose own folder has
-a `stop` file is skipped; SIGTERM or SIGINT stops it at once.
+a `stop` file is skipped; SIGTERM or SIGINT stops it at once. A run whose
+workers exit before claiming it three times stays queued and is not tried
+again by that watcher.
 
 Usage: study_runner.py --watch --data-dir DIR --backend URL [--once]
                        [--poll-sec 20] [worker options below]
@@ -82,6 +84,9 @@ MAX_PARALLEL = 4  # one plugin browser server per worker: archetype-browser-1 to
 NEXT_WAVE_WAIT = float(os.environ.get("ARCHETYPE_RUNNER_WAVE_WAIT", "30"))
 NEXT_WAVE_TRIES = 20
 WATCH_EVERY = float(os.environ.get("ARCHETYPE_RUNNER_WATCH_S", "30"))
+# --watch: workers that exit before claiming a run, per run, before the
+# watcher stops retrying it (it stays queued; a restart retries it).
+WATCH_TRIES = 3
 _ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 
@@ -668,6 +673,7 @@ def watch(opts: argparse.Namespace) -> int:
 
     previous = {sig: signal.signal(sig, on_signal) for sig in (signal.SIGTERM, signal.SIGINT)}
     served, failed, skipped = 0, False, set()
+    tries: dict[str, int] = {}
     log(f"watching {opts.backend} for remote studies (poll every {poll:g} s)")
     if stop_file.exists():
         log(f"{stop_file} exists: not serving (delete it to start)")
@@ -687,10 +693,20 @@ def watch(opts: argparse.Namespace) -> int:
                 if other:
                     log(f"study {study_id}: runner pid {other} on this machine is serving it; left to it")
                     continue
+                runs = [r for r in runs if tries.get(r, 0) < WATCH_TRIES]
+                if not runs:
+                    continue
                 log(f"study {study_id}: {len(runs)} queued run(s)")
                 study_opts = argparse.Namespace(**{**vars(opts), "study": study_id, "runs": ",".join(runs)})
-                pass_failed |= Runner(study_opts, stop).run() != 0
+                runner = Runner(study_opts, stop)
+                pass_failed |= runner.run() != 0
                 served += 1
+                for rid in runner.left_queued:
+                    tries[rid] = tries.get(rid, 0) + 1
+                    if tries[rid] == WATCH_TRIES:
+                        log(f"run {rid}: {WATCH_TRIES} workers exited before claiming it; not retried by this "
+                            "watcher (it stays queued: restart the watcher or dispatch it to try again)")
+                        failed = True
             failed |= pass_failed
             if opts.once:
                 break

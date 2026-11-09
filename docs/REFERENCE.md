@@ -353,8 +353,10 @@ machine is serving (its `runner.json`) is left to it. `--once` makes one
 pass for cron or CI and exits 1 when that pass had a problem; a `stop`
 file in `${CLAUDE_PLUGIN_DATA}/studies/` stops it between studies, a
 study whose own folder has a `stop` file is skipped, and SIGTERM or
-Ctrl-C stops it at once (its workers too). It uses the login in
-`auth.json`, so it serves that account's studies.
+Ctrl-C stops it at once (its workers too). A run whose workers exit
+before claiming it three times stays queued and is not tried again until
+the watcher restarts. It uses the login in `auth.json`, so it serves that
+account's studies.
 
 `docs/examples/study-ci.yml` is a documented GitHub Actions job (not
 enabled here) that runs a study against a preview URL and comments the

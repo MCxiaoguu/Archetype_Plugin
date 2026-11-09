@@ -689,6 +689,26 @@ def case_runner_watch_sigterm_stops_its_live_worker(tmp: Path) -> None:
         stub.close()
 
 
+def case_runner_watch_gives_up_on_a_run_no_worker_can_claim(tmp: Path) -> None:
+    import signal as sig
+    stub = StubStudy(["q-x"])
+    proc, data = start_watcher(tmp, stub, {"q-x": "exit"})
+    log = tmp / "watch.log"
+    try:
+        starts = lambda: log.read_text().count("run q-x on archetype-browser")
+        wait_for(lambda: "not retried" in log.read_text(), 60, "the watcher to give up on q-x")
+        seen = len(stub.listings)
+        wait_for(lambda: len(stub.listings) >= seen + 5, 30, "more polls")
+        expect(starts() == 3, f"three workers tried q-x, then no more: {starts()}")
+        expect(stub.status["q-x"] == "queued" and stub.aborts == {}, f"left queued, not aborted: {stub.status}")
+        proc.send_signal(sig.SIGINT)
+        expect(proc.wait(timeout=15) == 0, "clean stop")
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+        stub.close()
+
+
 def case_runner_leaves_a_study_to_its_live_runner(tmp: Path) -> None:
     stub = StubStudy(["q-a"])
     try:
@@ -859,6 +879,7 @@ CASES = [
     ("runner --watch stops on Ctrl-C after a study and serves it again later", case_runner_watch_stops_on_ctrl_c_and_serves_again),
     ("runner --watch on SIGTERM stops its live worker and aborts that run", case_runner_watch_sigterm_stops_its_live_worker),
     ("runner leaves a study to the live runner already serving it here", case_runner_leaves_a_study_to_its_live_runner),
+    ("runner --watch stops retrying a run no worker can claim", case_runner_watch_gives_up_on_a_run_no_worker_can_claim),
     ("runner refuses options it cannot honor instead of coercing them", case_runner_refuses_options_it_cannot_honor),
     ("runner stops waiting for the next wave on SIGTERM", case_runner_stops_waiting_for_a_wave_on_sigterm),
 ]
