@@ -24,23 +24,30 @@ harness): workers share auth.json.
 When the queue is empty the runner asks the backend for the next wave
 (POST /api/studies/<id>/runs/next) and runs it, until the backend answers
 done. A file named `stop` in the study folder stops new workers from
-starting. Stdlib only.
+starting; SIGTERM or SIGINT (Ctrl-C) stops the running workers too and
+leaves no file behind. Stdlib only.
 
-Orphans never hold up a study: when a worker exits (or times out) while
-its run is still queued or running on the backend, and when a worker has
-logged no step for --stall-min minutes after claiming, the runner stops
-it and reports the run as aborted with the reason (the report lists it as
-excluded, the next wave proceeds). --max-runs caps how many workers this
-runner starts: a next wave larger than what is left runs its highest
-priority runs (archetypes whose outcome disagreed with the baseline
-first) and the rest are aborted with a budget reason.
+Orphans never hold up a study: when a worker exits (or times out) after
+claiming its run while the run is still running on the backend, and when a
+worker has logged no step for --stall-min minutes after claiming, the
+runner stops it and reports the run as aborted with the reason (the report
+lists it as excluded, the next wave proceeds). A run is aborted only when
+this runner's own worker claimed it (its start_run answer in the stream):
+a run another actor claimed is left alone, and a run no one claimed stays
+queued for the next worker. --max-runs caps how many workers this runner
+starts: a next wave larger than what is left runs its highest priority
+runs (archetypes whose outcome disagreed with the baseline first) and the
+rest, while still queued, are aborted with a budget reason. The exit code
+is 1 when anything went wrong (a worker failed, timed out or stalled, a
+run was aborted or left queued, the next wave never came), else 0.
 
 Watch mode (--watch) serves studies other clients started, such as the
 Figma plugin: it polls GET /api/studies?execution=remote&status=running,
 runs every queued run of each study (oldest first) with the same workers,
 waves and orphan handling, then polls again. --once makes one pass and
-exits (for cron or CI). A file named `stop` in <data>/studies stops it
-between studies.
+exits (for cron or CI; 1 when the pass had a problem). A file named `stop`
+in <data>/studies stops it between studies; a study whose own folder has
+a `stop` file is skipped; SIGTERM or SIGINT stops it at once.
 
 Usage: study_runner.py --watch --data-dir DIR --backend URL [--once]
                        [--poll-sec 20] [worker options below]
@@ -274,8 +281,11 @@ def claim_outcome(stream: Path, run_id: str) -> str:
 
 
 class Runner:
-    def __init__(self, opts: argparse.Namespace) -> None:
+    def __init__(self, opts: argparse.Namespace, stop: threading.Event | None = None) -> None:
         self.opts = opts
+        # Set by SIGTERM or SIGINT; the watcher shares it, so a signal during
+        # a study pass stops the watcher too.
+        self.stop_event = stop or threading.Event()
         self.data_dir = Path(opts.data_dir).resolve()
         self.folder = self.data_dir / "studies" / opts.study
         self.folder.mkdir(parents=True, exist_ok=True)
@@ -296,6 +306,9 @@ class Runner:
         # Runs whose worker exited before claiming: still queued, so the
         # current wave cannot finish in this pass.
         self.left_queued: set[str] = set()
+
+    def stop_requested(self) -> bool:
+        return self.stop_event.is_set() or (self.folder / "stop").exists()
 
     def problem(self, msg: str) -> None:
         log(msg)
@@ -396,6 +409,8 @@ class Runner:
                                          stdin=subprocess.DEVNULL, start_new_session=True)
                 with self.lock:
                     self.children[run_id] = child
+                if self.stop_event.is_set():
+                    self.kill(child)  # the signal came while this worker was starting
                 code = self.watch(run_id, child, run_dir / "stream.jsonl")
                 timed_out = code == "timeout"
                 if timed_out:
@@ -423,6 +438,7 @@ class Runner:
             # with why.
             reason = (f"claimed but no step for {self.opts.stall_min:g} minutes" if stalled
                       else f"worker timed out after {self.opts.timeout_min:g} minutes" if timed_out
+                      else "the runner was stopped before the worker reported" if self.stop_event.is_set()
                       else "worker exited without reporting")
             if self.abort(run_id, reason, row, ("running",)):
                 self.problem(f"run {run_id}: aborted ({reason})")
@@ -483,7 +499,7 @@ class Runner:
         threads: list[threading.Thread] = []
         while self.queue or threads:
             threads = [t for t in threads if t.is_alive()]
-            stop = (self.folder / "stop").exists()
+            stop = self.stop_requested()
             while self.queue and self.free_slots and not stop:
                 run_id = self.queue.pop(0)
                 if self.opts.max_runs and self.started >= self.opts.max_runs:
@@ -508,7 +524,7 @@ class Runner:
                 thread.start()
                 threads.append(thread)
             if stop and self.queue:
-                log(f"stop file found: {len(self.queue)} queued run(s) not started")
+                log(f"stopping: {len(self.queue)} queued run(s) not started")
                 for rid in self.queue:
                     self.worker(rid, state="not_started")
                 self.queue.clear()
@@ -531,34 +547,27 @@ class Runner:
             self.status["state"] = "dry_run"
             self.save()
             return 0
+        if (self.folder / "stop").exists():
+            log(f"{self.folder / 'stop'} exists: no worker will start (delete it to run the study)")
         self.status["state"] = "running"
         self.save()
 
         def on_signal(signum: int, _frame: Any) -> None:
+            # In memory, never a stop file: a file would outlive this process
+            # and keep every later runner from serving the study.
             log(f"signal {signum}: stopping workers")
-            (self.folder / "stop").write_text("signal\n")
+            self.stop_event.set()
             with self.lock:
                 children = list(self.children.values())
             for child in children:
                 self.kill(child)
 
-        signal.signal(signal.SIGTERM, on_signal)
-        signal.signal(signal.SIGINT, on_signal)
-        self.queue = list(runs)
-        while True:
-            self.drain()
-            if self.opts.no_next_wave or (self.folder / "stop").exists():
-                break
-            if self.left_queued:
-                self.problem(f"{len(self.left_queued)} run(s) of this wave were never claimed and are still "
-                             "queued, so the next wave cannot start: dispatch the study again to run them")
-                break
-            more = self.next_wave()
-            if not more:
-                break
-            for rid in more:
-                self.worker(rid, state="queued")
-            self.queue = list(more)
+        previous = {sig: signal.signal(sig, on_signal) for sig in (signal.SIGTERM, signal.SIGINT)}
+        try:
+            self.serve(runs)
+        finally:
+            for sig, handler in previous.items():
+                signal.signal(sig, handler)
         workers = self.status["workers"].values()
         self.status["state"] = "finished"
         self.status["finished_at"] = time.time()
@@ -572,54 +581,94 @@ class Runner:
             log(f"problem: {msg}")
         return 1 if self.problems else 0
 
+    def serve(self, runs: list[str]) -> None:
+        """Run the current wave, then each next wave, until done or stopped."""
+        self.queue = list(runs)
+        while True:
+            self.drain()
+            if self.opts.no_next_wave or self.stop_requested():
+                break
+            if self.left_queued:
+                self.problem(f"{len(self.left_queued)} run(s) of this wave were never claimed and are still "
+                             "queued, so the next wave cannot start: dispatch the study again to run them")
+                break
+            more = self.next_wave()
+            if not more:
+                break
+            for rid in more:
+                self.worker(rid, state="queued")
+            self.queue = list(more)
 
-def queued_work(opts: argparse.Namespace) -> list[tuple[str, list[str]]]:
-    """Remote studies with queued runs, oldest first: [(study_id, [run ids])]."""
+
+def queued_work(opts: argparse.Namespace) -> tuple[list[tuple[str, list[str]]], bool]:
+    """Remote studies with queued runs, oldest first: ([(study_id, [run
+    ids])], whether every listing answered)."""
     status, body = backend_call(opts.backend, Path(opts.data_dir), "GET",
                                 "/api/studies?execution=remote&status=running&limit=50")
     if status != 200:
         log(f"listing remote studies failed: {status} {body.get('message') or body.get('error')}")
-        return []
-    work = []
+        return [], False
+    work, ok = [], True
     for study in reversed(body.get("studies") or []):
         study_id = study.get("studyId") if isinstance(study, dict) else None
         if not isinstance(study_id, str) or not _ID.match(study_id):
             continue
         code, runs = backend_call(opts.backend, Path(opts.data_dir), "GET", f"/api/studies/{study_id}/runs")
         if code != 200:
+            log(f"study {study_id}: listing its runs failed: {code} {runs.get('message') or runs.get('error')}")
+            ok = False
             continue
         queued = [r["runId"] for r in runs.get("runs") or []
                   if isinstance(r, dict) and r.get("status") == "queued" and _ID.match(str(r.get("runId")))]
         if queued:
             work.append((study_id, queued))
-    return work
+    return work, ok
 
 
 def watch(opts: argparse.Namespace) -> int:
-    """Serve remote studies until stopped (or one pass with --once)."""
-    stop_file = Path(opts.data_dir) / "studies" / "stop"
-    stop_file.parent.mkdir(parents=True, exist_ok=True)
+    """Serve remote studies until stopped (or one pass with --once). Exit 1
+    when a --once pass had a problem."""
+    studies = Path(opts.data_dir) / "studies"
+    stop_file = studies / "stop"
+    studies.mkdir(parents=True, exist_ok=True)
     poll = float(os.environ.get("ARCHETYPE_WATCH_POLL_S") or opts.poll_sec)
-    served = 0
+    stop = threading.Event()
+
+    def on_signal(signum: int, _frame: Any) -> None:
+        log(f"signal {signum}: stopping the watch")
+        stop.set()
+
+    previous = {sig: signal.signal(sig, on_signal) for sig in (signal.SIGTERM, signal.SIGINT)}
+    served, failed, skipped = 0, False, set()
     log(f"watching {opts.backend} for remote studies (poll every {poll:g} s)")
+    if stop_file.exists():
+        log(f"{stop_file} exists: not serving (delete it to start)")
     try:
-        while not stop_file.exists():
-            work = queued_work(opts)
+        while not stop.is_set() and not stop_file.exists():
+            work, listed = queued_work(opts)
+            pass_failed = not listed
             for study_id, runs in work:
-                if stop_file.exists():
+                if stop.is_set() or stop_file.exists():
                     break
+                if (studies / study_id / "stop").exists():
+                    if study_id not in skipped:
+                        log(f"study {study_id}: skipped while {studies / study_id / 'stop'} exists")
+                        skipped.add(study_id)
+                    continue
                 log(f"study {study_id}: {len(runs)} queued run(s)")
                 study_opts = argparse.Namespace(**{**vars(opts), "study": study_id, "runs": ",".join(runs)})
-                Runner(study_opts).run()
+                pass_failed |= Runner(study_opts, stop).run() != 0
                 served += 1
+            failed |= pass_failed
             if opts.once:
                 break
-            if not work:
-                time.sleep(poll)
-    except KeyboardInterrupt:
-        log("interrupted")
+            if not work or pass_failed:
+                stop.wait(poll)  # also after a failed pass: never a tight loop of failing workers
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
     log(f"watch stopped after {served} study pass(es)")
-    return 0
+    return 1 if opts.once and failed else 0
 
 
 def main(argv: list[str]) -> int:

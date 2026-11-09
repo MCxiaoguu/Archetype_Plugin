@@ -561,6 +561,82 @@ def case_runner_budget_runs_the_highest_priority_wave_two_runs(tmp: Path) -> Non
         stub.close()
 
 
+def start_watcher(tmp: Path, stub: StubStudy, plan: dict) -> tuple[subprocess.Popen, Path]:
+    """A --watch service (no --once) against the stub, polling every 0.2 s."""
+    worker = tmp / "claude"
+    worker.write_text(RUNNER_WORKER)
+    worker.chmod(0o755)
+    (tmp / "plan.json").write_text(json.dumps(plan))
+    data = tmp / "data"
+    data.mkdir(exist_ok=True)
+    (data / "auth.json").write_text(json.dumps({"access_token": "t"}))
+    env = dict(os.environ, RUNNER_PLAN=str(tmp / "plan.json"), ARCHETYPE_RUNNER_WATCH_S="0.2",
+               ARCHETYPE_RUNNER_WAVE_WAIT="0.1", ARCHETYPE_WATCH_POLL_S="0.2")
+    args = [sys.executable, str(HERE / "study_runner.py"), "--watch", "--data-dir", str(data),
+            "--backend", stub.url, "--parallel", "2", "--claude", str(worker)]
+    proc = subprocess.Popen(args, env=env, stdout=(tmp / "watch.log").open("w"), stderr=subprocess.STDOUT)
+    return proc, data
+
+
+def wait_for(cond, timeout: float, what: str) -> None:
+    deadline = time.monotonic() + timeout
+    while not cond():
+        expect(time.monotonic() < deadline, f"timed out waiting for {what}")
+        time.sleep(0.1)
+
+
+def case_runner_watch_stops_on_ctrl_c_and_serves_again(tmp: Path) -> None:
+    import signal as sig
+    stub = StubStudy(["q-1"])
+    proc, data = start_watcher(tmp, stub, {})
+    try:
+        wait_for(lambda: stub.status["q-1"] == "completed", 60, "the first run")
+        seen = len(stub.listings)
+        wait_for(lambda: len(stub.listings) >= seen + 2, 30, "the watcher to poll again")
+        proc.send_signal(sig.SIGINT)
+        try:
+            code = proc.wait(timeout=15)
+        except subprocess.TimeoutExpired:
+            raise Fail("Ctrl-C did not stop the watcher once it had served a study: "
+                       + (tmp / "watch.log").read_text()[-600:])
+        expect(code == 0, f"clean stop: exit {code}")
+        expect(not (data / "studies" / "s1" / "stop").exists(), "a signal leaves no stop file behind")
+        stub.status["q-2"] = "queued"
+        env = dict(os.environ, RUNNER_PLAN=str(tmp / "plan.json"), ARCHETYPE_RUNNER_WATCH_S="0.2",
+                   ARCHETYPE_RUNNER_WAVE_WAIT="0.1")
+        out = subprocess.run([sys.executable, str(HERE / "study_runner.py"), "--watch", "--once", "--data-dir",
+                              str(data), "--backend", stub.url, "--claude", str(tmp / "claude")],
+                             env=env, capture_output=True, text=True, timeout=120)
+        expect(out.returncode == 0 and stub.status["q-2"] == "completed",
+               f"a restarted watcher serves the study again: {stub.status} {out.stdout[-600:]}")
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+        stub.close()
+
+
+def case_runner_watch_sigterm_stops_its_live_worker(tmp: Path) -> None:
+    import signal as sig
+    stub = StubStudy(["w-slow"])
+    proc, data = start_watcher(tmp, stub, {"w-slow": "slow"})
+    try:
+        stream = data / "studies" / "s1" / "w-slow" / "stream.jsonl"
+        wait_for(lambda: stream.exists() and "log_step" in stream.read_text(), 60, "the worker's first step")
+        proc.send_signal(sig.SIGTERM)
+        try:
+            code = proc.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            raise Fail("SIGTERM did not stop the watcher: " + (tmp / "watch.log").read_text()[-600:])
+        expect(code == 0, f"clean stop: exit {code}")
+        expect(stub.aborts == {"w-slow": "the runner was stopped before the worker reported"},
+               f"its claimed run is aborted with the reason: {stub.aborts}")
+        expect(not (data / "studies" / "s1" / "stop").exists(), "no stop file left behind")
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+        stub.close()
+
+
 def case_runner_sends_the_token_only_over_https(tmp: Path) -> None:
     runner = load_runner()
     spec = importlib.util.spec_from_file_location("core_server", HERE / "core-server.py")
@@ -656,6 +732,8 @@ CASES = [
     ("runner budget runs the highest priority wave 2 runs, the rest not run", case_runner_budget_runs_the_highest_priority_wave_two_runs),
     ("runner --watch serves every queued run of remote studies", case_runner_watch_serves_remote_studies),
     ("runner sends the token only to an https or loopback backend", case_runner_sends_the_token_only_over_https),
+    ("runner --watch stops on Ctrl-C after a study and serves it again later", case_runner_watch_stops_on_ctrl_c_and_serves_again),
+    ("runner --watch on SIGTERM stops its live worker and aborts that run", case_runner_watch_sigterm_stops_its_live_worker),
 ]
 
 
