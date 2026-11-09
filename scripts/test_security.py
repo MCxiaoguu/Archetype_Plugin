@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Security invariants of the core MCP server (no network, no backend)."""
+"""Security invariants of the core MCP server (loopback only, no backend)."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ import sys
 import tempfile
 import threading
 import urllib.request
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -106,6 +107,51 @@ with tempfile.TemporaryDirectory() as tmp:
     del os.environ["CLAUDE_PLUGIN_DATA"]
     logged = sorted(e["run_id"] for e in json.loads(target.read_text()))
     check(logged == [f"run{n:02d}" for n in range(12)], f"every concurrent run start is logged ({len(logged)} of 12)")
+
+# urllib copies every header, Authorization included, to wherever a redirect
+# points: a redirect to another origin (or to plain http) must not be
+# followed with the token. Two loopback servers stand in for the origins.
+seen: list = []
+
+
+class _Elsewhere(BaseHTTPRequestHandler):
+    def log_message(self, *args):
+        pass
+
+    def do_GET(self):
+        seen.append(self.headers.get("Authorization"))
+        self.send_response(200)
+        self.send_header("Content-Length", "2")
+        self.end_headers()
+        self.wfile.write(b"{}")
+
+
+elsewhere = ThreadingHTTPServer(("127.0.0.1", 0), _Elsewhere)
+
+
+class _Backend(_Elsewhere):
+    def do_GET(self):
+        if self.path == "/same":
+            return super().do_GET()
+        target = (f"http://localhost:{elsewhere.server_address[1]}/stolen" if self.path == "/away"
+                  else "/same")
+        self.send_response(302)
+        self.send_header("Location", target)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+
+backend = ThreadingHTTPServer(("127.0.0.1", 0), _Backend)
+for server in (elsewhere, backend):
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+core.BACKEND_BASE = f"http://127.0.0.1:{backend.server_address[1]}"
+status, body = core.backend_get("/away", auth_token="tok")
+check(seen == [], f"no request follows a redirect to another origin (saw {seen})")
+check(status == 0 and "redirect" in str(body.get("message")), f"the refused redirect is named ({status}, {body})")
+status, body = core.backend_get("/home", auth_token="tok")
+check(status == 200 and seen == ["Bearer tok"], f"a same-origin redirect is still followed ({status}, {seen})")
+for server in (elsewhere, backend):
+    server.shutdown()
 
 print("-" * 60)
 print("ALL PASS" if not failures else f"{failures} FAILED")

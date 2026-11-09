@@ -300,6 +300,28 @@ class _DeadlineExceeded(Exception):
     pass
 
 
+class _RedirectRefused(Exception):
+    pass
+
+
+class _SameOriginRedirects(urllib.request.HTTPRedirectHandler):
+    """Follow a redirect only within the request's own origin.
+
+    urllib copies every header, Authorization included, to wherever a
+    redirect points, so one to another host or to plain http would hand that
+    host the token the https check above withheld from it."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[override]
+        old, new = urllib.parse.urlsplit(req.full_url), urllib.parse.urlsplit(newurl)
+        if (old.scheme, old.hostname, old.port) != (new.scheme, new.hostname, new.port):
+            fp.close()
+            raise _RedirectRefused(newurl)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+_OPENER = urllib.request.build_opener(_SameOriginRedirects)
+
+
 def _read_until(resp: Any, deadline: float) -> bytes:
     """Read a response body, checking the wall clock between socket reads.
 
@@ -332,10 +354,20 @@ def _exchange(
     req: urllib.request.Request, timeout: float, deadline: float
 ) -> tuple[int, dict[str, Any]]:
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with _OPENER.open(req, timeout=timeout) as resp:
             return resp.status, _parse_body(_read_until(resp, deadline).decode())
     except _DeadlineExceeded:
         return 0, _deadline_body(req, timeout)
+    except _RedirectRefused as exc:
+        return 0, {
+            "error": "redirect_refused",
+            "message": (
+                f"The Archetype backend redirected {req.get_method()} "
+                f"{req.full_url[len(BACKEND_BASE):] or '/'} to {exc}, another origin, "
+                f"so the call was stopped before your login went there. Check "
+                f"ARCHETYPE_BACKEND_URL (now {BACKEND_BASE})."
+            ),
+        }
     except urllib.error.HTTPError as exc:
         return exc.code, _parse_body(exc.read().decode())
     except urllib.error.URLError as exc:
