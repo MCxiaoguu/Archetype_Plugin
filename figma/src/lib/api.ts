@@ -3,11 +3,33 @@
  * place with network access) and knows nothing about Figma.
  */
 
+/**
+ * The error bodies the panel meets: the studies and plugin routes answer
+ * `{error, message}` (error is a slug); framework errors are RFC 9457
+ * problem documents (`code` is the slug, `detail` the sentence, and `error`
+ * repeats `detail`); the device flow passes Auth0's `{error, error_description}`
+ * through.
+ */
 export interface ApiErrorBody {
   error?: string;
   message?: string;
+  code?: string;
+  detail?: string;
+  error_description?: string;
   request_id?: string;
   fields?: Record<string, string>;
+}
+
+function errorCode(body: ApiErrorBody | null): string | null {
+  if (typeof body?.code === 'string' && body.code) return body.code;
+  return typeof body?.error === 'string' && body.error ? body.error : null;
+}
+
+function errorText(body: ApiErrorBody | null): string | null {
+  for (const text of [body?.message, body?.detail, body?.error_description]) {
+    if (typeof text === 'string' && text.trim()) return text;
+  }
+  return null;
 }
 
 export class ApiError extends Error {
@@ -68,7 +90,8 @@ export function normaliseBase(url: string): string {
 }
 
 function friendlyMessage(status: number, body: ApiErrorBody | null, fallback: string): string {
-  if (body?.message) return body.message;
+  const text = errorText(body);
+  if (text) return text;
   if (status >= 500) return 'Archetype had a problem on its side. Try again in a moment.';
   return fallback;
 }
@@ -139,7 +162,7 @@ export class ApiClient {
     }
     if (!res.ok) {
       const errBody = (data && typeof data === 'object' ? data : null) as ApiErrorBody | null;
-      throw new ApiError(res.status, errBody?.error ?? `http_${res.status}`, friendlyMessage(res.status, errBody, `Request failed (${res.status}).`), {
+      throw new ApiError(res.status, errorCode(errBody) ?? `http_${res.status}`, friendlyMessage(res.status, errBody, `Request failed (${res.status}).`), {
         requestId: errBody?.request_id ?? null,
         fields: errBody?.fields ?? null,
       });

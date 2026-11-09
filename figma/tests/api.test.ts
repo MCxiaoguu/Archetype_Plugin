@@ -87,6 +87,21 @@ describe('api client', () => {
     expect(e3.message).toMatch(/problem on its side/);
   });
 
+  it('reads RFC 9457 problem documents and OAuth error bodies', async () => {
+    const { fetch } = mockFetch([
+      {
+        status: 404,
+        body: { type: 'https://docs.syntheticarchetype.com/api#errors', title: 'Not Found', status: 404, detail: 'No route matches POST /api/studies.', code: 'not_found', error: 'No route matches POST /api/studies.' },
+      },
+      { status: 403, body: { error: 'unauthorized_client', error_description: 'Grant type device_code not allowed for the client.' } },
+    ]);
+    const api = new ApiClient({ baseUrl: 'http://x', getToken: () => 't', fetch });
+    const e1 = (await api.createStudy({}).catch((e) => e)) as ApiError;
+    expect(e1).toMatchObject({ status: 404, code: 'not_found', message: 'No route matches POST /api/studies.' });
+    const e2 = (await api.startDeviceFlow().catch((e) => e)) as ApiError;
+    expect(e2).toMatchObject({ status: 403, code: 'unauthorized_client', message: 'Grant type device_code not allowed for the client.' });
+  });
+
   it('turns network failures into a plain message', async () => {
     const { fetch } = mockFetch([new TypeError('Failed to fetch')]);
     const api = new ApiClient({ baseUrl: 'http://localhost:5013', getToken: () => 't', fetch });
