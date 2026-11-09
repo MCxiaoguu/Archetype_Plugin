@@ -145,7 +145,45 @@ def case_grade_fails_loudly_when_the_backend_does():
         assert any("401" in p for p in problems) and any("no run" in p for p in problems), problems
 
 
-CASES = [case_a_step_without_a_url_reaches_no_page, case_grade_fails_loudly_when_the_backend_does,case_comparison_names_new_finds, case_parses_every_defect_row, case_demo_script_quotes_are_found, case_noticed_reached_and_words,
+def case_session_survives_a_backend_blip():
+    import argparse
+    import contextlib
+    import io
+    import tempfile
+    import time
+    import urllib.error
+    sys.path.insert(0, str(HERE.parent / "scripts"))
+    import relay_study as rs
+    calls = []
+
+    def flaky(backend, path, data_dir, timeout=300):
+        calls.append(path)
+        if len(calls) == 1:
+            raise urllib.error.URLError("connection refused")
+        return 200, {"runs": []}
+
+    rs.api = flaky
+    real_sleep = time.sleep
+    with tempfile.TemporaryDirectory() as tmp, contextlib.redirect_stdout(io.StringIO()):
+        out = Path(tmp)
+        claude = out / "claude"
+        claude.write_text("#!/usr/bin/env python3\nimport time\nprint('studyId for tool calls: abcdefgh1', flush=True)\n"
+                          "time.sleep(1.5)\n")
+        claude.chmod(0o755)
+        data = out / "plugin-data"
+        data.mkdir()
+        opts = argparse.Namespace(study=None, preconditions="", factors="a", parallel=1, model="m", max_runs=4,
+                                  outer_model="m", claude=str(claude), backend="http://127.0.0.1:1", timeout_min=5)
+        rs.time.sleep = lambda s: real_sleep(min(s, 0.2))
+        try:
+            sid = rs.run_session(opts, out, data, "http://127.0.0.1:8322")
+        finally:
+            rs.time.sleep = real_sleep
+    assert sid == "abcdefgh1", sid
+    assert len(calls) >= 2, f"the session was followed after the blip: {calls}"
+
+
+CASES = [case_session_survives_a_backend_blip, case_a_step_without_a_url_reaches_no_page, case_grade_fails_loudly_when_the_backend_does,case_comparison_names_new_finds, case_parses_every_defect_row, case_demo_script_quotes_are_found, case_noticed_reached_and_words,
          case_matrix_and_markdown, case_unknown_defect_uses_its_own_terms]
 
 

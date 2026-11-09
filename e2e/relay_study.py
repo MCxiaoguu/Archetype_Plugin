@@ -158,8 +158,14 @@ def run_session(opts: argparse.Namespace, out: Path, data_dir: Path, relay_url: 
                 time.sleep(15)
                 sid = sid or study_id_from_stream(stream) or next(iter(study_ids(data_dir) - before), None)
                 if sid and opts.max_runs:
-                    code, listing = api(opts.backend, f"/api/studies/{sid}/runs", data_dir, timeout=30)
-                    total = len(listing.get("runs") or []) if code == 200 else 0
+                    try:
+                        code, listing = api(opts.backend, f"/api/studies/{sid}/runs", data_dir, timeout=30)
+                    except (urllib.error.URLError, OSError, ValueError) as exc:
+                        # One missed check of the run count; the session goes on.
+                        log(f"could not count the study's runs ({exc}); checking again in 15 s")
+                        code, listing = 0, {}
+                    if code not in (0, 200):
+                        log(f"could not count the study's runs (HTTP {code}); checking again in 15 s")
                     ran = sum(1 for r in listing.get("runs") or []
                               if r.get("status") not in ("queued", "aborted") or r.get("claimedAt"))
                     if ran > opts.max_runs:
@@ -172,8 +178,13 @@ def run_session(opts: argparse.Namespace, out: Path, data_dir: Path, relay_url: 
                         os.killpg(child.pid, signal.SIGTERM)
                     except OSError:
                         pass
-        except KeyboardInterrupt:
-            os.killpg(child.pid, signal.SIGTERM)
+        except BaseException:
+            # Never leave the session (and its runner and workers) running
+            # unwatched behind a crashed harness.
+            try:
+                os.killpg(child.pid, signal.SIGTERM)
+            except OSError:
+                pass
             raise
     log(f"session ended (exit {child.returncode}) after {(time.monotonic() - started) / 60:.1f} min")
     return sid or study_id_from_stream(stream) or next(iter(study_ids(data_dir) - before), None)
