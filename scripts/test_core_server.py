@@ -2904,6 +2904,36 @@ def case_69_get_study_resumes_at_every_stage(srv: ServerProc, data_dir: Path) ->
     expect(bad.get("isError") is True, "id checked locally")
 
 
+def case_69b_get_study_without_its_run_listing(srv: ServerProc, data_dir: Path) -> None:
+    write_auth(data_dir)
+    study_path = f"/api/studies/{STUDY_ID}"
+    runs_path = f"/api/studies/{STUDY_ID}/runs"
+    ready = dict(STUDY_RESPONSE, status="running", factorSpec=FACTORS_RESPONSE["factorSpec"],
+                 archetypes=ARCHETYPES_RESPONSE["archetypes"],
+                 runs=[{k: r[k] for k in ("runId", "archetypeId", "archetypeName", "repeatIndex")}
+                       for r in WAVE1_RESPONSE["runs"]])
+    # A failing listing is an error: without live statuses every run looks
+    # finished and the advice would be to ask for the next wave.
+    STATE.error_overrides[runs_path] = (500, {"error": "internal_error",
+                                              "message": "An unexpected server error occurred while listing the study runs."})
+    STATE.once_overrides[study_path] = (200, ready)
+    result = call_tool(srv, "get_study", {"study_id": STUDY_ID})
+    text = result_text(result)
+    expect(result.get("isError") is True, f"the failed listing is an error: {text[:200]}")
+    contains(text, "while listing the study runs", "the backend's message")
+    expect("next_study_wave" not in text, "no advice drawn from missing statuses")
+    # A backend without the listing route (problem+json 404) still resumes
+    # from the study's own run refs.
+    STATE.error_overrides[runs_path] = (404, {"type": "https://docs.syntheticarchetype.com/api#errors",
+                                              "title": "Not Found", "status": 404, "code": "not_found",
+                                              "detail": f"No route matches GET {runs_path}.",
+                                              "error": f"No route matches GET {runs_path}."})
+    STATE.once_overrides[study_path] = (200, ready)
+    result = call_tool(srv, "get_study", {"study_id": STUDY_ID})
+    expect(not result.get("isError"), f"an old backend resumes: {result_text(result)[:200]}")
+    contains(result_text(result), "| unknown |", "run refs without a live status")
+
+
 def case_66b_study_status_waits_for_a_change(srv: ServerProc, data_dir: Path) -> None:
     write_auth(data_dir)
     running = dict(STUDY_STATUS_RESPONSE, runs={"allTerminal": False, "byStatus": {"running": 2, "completed": 3},
@@ -3112,6 +3142,7 @@ CASES = [
     ("dispatch_study shows the estimate and waits for confirm", case_70_dispatch_study_needs_confirm),
     ("dispatch_study runs the swarm: workers, browsers, waves, status", case_71_dispatch_study_runs_the_swarm),
     ("get_study resumes a study at every stage", case_69_get_study_resumes_at_every_stage),
+    ("get_study: a failed run listing is an error, a missing route is not", case_69b_get_study_without_its_run_listing),
     ("update_factors only: exactly these factors in one PATCH", case_62b_update_factors_only),
 ]
 

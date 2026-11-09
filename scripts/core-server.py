@@ -3724,13 +3724,20 @@ def handle_get_study(arguments: dict[str, Any]) -> dict[str, Any]:
         return out
     study = out[1]
     listing = authed_call(lambda t: backend_get(f"/api/studies/{study_id}/runs", auth_token=t))
-    if isinstance(listing, tuple) and 200 <= listing[0] < 300 and isinstance(listing[1].get("runs"), list):
-        runs = [r for r in listing[1]["runs"] if isinstance(r, dict)]
-    else:
+    if isinstance(listing, str):
+        return not_connected(listing)
+    status, resp = listing
+    if status == 404 and resp.get("error") != "study_not_found":
         # An older backend without the run listing: the study's run refs
         # (no live status) stand in.
         runs = [dict(r, status=r.get("status") or "unknown") for r in (study.get("runs") or [])
                 if isinstance(r, dict)]
+    elif 200 <= status < 300 and isinstance(resp.get("runs"), list):
+        runs = [r for r in resp["runs"] if isinstance(r, dict)]
+    else:
+        # Without live statuses every run would look finished and the next
+        # step would be the wrong one, so a failed listing is an error.
+        return _study_error(status, resp)
     lines = [_render_study(study, f"Study {_clip(study.get('title') or study_id, 120)} (resumed).")]
     spec = study.get("factorSpec") or {}
     chosen = [f for f in (spec.get("factors") or []) if isinstance(f, dict) and f.get("selected")]
