@@ -210,6 +210,20 @@ describe('panel effects', () => {
     ]);
   });
 
+  it('says so when the runs list is missing instead of waiting for tries forever', async () => {
+    installFetch((_m, path) => {
+      if (path === '/api/studies/s7/status') return [200, { studyId: 's7', status: 'running' }];
+      if (path === '/api/studies/s7/runs') return [200, { studyId: 's7', status: 'running' }];
+      return [404, {}];
+    });
+    const { store, fx } = initStore('tok');
+    store.dispatch({ type: 'open-study', record: { studyId: 's7', title: 't', startName: 'a', goalName: 'b', size: 'quick', launchedAt: 0, status: 'running' }, now: 0 });
+    fx.watch();
+    await until(() => !!store.get().study?.pollError);
+    fx.newTest();
+    expect(store.get().study).toBeNull();
+  });
+
   it('a 401 while watching signs out and clears the stored token', async () => {
     installFetch(() => [401, { error: 'Invalid token', message: 'bad' }]);
     const { store, fx } = initStore('tok');

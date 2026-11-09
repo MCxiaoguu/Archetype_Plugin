@@ -181,7 +181,10 @@ export function createEffects(store: Store) {
         const client = api();
         const [status, runs] = await Promise.all([client.getStatus<StudyStatus>(st.id), client.getRuns<StudyRuns>(st.id)]);
         if (gen !== watchGen) return;
-        store.dispatch({ type: 'poll', status: status.status, runs: runs.runs ?? [], now: Date.now() });
+        if (typeof status?.status !== 'string' || !Array.isArray(runs?.runs)) {
+          throw new Error('Archetype sent a study status or runs list the panel cannot read.');
+        }
+        store.dispatch({ type: 'poll', status: status.status, runs: runs.runs, now: Date.now() });
         toMain({ type: 'save-study', record: store.get().study?.record as StudyRecord });
         if (isStudyDone(status.status)) {
           await loadReport(gen);
