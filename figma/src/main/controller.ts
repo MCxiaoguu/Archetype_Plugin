@@ -37,7 +37,7 @@ function checkRecord(r: unknown): StudyRecord {
     isText(r.title) && isText(r.startName) && isText(r.goalName) && isText(r.status) &&
     (r.size === 'quick' || r.size === 'thorough') &&
     typeof r.launchedAt === 'number' && Number.isFinite(r.launchedAt);
-  if (!ok) invalid('a test record without a study id');
+  if (!ok) invalid('an incomplete test record (it needs a study id, names, size, status and launch time)');
   return r as unknown as StudyRecord;
 }
 
