@@ -7,8 +7,15 @@
 
 import type { TraceOutcome, TraceScroll, TraceState } from './model';
 
-/** What the screen can't show: a link that opened outside the prototype, or an action the engine can't play. */
-export type EngineEffect = { type: 'url'; url: string } | { type: 'unsupported'; action: string };
+/**
+ * What the screen can't show: a link that opened outside the prototype, an
+ * action the engine can't play, or a variable action the document's
+ * variables don't allow (an ExprError's message).
+ */
+export type EngineEffect =
+  | { type: 'url'; url: string }
+  | { type: 'unsupported'; action: string }
+  | { type: 'expr_error'; action: string; message: string };
 
 /** Plain data as JSON with sorted keys, so two values compare by content. */
 function stable(value: unknown): string {
@@ -55,6 +62,6 @@ export function outcomeOf(before: TraceState, after: TraceState, effects: Engine
   }
   if (!same(movedScroll(before.scroll), movedScroll(after.scroll))) return 'scrolled';
   if (effects.some((e) => e.type === 'url')) return 'left_prototype';
-  if (effects.some((e) => e.type === 'unsupported')) return 'unsupported';
+  if (effects.some((e) => e.type === 'unsupported' || e.type === 'expr_error')) return 'unsupported';
   return fallback;
 }

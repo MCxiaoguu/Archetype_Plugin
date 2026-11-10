@@ -69,6 +69,12 @@ export function isShown(s: TraceState, frameId: string): boolean {
   return s.frameId === frameId || s.overlays.some((o) => o.frameId === frameId);
 }
 
+/** The base frame and its place in history: a change means a navigation, after which the old layers are gone. */
+export const baseOf = (s: TraceState) => JSON.stringify([s.frameId, s.history]);
+
+/** What "shows a different frame or overlay" is measured against. */
+export const screenOf = (s: TraceState) => JSON.stringify([s.frameId, s.history, s.overlays.map((o) => o.frameId)]);
+
 /** The frame whose layers can be hit: the top overlay while one is open, otherwise the base frame. */
 export function hittableFrame(s: TraceState): string {
   const top = s.overlays[s.overlays.length - 1];

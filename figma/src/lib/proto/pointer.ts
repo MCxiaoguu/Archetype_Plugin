@@ -7,8 +7,9 @@
  * left. A click is a press and a release at one point.
  */
 
-import { bubble, chainOf, contains, hitAt, isShown, type LayerIndex, rootOf } from './hitTest';
+import { baseOf, bubble, chainOf, contains, hitAt, isShown, type LayerIndex, rootOf, screenOf } from './hitTest';
 import type { HeldEffect, OpenOverlay, Point, ProtoTrigger, TraceState, TraceTimer } from './model';
+import { variantChanges } from './variants';
 
 export type TriggerType = ProtoTrigger['type'];
 
@@ -18,22 +19,16 @@ export interface PointerDeps {
   handles(s: TraceState, layerKey: string, trigger: TriggerType): boolean;
   /** Fires the layer's reactions for this trigger: now, or as a timer when the trigger has a delay. */
   fire(s: TraceState, layerKey: string, trigger: TriggerType): void;
+  /** Sets (or, with null, clears) an instance's variant override, as undoing a held effect does. */
+  setVariant(s: TraceState, frameId: string, instanceKey: string, variantId: string | null): void;
 }
-
-const MOUSE_TIMERS: ReadonlySet<TriggerType> = new Set<TriggerType>(['MOUSE_ENTER', 'MOUSE_LEAVE', 'MOUSE_DOWN', 'MOUSE_UP']);
-
-/** The base frame and its place in history: a change means a navigation, after which the old layers are gone. */
-const baseOf = (s: TraceState) => JSON.stringify([s.frameId, s.history]);
-
-/** What the click sequence watches: "shows a different frame or overlay" stops it. */
-const screenOf = (s: TraceState) => JSON.stringify([s.frameId, s.history, s.overlays.map((o) => o.frameId)]);
 
 /** Moves the pointer to `point`. Returns false when a leave or enter reaction navigated away, so the old layers are gone. */
 export function movePointer(deps: PointerDeps, s: TraceState, point: Point): boolean {
   const { layers } = deps;
   s.pointer.point = point;
   for (const held of [...s.pointer.held]) {
-    if (held.trigger === 'ON_HOVER' && !stillHovering(layers, s, held, point)) undo(s, held);
+    if (held.trigger === 'ON_HOVER' && !stillHovering(layers, s, held, point)) undo(deps, s, held);
   }
 
   const base = baseOf(s);
@@ -70,6 +65,8 @@ export function click(deps: PointerDeps, s: TraceState, point: Point): void {
 
   const { layers } = deps;
   const hit = hitAt(layers, s, point);
+  // Typed keys go to the layer a click lands on.
+  s.focus = hit ? { layerKey: hit.key, frameId: rootOf(layers, hit.key) } : null;
   if (!hit) {
     if (s.overlays[s.overlays.length - 1]?.closeOnOutsideClick) s.overlays.pop();
     return;
@@ -91,7 +88,7 @@ export function click(deps: PointerDeps, s: TraceState, point: Point): void {
   press('ON_PRESS', true);
   s.pointer.pressing = null;
   for (const held of [...s.pointer.held]) {
-    if (held.trigger === 'ON_PRESS') undo(s, held);
+    if (held.trigger === 'ON_PRESS') undo(deps, s, held);
   }
   press('MOUSE_UP', false);
   press('ON_CLICK', false);
@@ -105,10 +102,6 @@ export function drag(deps: PointerDeps, s: TraceState, point: Point): void {
   if (key !== null) deps.fire(s, key, 'ON_DRAG');
 }
 
-export function isMouseTimer(timer: TraceTimer): boolean {
-  return MOUSE_TIMERS.has(timer.triggerType);
-}
-
 /** Whether a delayed mouse reaction still applies at settle: its frame shows and the pointer is where its trigger needs it. */
 export function stillWhereNeeded(s: TraceState, timer: TraceTimer): boolean {
   if (!isShown(s, timer.frameId)) return false;
@@ -116,15 +109,19 @@ export function stillWhereNeeded(s: TraceState, timer: TraceTimer): boolean {
   return timer.triggerType === 'MOUSE_LEAVE' ? !over : over;
 }
 
-/** Fires a "while hovering" or "while pressing" reaction and keeps what it opened, to undo later. */
+/** Fires a "while hovering" or "while pressing" reaction and keeps what it opened and changed, to undo later. */
 function hold(deps: PointerDeps, s: TraceState, key: string, trigger: HeldEffect['trigger']): void {
   const base = baseOf(s);
-  const before = s.overlays.map((o) => o.frameId);
+  const overlays = s.overlays.map((o) => o.frameId);
+  const variants = structuredClone(s.variants);
   deps.fire(s, key, trigger);
   // An effect that navigated away has nothing left to undo.
   if (baseOf(s) !== base) return;
-  const opened = pushedOn(before, s.overlays);
-  if (opened.length) s.pointer.held.push({ layerKey: key, trigger, frameId: rootOf(deps.layers, key), overlays: opened });
+  const opened = pushedOn(overlays, s.overlays);
+  const changed = variantChanges(variants, s.variants);
+  if (opened.length || changed.length) {
+    s.pointer.held.push({ layerKey: key, trigger, frameId: rootOf(deps.layers, key), overlays: opened, variants: changed });
+  }
 }
 
 /** The overlays pushed on top of an unchanged stack; none when the stack changed otherwise (a swap or a close). */
@@ -133,17 +130,26 @@ function pushedOn(before: string[], after: OpenOverlay[]): string[] {
   return after.slice(before.length).map((o) => o.frameId);
 }
 
-/** A "while hovering" overlay stays open while the pointer is over its trigger or over the overlay. */
+/**
+ * A "while hovering" effect holds while the pointer is over its trigger,
+ * over an instance it changed (whose layers have new keys once swapped),
+ * or over an overlay it opened.
+ */
 function stillHovering(layers: LayerIndex, s: TraceState, held: HeldEffect, p: Point): boolean {
-  const trigger = layers.byKey.get(held.layerKey);
-  if (trigger && isShown(s, held.frameId) && contains(trigger.box, p)) return true;
+  if (!isShown(s, held.frameId)) return false;
+  const over = (key: string) => {
+    const layer = layers.byKey.get(key);
+    return layer !== undefined && contains(layer.box, p);
+  };
+  if (over(held.layerKey) || held.variants.some((v) => over(v.instanceKey))) return true;
   return held.overlays.some(
     (id) => isShown(s, id) && layers.layers.some((l) => layers.rootOf.get(l.key) === id && layers.visible.has(l.key) && contains(l.box, p)),
   );
 }
 
-function undo(s: TraceState, held: HeldEffect): void {
+function undo(deps: PointerDeps, s: TraceState, held: HeldEffect): void {
   s.pointer.held = s.pointer.held.filter((h) => h !== held);
+  for (const change of held.variants) deps.setVariant(s, change.frameId, change.instanceKey, change.previous);
   for (const id of [...held.overlays].reverse()) {
     const i = s.overlays.map((o) => o.frameId).lastIndexOf(id);
     if (i >= 0) s.overlays.splice(i, 1);

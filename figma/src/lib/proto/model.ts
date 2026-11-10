@@ -127,21 +127,35 @@ export interface ProtoReaction {
 export interface ProtoVariant {
   id: string;
   name: string;
-  reactions: ProtoReaction[];
+  /**
+   * The reactions of the variant's layers, keyed by each layer's path
+   * inside the variant (see `RawLayer.key`); '' is the variant itself.
+   */
+  reactions: Record<string, ProtoReaction[]>;
   /** Set when a library variant couldn't be imported; CHANGE_TO to it is `unsupported`. */
   unavailable?: boolean;
 }
 
-/** Keyed in `ProtoDoc.variantSets` by the id of the instance a CHANGE_TO targets. */
+/**
+ * Keyed in `ProtoDoc.variantSets` by the key of the instance a CHANGE_TO
+ * targets: its node id, or for an instance inside a swapped variant its
+ * path key (see `RawLayer.key`).
+ */
 export interface VariantSet {
+  /** The top level frame the instance is in, whose showing starts its variant's AFTER_TIMEOUT timers. */
+  frameId: string;
   variants: ProtoVariant[];
 }
 
 export type VariableValue = VariableLiteral | { alias: string };
 
+/** The variable types a prototype can evaluate and assign (Figma's `resolvedType`). */
+export type VariableType = 'BOOLEAN' | 'FLOAT' | 'STRING' | 'COLOR';
+
 export interface VariableDef {
   id: string;
   name: string;
+  resolvedType: VariableType;
   valuesByMode: Record<string, VariableValue>;
 }
 
@@ -194,20 +208,27 @@ export interface OpenOverlay {
   closeOnOutsideClick: boolean;
 }
 
-/** Values per collection, then per mode, then per variable. */
-export type TraceVariables = Record<string, Record<string, Record<string, VariableValue>>>;
+/**
+ * Values that SET_VARIABLE assigned, per collection, then per mode, then
+ * per variable. A variable with no assigned value has its document value.
+ */
+export type TraceVariables = Record<string, Record<string, Record<string, VariableLiteral>>>;
 
 export interface TraceTimer {
   /** The layer whose reaction scheduled this timer. */
   layerKey: string;
+  /** `layerKey` and the ancestors it had when the timer was set, innermost first; a CHANGE_TO looks for its instance there. */
+  chain: string[];
   /** The top level frame (base or overlay) that layer was shown in. */
   frameId: string;
   triggerType: ProtoTrigger['type'];
+  /** The trigger's delay or timeout. */
+  delayMs: number;
   dueAtMs: number;
   /** The reaction's actions, as they were when the timer was set. */
   actions: ProtoAction[];
-  /** The trigger's unclipped box when the timer was set, for a MANUAL overlay. */
-  triggerBox: Box;
+  /** The trigger's unclipped box when the timer was set, for a MANUAL overlay; null when it wasn't measured. */
+  triggerBox: Box | null;
 }
 
 /** The effect of a "while hovering" or "while pressing" reaction, undone when the hover or press ends. */
@@ -218,6 +239,8 @@ export interface HeldEffect {
   frameId: string;
   /** Frame ids of the overlays it opened, closed again when it's undone. */
   overlays: string[];
+  /** The variant overrides it changed, with the override each had before (null: none), restored when it's undone. */
+  variants: Array<{ frameId: string; instanceKey: string; previous: string | null }>;
 }
 
 export interface TracePointer {
@@ -248,6 +271,8 @@ export interface TraceState {
   docHash: string;
   /** Fixed for the whole run, like a device: see `viewportFor`. */
   viewport: Size;
+  /** The layer the last click landed on, which typed keys go to; null after a click on nothing. */
+  focus: { layerKey: string; frameId: string } | null;
 }
 
 // --- The action a persona can take, and what it does ------------------
@@ -335,7 +360,11 @@ export interface ScrollArea {
  * the base frame's.
  */
 export interface RawLayer {
-  /** The original layer's id, or (inside a swapped instance) its key plus the child's path in the variant. */
+  /**
+   * The original layer's id. Inside an instance whose variant was swapped,
+   * `<instance key>;<path>`, where the path is the ids of the layer and its
+   * ancestors inside the variant, outermost first, joined with ';'.
+   */
   key: string;
   /** The Figma node type, for example "TEXT" or "INSTANCE". */
   type: string;

@@ -1,146 +1,30 @@
 import { describe, expect, it } from 'vitest';
-import { apply, settle, start, viewportFor } from '../src/lib/proto/engine';
+import { settle, start, viewportFor } from '../src/lib/proto/engine';
 import { EngineError } from '../src/lib/proto/errors';
-import type {
-  Box,
-  ElementTarget,
-  OverflowDirection,
-  OverlayPosition,
-  OverlaySettings,
-  ProtoAction,
-  ProtoDoc,
-  ProtoFrame,
-  ProtoNavigation,
-  ProtoReaction,
-  RawLayer,
-  TraceAction,
-  TraceDirection,
-  TraceScrollAmount,
-  TraceState,
-} from '../src/lib/proto/model';
-
-// --- Fixtures -----------------------------------------------------------
-
-type Rect = [x: number, y: number, width: number, height: number];
-type NodeAction = Extract<ProtoAction, { type: 'NODE' }>;
-
-const box = ([x, y, width, height]: Rect): Box => ({ x, y, width, height });
-
-function frame(id: string, width: number, height: number, extra: Partial<ProtoFrame> = {}): ProtoFrame {
-  return {
-    id,
-    name: `Frame ${id}`,
-    pageId: 'p',
-    width,
-    height,
-    overflowDirection: 'NONE',
-    numberOfFixedChildren: 0,
-    overlay: { position: 'CENTER', background: { type: 'NONE' }, closeOnOutsideClick: false },
-    explicitVariableModes: {},
-    ...extra,
-  };
-}
-
-function overlayFrame(id: string, width: number, height: number, settings: Partial<OverlaySettings> = {}): ProtoFrame {
-  return frame(id, width, height, {
-    overlay: { position: 'CENTER', background: { type: 'NONE' }, closeOnOutsideClick: false, ...settings },
-  });
-}
-
-function protoDoc(frames: ProtoFrame[], reactions: Record<string, ProtoReaction[]> = {}): ProtoDoc {
-  return {
-    docHash: 'hash-1',
-    pageId: 'p',
-    pageName: 'Prototype',
-    explicitVariableModes: {},
-    frames,
-    reactions,
-    variantSets: {},
-    variableCollections: {},
-  };
-}
-
-function node(navigation: ProtoNavigation, destinationId: string | null, options: Partial<NodeAction> = {}): ProtoAction {
-  return {
-    type: 'NODE',
-    navigation,
-    destinationId,
-    resetScrollPosition: false,
-    preserveScrollPosition: true,
-    resetInteractiveComponents: false,
-    overlayRelativePosition: null,
-    ...options,
-  };
-}
-const navigate = (to: string, options: Partial<NodeAction> = {}) => node('NAVIGATE', to, options);
-const openOverlay = (to: string, options: Partial<NodeAction> = {}) => node('OVERLAY', to, options);
-/** A link leaves the screen as it is, so tests use one to see which reactions fired, and in what order. */
-const link = (url: string): ProtoAction => ({ type: 'URL', url });
-const urls = (effects: Array<{ type: string; url?: string }>) => effects.map((e) => e.url);
-
-const on = (type: 'ON_CLICK' | 'ON_HOVER' | 'ON_PRESS' | 'ON_DRAG', ...actions: ProtoAction[]): ProtoReaction => ({
-  trigger: { type },
-  actions,
-});
-const mouse = (
-  type: 'MOUSE_DOWN' | 'MOUSE_UP' | 'MOUSE_ENTER' | 'MOUSE_LEAVE',
-  delayMs: number,
-  ...actions: ProtoAction[]
-): ProtoReaction => ({ trigger: { type, delayMs }, actions });
-
-function layer(key: string, parentKey: string | null, rect: Rect, extra: Partial<RawLayer> = {}): RawLayer {
-  return {
-    key,
-    type: 'FRAME',
-    name: key,
-    text: null,
-    box: box(rect),
-    unclippedBox: box(rect),
-    visible: true,
-    hasReactions: false,
-    roleHint: null,
-    parentKey,
-    scroll: null,
-    fixed: false,
-    ...extra,
-  };
-}
-
-/** Element targets for every layer, at its box's centre. The tests use layer keys as element ids. */
-function centres(layers: RawLayer[]): Record<string, ElementTarget> {
-  const targets: Record<string, ElementTarget> = {};
-  for (const l of layers) {
-    targets[l.key] = { layerKey: l.key, point: { x: l.box.x + l.box.width / 2, y: l.box.y + l.box.height / 2 } };
-  }
-  return targets;
-}
-
-const click = (element: string): TraceAction => ({ type: 'click', element });
-const hover = (element: string): TraceAction => ({ type: 'hover', element });
-const scroll = (direction: TraceDirection, element?: string, amount?: TraceScrollAmount): TraceAction => ({
-  type: 'scroll',
-  direction,
-  ...(element ? { element } : {}),
-  ...(amount ? { amount } : {}),
-});
-
-function act(doc: ProtoDoc, state: TraceState, action: TraceAction, layers: RawLayer[], targets = centres(layers)) {
-  return apply(doc, state, action, layers, targets);
-}
-
-/** A 400x800 screen A with one button; the viewport is A's size. */
-const A = frame('A', 400, 800);
-const B = frame('B', 400, 800);
-const C = frame('C', 400, 800);
-const screenA = [layer('A', null, [0, 0, 400, 800]), layer('btn', 'A', [20, 20, 100, 40])];
-
-function deepFreeze<T>(value: T): T {
-  if (value && typeof value === 'object') {
-    for (const child of Object.values(value)) deepFreeze(child);
-    Object.freeze(value);
-  }
-  return value;
-}
+import type { OverflowDirection, OverlayPosition, ProtoAction, TraceAction, TraceState } from '../src/lib/proto/model';
+import {
+  A,
+  act,
+  B,
+  box,
+  C,
+  click,
+  deepFreeze,
+  frame,
+  hover,
+  layer,
+  link,
+  mouse,
+  navigate,
+  node,
+  on,
+  openOverlay,
+  overlayFrame,
+  protoDoc,
+  screenA,
+  scroll,
+  urls,
+} from './trace-fixtures';
 
 // --- Start and viewport ---------------------------------------------------
 

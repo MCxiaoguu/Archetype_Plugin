@@ -3,20 +3,18 @@
  * prototype, one instance per persona in the panel. `start` opens the
  * start frame, `apply` plays one persona action on the screen it was taken
  * on, and `settle` fires what would happen before a person acted again.
- * This module dispatches: hit-testing, the pointer and scrolling live in
- * their own modules beside it.
+ * This module dispatches: hit-testing, the pointer, scrolling, navigation,
+ * variables, variants, keys and timers live in their own modules beside it.
  */
 
 import { EngineError } from './errors';
-import { indexLayers, isShown, type LayerIndex, layerOf, rootOf } from './hitTest';
+import { ExprError, type ExprScope } from './expr';
+import { chainOf, indexLayers, isShown, type LayerIndex, layerOf, rootOf } from './hitTest';
+import { keyCodes, type KeyDeps, matchesKeys, pressKey, typeText } from './keys';
 import type {
-  Box,
   ElementTarget,
-  OpenOverlay,
-  Point,
   ProtoAction,
   ProtoDoc,
-  ProtoFrame,
   ProtoReaction,
   ProtoTrigger,
   RawLayer,
@@ -26,9 +24,13 @@ import type {
   TraceState,
   TraceTimer,
 } from './model';
+import { frameOf, goBack, type NodeAction, openOverlay, type Proto, showBase, type Source, swap } from './navigation';
 import { type EngineEffect, outcomeOf } from './outcome';
-import { click, drag, isMouseTimer, movePointer, type PointerDeps, stillWhereNeeded, type TriggerType } from './pointer';
-import { scrollBy, scrollIntoView, scrollOnShow } from './scroll';
+import { click, drag, movePointer, type PointerDeps, stillWhereNeeded, type TriggerType } from './pointer';
+import { scrollBy, scrollIntoView } from './scroll';
+import { addTimer, firesAtSettle, isMouseTimer, LOOP_GUARD, nextTimer, restartInstanceTimers, startFrameTimers } from './timers';
+import { assignVariable, conditionalBlock, setVariableMode } from './variables';
+import { instanceFor, reactionsFor, setOverride } from './variants';
 
 export type { EngineEffect } from './outcome';
 
@@ -36,33 +38,31 @@ export interface ApplyResult {
   state: TraceState;
   outcome: TraceOutcome;
   effects: EngineEffect[];
+  /** Set when a `wait` met the loop guard, as in `SettleResult`. */
+  looped: string[] | null;
 }
 
 export interface SettleResult {
   state: TraceState;
   /** How many reactions fired. */
   fired: number;
-  /** The frames involved when the loop guard stopped a loop of timers; null when it didn't. */
+  /** The frames whose timers fired when the loop guard stopped a loop of timers; null when it didn't. */
   looped: string[] | null;
   effects: EngineEffect[];
 }
 
-type NodeAction = Extract<ProtoAction, { type: 'NODE' }>;
-
-/** The layer whose reaction runs, the frame it's in, and its unclipped box. */
-interface Source {
-  layerKey: string;
-  frameId: string;
-  box: Box;
-}
-
-interface Context {
-  doc: ProtoDoc;
-  frames: Map<string, ProtoFrame>;
+interface Context extends Proto {
   /** The measured screen; null in `settle`, which runs before the next render. */
   layers: LayerIndex | null;
   effects: EngineEffect[];
 }
+
+const context = (doc: ProtoDoc, layers: LayerIndex | null): Context => ({
+  doc,
+  frames: new Map(doc.frames.map((f) => [f.id, f])),
+  layers,
+  effects: [],
+});
 
 /** The viewport is the start frame's size, its height capped like a laptop's or a phone's screen. */
 export function viewportFor(doc: ProtoDoc, startFrameId: string): Size {
@@ -72,7 +72,8 @@ export function viewportFor(doc: ProtoDoc, startFrameId: string): Size {
 }
 
 export function start(doc: ProtoDoc, startFrameId: string): TraceState {
-  return {
+  const viewport = viewportFor(doc, startFrameId);
+  const s: TraceState = {
     frameId: startFrameId,
     overlays: [],
     history: [],
@@ -84,8 +85,12 @@ export function start(doc: ProtoDoc, startFrameId: string): TraceState {
     timers: [],
     pointer: { point: null, over: [], pressing: null, held: [] },
     docHash: doc.docHash,
-    viewport: viewportFor(doc, startFrameId),
+    viewport,
+    focus: null,
   };
+  const frame = frameOf(context(doc, null), startFrameId);
+  startFrameTimers(doc, s, startFrameId, { x: 0, y: 0, width: frame.width, height: frame.height });
+  return s;
 }
 
 /**
@@ -105,11 +110,12 @@ export function apply(
   }
   const s = structuredClone(state);
   const index = indexLayers(layers);
-  const ctx: Context = { doc, frames: new Map(doc.frames.map((f) => [f.id, f])), layers: index, effects: [] };
+  const ctx = context(doc, index);
   const pointer = pointerDeps(ctx, index);
   const at = (element: string) => targetOf(targets, element);
 
   let fallback: TraceOutcome = 'nothing_happened';
+  let looped: string[] | null = null;
   switch (action.type) {
     case 'click':
       click(pointer, s, at(action.element).point);
@@ -124,40 +130,50 @@ export function apply(
       fallback = 'scroll_at_end';
       const target = action.element === undefined ? null : at(action.element);
       if (target && !movePointer(pointer, s, target.point)) break;
-      scrollBy(index, s, baseFrame(ctx, s), action.direction, action.amount ?? 'page', target?.layerKey ?? null);
+      scrollBy(index, s, frameOf(ctx, s.frameId), action.direction, action.amount ?? 'page', target?.layerKey ?? null);
       break;
     }
     case 'back':
       fallback = 'back_empty';
-      goBack(s);
+      goBack(ctx, s);
       break;
-    case 'press_key':
+    case 'press_key': {
+      const codes = keyCodes(action.key);
+      if (codes) pressKey(keyDeps(ctx, index), s, codes);
+      else ctx.effects.push({ type: 'unsupported', action: `press_key ${action.key}` });
+      break;
+    }
     case 'type':
-    case 'wait':
-      throw new EngineError('not_implemented', `The engine doesn't play ${action.type} yet`);
+      fallback = 'typed_nothing';
+      if (movePointer(pointer, s, at(action.element).point)) typeText(keyDeps(ctx, index), s, action.text);
+      break;
+    case 'wait': {
+      if (!(Number.isFinite(action.seconds) && action.seconds > 0)) {
+        throw new EngineError('invalid_action', `wait needs a positive number of seconds, not ${action.seconds}`);
+      }
+      const end = s.clockMs + action.seconds * 1000;
+      const result = fireTimers(ctx, s, (t) => t.triggerType === 'AFTER_TIMEOUT' && t.dueAtMs <= end);
+      s.clockMs = Math.max(s.clockMs, end);
+      prune(s);
+      return { state: s, outcome: result.fired ? 'timers_fired' : 'waited', effects: ctx.effects, looped: result.looped };
+    }
   }
   prune(s);
-  return { state: s, outcome: outcomeOf(state, s, ctx.effects, fallback), effects: ctx.effects };
+  return { state: s, outcome: outcomeOf(state, s, ctx.effects, fallback), effects: ctx.effects, looped };
 }
 
 /**
  * Fires what would happen before a person acted again: pending delayed
- * mouse reactions, each only if the pointer is still where its trigger
- * needs it. Never mutates `state`.
+ * mouse reactions (each only if the pointer is still where its trigger
+ * needs it) and AFTER_TIMEOUT timers of 2 s or less, earliest first. Never
+ * mutates `state`.
  */
 export function settle(doc: ProtoDoc, state: TraceState): SettleResult {
   const s = structuredClone(state);
-  const ctx: Context = { doc, frames: new Map(doc.frames.map((f) => [f.id, f])), layers: null, effects: [] };
-  let fired = 0;
-  for (let i = nextMouseTimer(s.timers); i >= 0; i = nextMouseTimer(s.timers)) {
-    const timer = s.timers.splice(i, 1)[0] as TraceTimer;
-    if (!stillWhereNeeded(s, timer)) continue;
-    s.clockMs = Math.max(s.clockMs, timer.dueAtMs);
-    run(ctx, s, timer.actions, { layerKey: timer.layerKey, frameId: timer.frameId, box: timer.triggerBox });
-    fired++;
-  }
+  const ctx = context(doc, null);
+  const { fired, looped } = fireTimers(ctx, s, firesAtSettle);
   prune(s);
-  return { state: s, fired, looped: null, effects: ctx.effects };
+  return { state: s, fired, looped, effects: ctx.effects };
 }
 
 // --- Firing reactions -----------------------------------------------------------
@@ -169,15 +185,20 @@ function targetOf(targets: Record<string, ElementTarget>, element: string): Elem
   return targets[element] as ElementTarget;
 }
 
-function reactionsFor(doc: ProtoDoc, layerKey: string): ProtoReaction[] {
-  return doc.reactions[layerKey] ?? [];
-}
-
 function pointerDeps(ctx: Context, layers: LayerIndex): PointerDeps {
   return {
     layers,
-    handles: (_s, key, trigger) => reactionsFor(ctx.doc, key).some((r) => r.trigger.type === trigger),
+    handles: (s, key, trigger) => reactionsFor(ctx.doc, s, key).some((r) => r.trigger.type === trigger),
     fire: (s, key, trigger) => fire(ctx, layers, s, key, trigger),
+    setVariant: (s, frameId, instanceKey, variantId) => setVariant(ctx, s, frameId, instanceKey, variantId),
+  };
+}
+
+function keyDeps(ctx: Context, layers: LayerIndex): KeyDeps {
+  return {
+    layers,
+    handles: (s, key, codes) => reactionsFor(ctx.doc, s, key).some((r) => matchesKeys(r.trigger, codes)),
+    fire: (s, key, codes) => fire(ctx, layers, s, key, 'ON_KEY_DOWN', (r) => matchesKeys(r.trigger, codes)),
   };
 }
 
@@ -193,39 +214,55 @@ function delayOf(trigger: ProtoTrigger): number {
   }
 }
 
-/** Runs the layer's reactions for one trigger, or sets a timer for one whose trigger has a delay. */
-function fire(ctx: Context, layers: LayerIndex, s: TraceState, layerKey: string, trigger: TriggerType): void {
-  const source: Source = { layerKey, frameId: rootOf(layers, layerKey), box: layerOf(layers, layerKey).unclippedBox };
-  for (const reaction of reactionsFor(ctx.doc, layerKey)) {
-    if (reaction.trigger.type !== trigger) continue;
+/** Runs the layer's reactions for one trigger (those `only` keeps), or sets a timer for one whose trigger has a delay. */
+function fire(
+  ctx: Context,
+  layers: LayerIndex,
+  s: TraceState,
+  layerKey: string,
+  trigger: TriggerType,
+  only: (reaction: ProtoReaction) => boolean = () => true,
+): void {
+  const box = layerOf(layers, layerKey).unclippedBox;
+  const source: Source = { layerKey, chain: chainOf(layers, layerKey), frameId: rootOf(layers, layerKey), box };
+  for (const reaction of reactionsFor(ctx.doc, s, layerKey)) {
+    if (reaction.trigger.type !== trigger || !only(reaction)) continue;
     const delayMs = delayOf(reaction.trigger);
     if (delayMs > 0) {
-      s.timers.push({
-        layerKey,
-        frameId: source.frameId,
-        triggerType: trigger,
-        dueAtMs: s.clockMs + delayMs,
-        actions: structuredClone(reaction.actions),
-        triggerBox: { ...source.box },
-      });
+      const { chain, frameId } = source;
+      addTimer(s, { layerKey, chain, frameId, triggerType: trigger, delayMs, actions: reaction.actions, triggerBox: { ...box } });
     } else {
       run(ctx, s, reaction.actions, source);
     }
   }
 }
 
-function nextMouseTimer(timers: TraceTimer[]): number {
-  let next = -1;
-  timers.forEach((timer, i) => {
-    if (isMouseTimer(timer) && (next < 0 || timer.dueAtMs < (timers[next] as TraceTimer).dueAtMs)) next = i;
-  });
-  return next;
+/** Fires the timers `eligible` picks, earliest first, until none is left or the loop guard stops them. */
+function fireTimers(ctx: Context, s: TraceState, eligible: (timer: TraceTimer) => boolean) {
+  let fired = 0;
+  const frames: string[] = [];
+  for (let i = nextTimer(s.timers, eligible); i >= 0; i = nextTimer(s.timers, eligible)) {
+    if (fired === LOOP_GUARD) return { fired, looped: frames };
+    const timer = s.timers.splice(i, 1)[0] as TraceTimer;
+    if (isMouseTimer(timer) && !stillWhereNeeded(s, timer)) continue;
+    s.clockMs = Math.max(s.clockMs, timer.dueAtMs);
+    run(ctx, s, timer.actions, { layerKey: timer.layerKey, chain: timer.chain, frameId: timer.frameId, box: timer.triggerBox });
+    fired++;
+    if (!frames.includes(timer.frameId)) frames.push(timer.frameId);
+    prune(s);
+  }
+  return { fired, looped: null };
 }
 
-/** Drops held effects and timers of frames that no longer show: leaving a frame cancels them. */
+/** Drops what belongs to frames that no longer show: held effects, timers (leaving a frame cancels them) and focus. */
 function prune(s: TraceState): void {
   s.pointer.held = s.pointer.held.filter((h) => isShown(s, h.frameId));
   s.timers = s.timers.filter((t) => isShown(s, t.frameId));
+  if (s.focus && !isShown(s, s.focus.frameId)) s.focus = null;
+}
+
+function setVariant(ctx: Context, s: TraceState, frameId: string, instanceKey: string, variantId: string | null): void {
+  if (setOverride(s, frameId, instanceKey, variantId)) restartInstanceTimers(ctx.doc, s, frameId, instanceKey);
 }
 
 // --- Prototype actions ----------------------------------------------------------
@@ -234,13 +271,25 @@ function run(ctx: Context, s: TraceState, actions: ProtoAction[], source: Source
   for (const action of actions) runAction(ctx, s, action, source);
 }
 
+/** Runs a variable action, reporting an ExprError as an effect: the document's variables, not the engine, failed. */
+function tryExpr<T>(ctx: Context, action: string, evaluate: () => T): T | null {
+  try {
+    return evaluate();
+  } catch (error) {
+    if (!(error instanceof ExprError)) throw error;
+    ctx.effects.push({ type: 'expr_error', action, message: error.message });
+    return null;
+  }
+}
+
 function runAction(ctx: Context, s: TraceState, action: ProtoAction, source: Source): void {
+  const scope: ExprScope = { doc: ctx.doc, state: s, frameId: source.frameId };
   switch (action.type) {
     case 'NODE':
       runNode(ctx, s, action, source);
       return;
     case 'BACK':
-      goBack(s);
+      goBack(ctx, s);
       return;
     case 'CLOSE':
       s.overlays.pop();
@@ -254,10 +303,22 @@ function runAction(ctx: Context, s: TraceState, action: ProtoAction, source: Sou
     case 'UNKNOWN':
       ctx.effects.push({ type: 'unsupported', action: action.rawType });
       return;
-    case 'SET_VARIABLE':
-    case 'SET_VARIABLE_MODE':
-    case 'CONDITIONAL':
-      throw new EngineError('not_implemented', `The engine doesn't play ${action.type} yet`);
+    case 'SET_VARIABLE': {
+      // An unfinished action (no variable or no value) does nothing, as in the viewer.
+      const { variableId, value } = action;
+      if (variableId !== null && value !== null) tryExpr(ctx, action.type, () => assignVariable(scope, variableId, value));
+      return;
+    }
+    case 'SET_VARIABLE_MODE': {
+      const { collectionId, modeId } = action;
+      if (collectionId !== null && modeId !== null) tryExpr(ctx, action.type, () => setVariableMode(scope, collectionId, modeId));
+      return;
+    }
+    case 'CONDITIONAL': {
+      const block = tryExpr(ctx, action.type, () => conditionalBlock(scope, action.blocks));
+      if (block) run(ctx, s, block.actions, source);
+      return;
+    }
   }
 }
 
@@ -265,103 +326,26 @@ function runNode(ctx: Context, s: TraceState, action: NodeAction, source: Source
   if (action.navigation === 'SCROLL_TO') {
     // `settle` runs before the render, so there is no measured screen to scroll in.
     if (!ctx.layers) ctx.effects.push({ type: 'unsupported', action: 'SCROLL_TO' });
-    else if (action.destinationId !== null) scrollIntoView(ctx.layers, s, baseFrame(ctx, s), action.destinationId);
+    else if (action.destinationId !== null) scrollIntoView(ctx.layers, s, frameOf(ctx, s.frameId), action.destinationId);
     return;
   }
   if (action.navigation === 'CHANGE_TO') {
-    throw new EngineError('not_implemented', "The engine doesn't play CHANGE_TO yet");
+    const found = action.destinationId === null ? null : instanceFor(ctx.doc, source.chain, action.destinationId);
+    // A variant no instance around the trigger has: nothing changes, as in the viewer.
+    if (!found) return;
+    if (found.variant.unavailable) ctx.effects.push({ type: 'unsupported', action: 'CHANGE_TO' });
+    else setVariant(ctx, s, found.frameId, found.instanceKey, found.variant.id);
+    return;
   }
 
   const dest = action.destinationId === null ? undefined : ctx.frames.get(action.destinationId);
   // A link to a frame that isn't there does nothing, as in the viewer.
   if (!dest) return;
-  if (action.navigation === 'NAVIGATE') showBase(s, dest, action, true);
-  else if (action.navigation === 'SWAP') swap(s, dest, action, source);
-  else openOverlay(s, dest, action, source);
-}
-
-function baseFrame(ctx: Context, s: TraceState): ProtoFrame {
-  const frame = ctx.frames.get(s.frameId);
-  if (!frame) throw new EngineError('invalid_doc', `The frame on screen, ${s.frameId}, isn't in the prototype`);
-  return frame;
-}
-
-/** The scroll resets when `resetScrollPosition` is true, or when the deprecated `preserveScrollPosition` is false. */
-const resetsScroll = (action: NodeAction) => action.resetScrollPosition || !action.preserveScrollPosition;
-
-/** Shows `dest` as the base frame. Open overlays close, and the layers under the pointer go with the old frame. */
-function showBase(s: TraceState, dest: ProtoFrame, action: NodeAction, pushHistory: boolean): void {
-  scrollOnShow(s, dest, { reset: resetsScroll(action), asBase: true });
-  if (action.resetInteractiveComponents) delete s.variants[dest.id];
-  if (pushHistory) s.history.push(s.frameId);
-  s.frameId = dest.id;
-  s.overlays = [];
-  s.pointer.over = [];
-}
-
-function goBack(s: TraceState): void {
-  const previous = s.history.pop();
-  if (previous === undefined) return;
-  s.frameId = previous;
-  s.overlays = [];
-  s.pointer.over = [];
-}
-
-/** Replaces the overlay the trigger is in, or the base frame (without history) when it's in the base frame. */
-function swap(s: TraceState, dest: ProtoFrame, action: NodeAction, source: Source): void {
-  const i = s.overlays.findIndex((o) => o.frameId === source.frameId);
-  if (i < 0) {
-    showBase(s, dest, action, false);
+  if (action.navigation === 'NAVIGATE') {
+    showBase(ctx, s, dest, action, true);
     return;
   }
-  if (dest.id !== source.frameId && isShown(s, dest.id)) return;
-  scrollOnShow(s, dest, { reset: resetsScroll(action), asBase: false });
-  if (action.resetInteractiveComponents) delete s.variants[dest.id];
-  s.overlays[i] = overlayEntry(s, dest, action, source);
-}
-
-/** Opens `dest` as an overlay on top. A frame that is already showing doesn't open twice. */
-function openOverlay(s: TraceState, dest: ProtoFrame, action: NodeAction, source: Source): void {
-  if (isShown(s, dest.id)) return;
-  scrollOnShow(s, dest, { reset: resetsScroll(action), asBase: false });
-  if (action.resetInteractiveComponents) delete s.variants[dest.id];
-  s.overlays.push(overlayEntry(s, dest, action, source));
-}
-
-function overlayEntry(s: TraceState, dest: ProtoFrame, action: NodeAction, source: Source): OpenOverlay {
-  return {
-    frameId: dest.id,
-    position: dest.overlay.position,
-    origin: overlayOrigin(dest, s.viewport, action, source),
-    closeOnOutsideClick: dest.overlay.closeOnOutsideClick,
-  };
-}
-
-/** One of eight places in the viewport, or (MANUAL) offset from the trigger's box. */
-function overlayOrigin(frame: ProtoFrame, viewport: Size, action: NodeAction, source: Source): Point {
-  const right = viewport.width - frame.width;
-  const bottom = viewport.height - frame.height;
-  switch (frame.overlay.position) {
-    case 'CENTER':
-      return { x: right / 2, y: bottom / 2 };
-    case 'TOP_LEFT':
-      return { x: 0, y: 0 };
-    case 'TOP_CENTER':
-      return { x: right / 2, y: 0 };
-    case 'TOP_RIGHT':
-      return { x: right, y: 0 };
-    case 'BOTTOM_LEFT':
-      return { x: 0, y: bottom };
-    case 'BOTTOM_CENTER':
-      return { x: right / 2, y: bottom };
-    case 'BOTTOM_RIGHT':
-      return { x: right, y: bottom };
-    case 'MANUAL': {
-      const offset = action.overlayRelativePosition;
-      if (!offset) {
-        throw new EngineError('invalid_doc', `The MANUAL overlay ${frame.id} opened from ${source.layerKey} has no offset`);
-      }
-      return { x: source.box.x + offset.x, y: source.box.y + offset.y };
-    }
-  }
+  const placed = action.navigation === 'SWAP' ? swap(ctx, s, dest, action, source) : openOverlay(ctx, s, dest, action, source);
+  // A MANUAL overlay from a trigger that wasn't measured can't be placed.
+  if (!placed) ctx.effects.push({ type: 'unsupported', action: action.navigation });
 }

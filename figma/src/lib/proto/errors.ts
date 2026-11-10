@@ -12,8 +12,8 @@ export type EngineErrorCode =
   | 'invalid_layers'
   /** The document lacks something the action needs, such as a start frame or a MANUAL overlay's offset. */
   | 'invalid_doc'
-  /** An action or prototype action the engine doesn't interpret yet. */
-  | 'not_implemented';
+  /** The action itself is malformed, such as a wait that isn't a positive number of seconds. */
+  | 'invalid_action';
 
 export class EngineError extends Error {
   readonly code: EngineErrorCode;
