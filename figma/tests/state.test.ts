@@ -201,8 +201,8 @@ describe('panel state machine', () => {
   });
 
   it('holds the launch gate until the next launch', () => {
-    let s = reducer(init(), { type: 'gate', gate: { kind: 'blocked', reason: 'Duplicate to your drafts to test' } });
-    expect(s.gate).toEqual({ kind: 'blocked', reason: 'Duplicate to your drafts to test' });
+    let s = reducer(init(), { type: 'gate', gate: { kind: 'blocked', reason: 'Duplicate to your drafts to test', detail: 'Cannot create nodes' } });
+    expect(s.gate).toEqual({ kind: 'blocked', reason: 'Duplicate to your drafts to test', detail: 'Cannot create nodes' });
     s = reducer(s, { type: 'gate', gate: { kind: 'confirm-import', components: ['State=Open'] } });
     expect(s.gate).toEqual({ kind: 'confirm-import', components: ['State=Open'] });
     expect(reducer(s, { type: 'launch-started', now: 1 }).gate).toBeNull();

@@ -101,14 +101,11 @@ export function personaRows(runs: RunRowApi[], frames: FrameIndex, live: Readonl
 
 /**
  * What the Running screen tells the designer about this panel's sessions and
- * runner, each once. A notice in `whilePaused` (lost touch, signed out) shows
- * only while its session or the runner is still paused.
+ * runner, each once. A session drops a notice once it no longer holds (it
+ * reached Archetype again); the runner's shows while it is paused.
  */
-export function panelNotices(live: Readonly<Record<string, LiveRun>>, runner: RunnerStatus | null, whilePaused: readonly string[]): string[] {
-  const shown = new Set<string>();
-  for (const s of Object.values(live)) {
-    for (const n of s.notices) if (s.phase === 'paused' || !whilePaused.includes(n)) shown.add(n);
-  }
+export function panelNotices(live: Readonly<Record<string, LiveRun>>, runner: RunnerStatus | null): string[] {
+  const shown = new Set(Object.values(live).flatMap((s) => s.notices));
   if (runner?.phase === 'paused' && runner.notice) shown.add(runner.notice);
   return [...shown];
 }

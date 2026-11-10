@@ -1,0 +1,23 @@
+{
+  // The main thread runs in Figma's sandbox, which has no DOM and nothing past
+  // ES2017's library: no structuredClone, flatMap or Object.fromEntries. This
+  // checks code.ts, src/main and the src/lib files they import against that.
+  // Standalone, not extending tsconfig.json: its jsxImportSource would import
+  // preact's runtime into every file, and preact's types bring the DOM in.
+  "compilerOptions": {
+    "target": "ES2017",
+    "lib": ["ES2017"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "isolatedModules": true,
+    "resolveJsonModule": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "types": []
+  },
+  "include": ["src/figma-env.d.ts", "src/code.ts", "src/main/**/*.ts"]
+}

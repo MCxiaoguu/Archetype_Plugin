@@ -66,3 +66,10 @@ export interface NodeRef {
   id: string;
   name: string;
 }
+
+/** A finding's note on a frame, which the main thread pins as an annotation. */
+export interface Pin {
+  frameId: string;
+  frameName: string;
+  label: string;
+}

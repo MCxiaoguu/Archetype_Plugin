@@ -1,8 +1,7 @@
-import type { TurnLast } from './api';
+import type { RunSize, StudyForm } from './form';
 import type { ProtoDoc, RawLayer, Size, TraceState } from './proto/model';
-import type { Pin } from './report';
-import type { StudyForm, RunSize } from './study';
-import type { DocSnapshot, NodeRef } from './types';
+import type { TimerEffect, TurnLast } from './turn';
+import type { DocSnapshot, NodeRef, Pin } from './types';
 
 export interface Settings {
   apiBase: string;
@@ -114,6 +113,10 @@ export interface SavedSession {
   state: TraceState;
   /** What the next turn reports as `last`; null before the first action. */
   lastOutcome: TurnLast | null;
+  /** What timers did since that turn (a wait's), for the next turn's `last.timer_effects`. */
+  timerEffects: TimerEffect[];
+  /** Frames a loop of timers ran through since that turn, for the next turn's `timer_loop` flag. */
+  loopFrames: string[];
 }
 
 export interface TraceSaveRequest {
@@ -137,7 +140,8 @@ export interface TraceCleanupReply {
 }
 
 /** The launch gate: whether a scratch container can be made and removed (edit access). */
-export type ScratchCheckReply = { ok: true; reason: null } | { ok: false; reason: string };
+/** `reason` is what the designer reads; `detail` is what Figma said. */
+export type ScratchCheckReply = { ok: true; reason: null } | { ok: false; reason: string; detail: string };
 
 export interface TraceCalls {
   'trace-read': { request: TraceReadRequest; reply: ProtoDoc };

@@ -319,6 +319,10 @@ function traceMain() {
 
 const traceNode = (t: ReturnType<typeof traceMain>, id: string) => t.nodes.get(id) as FakeNode;
 
+function* ancestors(node: FakeNode): Generator<FakeNode> {
+  for (let n = node.parent as FakeNode | null; n; n = n.parent as FakeNode | null) yield n;
+}
+
 describe('trace requests on the main thread', () => {
   it('answers each of the five requests with its request id', async () => {
     const t = traceMain();
@@ -337,7 +341,7 @@ describe('trace requests on the main thread', () => {
     expect(drawn.layers.map((l) => l.key)).toContain('1:7');
     expect(drawn.viewport).toEqual(state.viewport);
 
-    const session = { owner: 'p_7f3a', runId: 'r1', turn: 3, state, lastOutcome: { action: { type: 'click', element: 'e1' }, outcome: 'navigated', target: 'Billing (e1)' } };
+    const session = { owner: 'p_7f3a', runId: 'r1', turn: 3, state, lastOutcome: { action: { type: 'click', element: 'e1' }, outcome: 'navigated', target: 'Billing (e1)' }, timerEffects: [], loopFrames: [] };
     expect(await t.ask({ type: 'trace-save', requestId: 'q3', studyId: 's1', runId: 'r1', session })).toEqual({ type: 'trace-result', requestId: 'q3', result: null });
     expect(await t.ask({ type: 'trace-load', requestId: 'q4', studyId: 's1' })).toEqual({ type: 'trace-result', requestId: 'q4', result: { sessions: [session] } });
     expect((await t.ask({ type: 'trace-load', requestId: 'q5', studyId: 's2' })).result).toEqual({ sessions: [] });
@@ -375,14 +379,49 @@ describe('trace requests on the main thread', () => {
     const t = traceMain();
     const doc = (await t.ask({ type: 'trace-read', requestId: 'a', importLibraryVariants: false })).result as ProtoDoc;
     const state = start(doc, '1:2');
-    const one = { owner: 'p_1', runId: 'r1', turn: 1, state, lastOutcome: null };
-    const two = { owner: 'p_1', runId: 'r2', turn: 4, state, lastOutcome: null };
+    const one = { owner: 'p_1', runId: 'r1', turn: 1, state, lastOutcome: null, timerEffects: [], loopFrames: [] };
+    const two = { owner: 'p_1', runId: 'r2', turn: 4, state, lastOutcome: null, timerEffects: [], loopFrames: [] };
     await t.ask({ type: 'trace-save', requestId: 'b', studyId: 's1', runId: 'r1', session: one });
     await t.ask({ type: 'trace-save', requestId: 'c', studyId: 's1', runId: 'r2', session: two });
     expect((await t.ask({ type: 'trace-load', requestId: 'd', studyId: 's1' })).result).toEqual({ sessions: [one, two] });
     const keys = (t.api.clientStorage.setAsync as unknown as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0] as string);
     expect(new Set(keys).size).toBe(1);
     expect(keys[0]).toMatch(/^archetype\.file\.[^.]+\.trace\.s1$/);
+  });
+
+  it('keeps every session when the runs of a study save at once, and a load reads what was saved before it', async () => {
+    const t = traceMain();
+    const doc = (await t.ask({ type: 'trace-read', requestId: 'a', importLibraryVariants: false })).result as ProtoDoc;
+    const state = start(doc, '1:2');
+    const session = (runId: string, turn: number) => ({ owner: 'p_1', runId, turn, state, lastOutcome: null, timerEffects: [], loopFrames: [] });
+    // Parallel personas: their saves reach the main thread together.
+    await Promise.all([
+      t.ask({ type: 'trace-save', requestId: 'b', studyId: 's1', runId: 'r1', session: session('r1', 1) }),
+      t.ask({ type: 'trace-save', requestId: 'c', studyId: 's1', runId: 'r2', session: session('r2', 1) }),
+      t.ask({ type: 'trace-save', requestId: 'd', studyId: 's1', runId: 'r3', session: session('r3', 1) }),
+    ]);
+    expect((await t.ask({ type: 'trace-load', requestId: 'e', studyId: 's1' })).result).toEqual({ sessions: [session('r1', 1), session('r2', 1), session('r3', 1)] });
+    const [, , loaded] = await Promise.all([
+      t.ask({ type: 'trace-save', requestId: 'f', studyId: 's1', runId: 'r1', session: null }),
+      t.ask({ type: 'trace-save', requestId: 'g', studyId: 's1', runId: 'r2', session: session('r2', 2) }),
+      t.ask({ type: 'trace-load', requestId: 'h', studyId: 's1' }),
+    ]);
+    expect(loaded.result).toEqual({ sessions: [session('r2', 2), session('r3', 1)] });
+  });
+
+  it('answers a save the storage refuses with trace-error, and the next save of the study still runs', async () => {
+    const t = traceMain();
+    const doc = (await t.ask({ type: 'trace-read', requestId: 'a', importLibraryVariants: false })).result as ProtoDoc;
+    const state = start(doc, '1:2');
+    const one = { owner: 'p_1', runId: 'r1', turn: 1, state, lastOutcome: null, timerEffects: [], loopFrames: [] };
+    (t.api.clientStorage.setAsync as unknown as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('The storage quota is full'));
+    const [refused, saved] = await Promise.all([
+      t.ask({ type: 'trace-save', requestId: 'b', studyId: 's1', runId: 'r1', session: one }),
+      t.ask({ type: 'trace-save', requestId: 'c', studyId: 's1', runId: 'r1', session: one }),
+    ]);
+    expect(refused).toEqual({ type: 'trace-error', requestId: 'b', message: 'The storage quota is full' });
+    expect(saved).toEqual({ type: 'trace-result', requestId: 'c', result: null });
+    expect((await t.ask({ type: 'trace-load', requestId: 'd', studyId: 's1' })).result).toEqual({ sessions: [one] });
   });
 
   it('answers a malformed request with trace-error naming what is wrong, not an exception', async () => {
@@ -394,14 +433,17 @@ describe('trace requests on the main thread', () => {
       [{ type: 'trace-render', requestId: 'm2', doc: null, state }, 'doc'],
       [{ type: 'trace-render', requestId: 'm3', doc, state: { ...state, frameId: 7 } }, 'state'],
       [{ type: 'trace-render', requestId: 'm4', doc, state: { ...state, viewport: null } }, 'state'],
-      [{ type: 'trace-save', requestId: 'm5', studyId: 's1', runId: 'r1', session: { owner: 'p', runId: 'r2', turn: 1, state, lastOutcome: null } }, 'runId'],
-      [{ type: 'trace-save', requestId: 'm6', studyId: 's1', runId: 'r1', session: { owner: '', runId: 'r1', turn: 1, state, lastOutcome: null } }, 'owner'],
-      [{ type: 'trace-save', requestId: 'm7', studyId: 's1', runId: 'r1', session: { owner: 'p', runId: 'r1', turn: -1, state, lastOutcome: null } }, 'turn'],
-      [{ type: 'trace-save', requestId: 'm8', studyId: 's1', runId: 'r1', session: { owner: 'p', runId: 'r1', turn: 1, state: {}, lastOutcome: null } }, 'state'],
-      [{ type: 'trace-save', requestId: 'm9', studyId: 's1', runId: 'r1', session: { owner: 'p', runId: 'r1', turn: 1, state, lastOutcome: 'clicked' } }, 'lastOutcome'],
+      [{ type: 'trace-save', requestId: 'm5', studyId: 's1', runId: 'r1', session: { owner: 'p', runId: 'r2', turn: 1, state, lastOutcome: null, timerEffects: [], loopFrames: [] } }, 'runId'],
+      [{ type: 'trace-save', requestId: 'm6', studyId: 's1', runId: 'r1', session: { owner: '', runId: 'r1', turn: 1, state, lastOutcome: null, timerEffects: [], loopFrames: [] } }, 'owner'],
+      [{ type: 'trace-save', requestId: 'm7', studyId: 's1', runId: 'r1', session: { owner: 'p', runId: 'r1', turn: -1, state, lastOutcome: null, timerEffects: [], loopFrames: [] } }, 'turn'],
+      [{ type: 'trace-save', requestId: 'm8', studyId: 's1', runId: 'r1', session: { owner: 'p', runId: 'r1', turn: 1, state: {}, lastOutcome: null, timerEffects: [], loopFrames: [] } }, 'state'],
+      [{ type: 'trace-save', requestId: 'm9', studyId: 's1', runId: 'r1', session: { owner: 'p', runId: 'r1', turn: 1, state, lastOutcome: 'clicked', timerEffects: [], loopFrames: [] } }, 'lastOutcome'],
       [{ type: 'trace-save', requestId: 'm10', studyId: '', runId: 'r1', session: null }, 'study'],
       [{ type: 'trace-save', requestId: 'm11', studyId: 's1', session: null }, 'run'],
       [{ type: 'trace-load', requestId: 'm12' }, 'study'],
+      [{ type: 'trace-save', requestId: 'm13', studyId: 's1', runId: 'r1', session: { owner: 'p', runId: 'r1', turn: 1, state, lastOutcome: null, loopFrames: [] } }, 'timerEffects'],
+      [{ type: 'trace-save', requestId: 'm14', studyId: 's1', runId: 'r1', session: { owner: 'p', runId: 'r1', turn: 1, state, lastOutcome: null, timerEffects: [{ type: 'left_prototype' }], loopFrames: [] } }, 'timerEffects'],
+      [{ type: 'trace-save', requestId: 'm15', studyId: 's1', runId: 'r1', session: { owner: 'p', runId: 'r1', turn: 1, state, lastOutcome: null, timerEffects: [], loopFrames: [7] } }, 'loopFrames'],
     ];
     for (const [msg, words] of cases) {
       const reply = await t.ask(msg);
@@ -432,8 +474,76 @@ describe('trace requests on the main thread', () => {
     expect(await t.ask({ type: 'trace-scratch-check', requestId: 'v1' })).toEqual({
       type: 'trace-result',
       requestId: 'v1',
-      result: { ok: false, reason: 'Duplicate to your drafts to test' },
+      result: { ok: false, reason: 'Duplicate to your drafts to test', detail: 'Cannot create nodes in a read-only document' },
     });
+  });
+
+  it('answers any other failure of the scratch check as a trace-error, and still removes the container', async () => {
+    const t = traceMain();
+    const make = t.api.createFrame;
+    let made: FakeNode | null = null;
+    t.api.createFrame = vi.fn(() => {
+      made = make() as unknown as FakeNode;
+      made.setPluginData = () => {
+        throw new Error('Plugin data is too large');
+      };
+      return made;
+    }) as unknown as typeof t.api.createFrame;
+    expect(await t.ask({ type: 'trace-scratch-check', requestId: 'v2' })).toEqual({ type: 'trace-error', requestId: 'v2', message: 'Plugin data is too large' });
+    expect((made as FakeNode | null)?.removed).toBe(true);
+  });
+
+  it('refuses stored sessions it cannot read instead of writing over them', async () => {
+    const t = traceMain();
+    const doc = (await t.ask({ type: 'trace-read', requestId: 'a', importLibraryVariants: false })).result as ProtoDoc;
+    const one = { owner: 'p_1', runId: 'r1', turn: 1, state: start(doc, '1:2'), lastOutcome: null, timerEffects: [], loopFrames: [] };
+    await t.ask({ type: 'trace-save', requestId: 'b', studyId: 's1', runId: 'r1', session: one });
+    const key = (t.api.clientStorage.setAsync as unknown as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as string;
+
+    await t.api.clientStorage.setAsync(key, 'not the sessions');
+    const save = await t.ask({ type: 'trace-save', requestId: 'c', studyId: 's1', runId: 'r2', session: { ...one, runId: 'r2' } });
+    expect(save).toMatchObject({ type: 'trace-error', message: expect.stringContaining(key) });
+    expect(await t.api.clientStorage.getAsync(key)).toBe('not the sessions');
+    expect(await t.ask({ type: 'trace-load', requestId: 'd', studyId: 's1' })).toMatchObject({ type: 'trace-error' });
+
+    await t.api.clientStorage.setAsync(key, { r1: { ...one, state: null } });
+    expect(await t.ask({ type: 'trace-load', requestId: 'e', studyId: 's1' })).toMatchObject({ type: 'trace-error', message: expect.stringContaining('r1') });
+  });
+
+  it('removes a container a render left on another page when the plugin closes mid-render', async () => {
+    const t = traceMain();
+    const doc = (await t.ask({ type: 'trace-read', requestId: 'r', importLibraryVariants: false })).result as ProtoDoc;
+    const scratch = () => [...t.nodes.values()].filter((n) => !n.removed && isScratch(n as unknown as BaseNode));
+    const rendering = t.ask({ type: 'trace-render', requestId: 'r1', doc, state: start(doc, '1:2') });
+    for (let i = 0; i < 100 && scratch().length === 0; i++) await Promise.resolve();
+    const [container] = scratch();
+    expect(container).toBeDefined();
+    // The designer went to another page meanwhile: the container is not on the current one.
+    (t.pages[1] as FakeNode).add(container as FakeNode);
+    t.api.currentPage = t.pages[2] as typeof t.api.currentPage;
+    expect(t.controller.removeLeftovers()).toBe(1);
+    expect(container?.removed).toBe(true);
+    await rendering;
+    expect(scratch()).toEqual([]);
+  });
+
+  it('knows the frame of a hidden layer inside an instance, which Figma only shows with invisible children reachable', async () => {
+    const t = traceMain();
+    // As in Figma: with skipInvisibleInstanceChildren on, a hidden layer inside an instance can't be got by id.
+    const byId = t.api.getNodeByIdAsync;
+    t.api.getNodeByIdAsync = vi.fn(async (id: string) => {
+      const node = (await byId(id)) as FakeNode | null;
+      if (!node || !t.api.skipInvisibleInstanceChildren) return node;
+      const chain = [node, ...ancestors(node)];
+      const insideInstance = chain.slice(1).some((n) => n.type === 'INSTANCE');
+      return insideInstance && chain.some((n) => !n.visible) ? null : node;
+    }) as unknown as typeof t.api.getNodeByIdAsync;
+    t.api.skipInvisibleInstanceChildren = true;
+    await t.ask({ type: 'trace-read', requestId: 'r', importLibraryVariants: false });
+    t.postMessage.mockClear();
+    // The spinner hidden inside "Sign in with your bank" on Connect bank, deleted.
+    t.fire('0:1', [{ type: 'DELETE', node: { id: 'I2:21;6:4', type: 'FRAME', removed: true } }]);
+    expect(t.posted().filter((m) => m.type === 'trace-file-changed')).toEqual([{ type: 'trace-file-changed', frameIds: ['2:20'] }]);
   });
 
   it('tells the panel when a frame of the ProtoDoc changes, and nothing else', async () => {

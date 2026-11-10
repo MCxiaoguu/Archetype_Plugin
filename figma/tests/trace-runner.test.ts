@@ -92,7 +92,7 @@ function studyBackend(brain: (runId: string, body: TurnBody) => Decision, opts: 
 
 async function runner(
   brain: (runId: string, body: TurnBody) => Decision,
-  opts: BackendOptions & { main?: MainThread; study?: (main: MainThread) => Partial<StudyTrace>; fails?: boolean },
+  opts: BackendOptions & { main?: MainThread; study?: (main: MainThread) => Partial<StudyTrace>; fails?: boolean; signal?: AbortSignal },
 ) {
   const main = opts.main ?? (await mainThread());
   // One log for the main thread and the backend, in the order things happened.
@@ -113,6 +113,8 @@ async function runner(
       pluginVersion: '0.4.0',
       onSession: (s) => sessions.push(s),
       onRunner: (s) => statuses.push(s),
+      watchFile: () => () => {},
+      signal: opts.signal,
     });
   } catch (err) {
     if (!opts.fails) throw err;
@@ -132,6 +134,8 @@ function savedSession(main: MainThread, runId: string, change: { owner?: string;
     turn: change.turn ?? 2,
     state: { ...start(main.doc, '1:2'), ...change.state },
     lastOutcome: { action: { type: 'click', element: 'e1' }, outcome: 'nothing_happened', target: 'Welcome back, Mara (e1)' },
+    timerEffects: [],
+    loopFrames: [],
   };
 }
 
@@ -203,6 +207,20 @@ describe('running a study in the panel', () => {
     expect(statuses).toContainEqual({ phase: 'paused', notice: 'Lost touch with Archetype. Retrying.' });
     expect(time.waits.slice(0, 2)).toEqual([2_000, 4_000]);
     expect(result.stop).toBe('done');
+  });
+
+  it('stops when the panel closes, leaving every run where it was to resume', async () => {
+    const closing = new AbortController();
+    const brain = (runId: string, body: TurnBody): Decision => {
+      if (runId === 'r1' && body.turn === 2) closing.abort();
+      return shortWalk(runId, body);
+    };
+    const { result, log, aborted, main } = await runner(brain, { runs: [{ runId: 'r1', status: 'queued' }, { runId: 'r2', status: 'queued' }], signal: closing.signal });
+    expect(result).toMatchObject({ stop: 'cancelled', sessions: [{ runId: 'r1', stop: 'cancelled' }, { runId: 'r2', stop: 'cancelled' }] });
+    expect(aborted).toEqual([]);
+    expect(log).not.toContain('cleanup');
+    expect(log).not.toContain('next');
+    expect([...(main.stored.get('s1')?.keys() ?? [])].sort()).toEqual(['r1', 'r2']);
   });
 
   it('fails loudly on a claim the backend refuses for good', async () => {

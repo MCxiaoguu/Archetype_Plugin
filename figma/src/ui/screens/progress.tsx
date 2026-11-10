@@ -3,7 +3,6 @@ import { runnerState } from '../../lib/poll';
 import { panelNotices, personaRows, type PersonaRow } from '../../lib/runs';
 import type { AppState, Stage } from '../../lib/state';
 import type { Effects } from '../effects';
-import { NOTICE } from '../trace/session';
 import { IconCheck, IconClock, IconExternal } from '../icons';
 import { Banner, Section, Spinner, elapsed, plural } from '../parts';
 import { useTicker } from '../store';
@@ -53,7 +52,7 @@ export function Progress({ state, fx }: { state: AppState; fx: Effects }) {
   const inPanel = !!st.record?.trace;
   const rows = personaRows(st.runs, indexFrames(state.doc), st.live);
   const runner = runnerState(st.runs, st.queuedSince, now);
-  const notices = inPanel ? panelNotices(st.live, st.runner, [NOTICE.offline, NOTICE.signIn]) : [];
+  const notices = inPanel ? panelNotices(st.live, st.runner) : [];
   const total = st.runs.length;
   const finished = rows.reduce((s, r) => s + r.finished, 0);
   const title = st.record?.title ?? 'New test';

@@ -190,14 +190,42 @@ describe('panel effects', () => {
     expect(main.call.mock.calls.filter(([type]) => type === 'trace-load')).toHaveLength(1);
   });
 
+  it('stops the sessions when the panel closes, without aborting or forgetting their runs', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const main = await mainThread();
+    const trace: TraceRecord = { owner: 'p_0123456789abcdef01234567', docHash: main.doc.docHash, startFrameId: '1:2', shareKey: null, importLibraryVariants: false };
+    const run = { runId: 'r1', archetypeId: 'a', archetypeName: 'Baseline founder', role: 'baseline', status: 'queued' };
+    const calls = installFetch((method, path, body) => {
+      if (path === '/api/studies/s7/status') return [200, { studyId: 's7', status: 'running' }];
+      if (path === '/api/studies/s7/runs') return [200, { studyId: 's7', status: 'running', runs: [run] }];
+      if (path === '/api/plugin/runs/r1/claim') return (run.status = 'running'), [200, { runId: 'r1', ...BRIEFING }];
+      if (method === 'POST' && path === '/api/plugin/runs/r1/turn') return [202, { turn: (body as { turn: number }).turn, status: 'thinking' }];
+      if (path === '/api/plugin/runs/r1/turn/1') return [200, { turn: 1, status: 'thinking' }];
+      return [404, { error: 'x', message: path }];
+    });
+    const record: StudyRecord = { studyId: 's7', title: 't', startName: 'Dashboard', goalName: 'Bank connected', size: 'quick', launchedAt: 0, status: 'running', trace };
+    const { fx } = initStore('tok', main, { studies: [record], lastStudyId: 's7' });
+    await runUntil(() => calls.includes('GET /api/plugin/runs/r1/turn/1'));
+    fx.closePanel();
+    await vi.advanceTimersByTimeAsync(600_000);
+    vi.useRealTimers();
+    expect(main.bridge.close).toHaveBeenCalled();
+    expect(calls).not.toContain('POST /api/plugin/runs/r1/abort');
+    expect(main.saves).not.toContain(null);
+    // Nothing more goes out once the panel closed.
+    const after = calls.length;
+    await new Promise((r) => setTimeout(r, 20));
+    expect(calls.length).toBe(after);
+  });
+
   it('blocks the launch where the file cannot be edited', async () => {
     const main = await mainThread();
-    main.gate.scratch = { ok: false, reason: 'Duplicate to your drafts to test' };
+    main.gate.scratch = { ok: false, reason: 'Duplicate to your drafts to test', detail: 'Cannot create nodes in a read-only document' };
     const calls = installFetch(() => [500, {}]);
     const { store, fx } = initStore('tok', main);
     fillForm(store);
     await fx.launch();
-    expect(store.get()).toMatchObject({ screen: 'new', study: null, gate: { kind: 'blocked', reason: 'Duplicate to your drafts to test' } });
+    expect(store.get()).toMatchObject({ screen: 'new', study: null, gate: { kind: 'blocked', reason: 'Duplicate to your drafts to test', detail: 'Cannot create nodes in a read-only document' } });
     expect(calls).toEqual([]);
     expect(main.gate.reads).toEqual([]);
   });
@@ -233,7 +261,15 @@ describe('panel effects', () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const main = await mainThread();
     const trace: TraceRecord = { owner: 'p_0123456789abcdef01234567', docHash: main.doc.docHash, startFrameId: '1:2', shareKey: null, importLibraryVariants: false };
-    const saved = { owner: trace.owner, runId: 'r1', turn: 2, state: start(main.doc, '1:2'), lastOutcome: null };
+    const saved = {
+      owner: trace.owner,
+      runId: 'r1',
+      turn: 2,
+      state: start(main.doc, '1:2'),
+      lastOutcome: { action: { type: 'click' as const, element: 'e1' }, outcome: 'nothing_happened' as const, target: 'Welcome back, Mara (e1)' },
+      timerEffects: [],
+      loopFrames: [],
+    };
     main.stored.set('s5', new Map([['r1', saved]]));
     const run = { runId: 'r1', archetypeId: 'a', archetypeName: 'Baseline founder', role: 'baseline', status: 'running' };
     let status = 'running';

@@ -3,7 +3,8 @@
  * runner claims every queued run of the wave under this panel's owner id,
  * runs their sessions side by side, and once all of them ended asks the
  * backend for the next wave, until it says the study is done. When the
- * panel reopens, it first resumes the runs it owns.
+ * panel reopens, it first resumes the runs it owns; when it closes (the
+ * signal), every session stops where it is, to resume then.
  *
  * No DOM and no figma globals: the bridge, the API, the clock and the status
  * callbacks come in, so the live driver runs the same runner in Node.
@@ -43,19 +44,42 @@ export interface RunnerDeps {
   pluginVersion: string;
   onSession: (status: SessionStatus) => void;
   onRunner: (status: RunnerStatus) => void;
-  watchFile?: SessionDeps['watchFile'];
+  watchFile: SessionDeps['watchFile'];
   postTurnTimeoutMs?: number;
+  /** Fires when the panel closes. */
+  signal?: AbortSignal;
 }
 
 export type RunnerResult =
   | { stop: 'done'; reason: string; sessions: SessionResult[] }
   /** wave_in_progress outlasted WAVE_WAIT_MS: the panel offers Try again, which resumes. */
-  | { stop: 'stuck'; message: string; sessions: SessionResult[] };
+  | { stop: 'stuck'; message: string; sessions: SessionResult[] }
+  /** The panel closed: the runs resume when it reopens. */
+  | { stop: 'cancelled'; sessions: SessionResult[] };
+
+/** The panel is closing: the runner stops where it is. */
+class Cancelled extends Error {
+  constructor() {
+    super('The panel closed.');
+  }
+}
 
 export async function runStudy(study: StudyTrace, deps: RunnerDeps): Promise<RunnerResult> {
+  const results: SessionResult[] = [];
+  try {
+    return await run(study, deps, results);
+  } catch (err) {
+    if (err instanceof Cancelled) return { stop: 'cancelled', sessions: results };
+    throw err;
+  }
+}
+
+async function run(study: StudyTrace, deps: RunnerDeps, results: SessionResult[]): Promise<RunnerResult> {
   const { api, bridge } = deps;
   const { studyId, owner } = study;
-  const results: SessionResult[] = [];
+  const checkCancel = () => {
+    if (deps.signal?.aborted) throw new Cancelled();
+  };
   // A start frame the engine can't start fails here, before any run is claimed.
   const { width, height } = start(study.doc, study.startFrameId).viewport;
   const claim: ClaimBody = { owner, browser: { engine: 'figma-trace', version: deps.pluginVersion, viewport: [width, height] } };
@@ -71,11 +95,13 @@ export async function runStudy(study: StudyTrace, deps: RunnerDeps): Promise<Run
     let delay = RETRY_FIRST_MS;
     let paused: RunnerStatus['phase'] | null = null;
     for (;;) {
+      checkCancel();
       try {
         const result = await work();
         if (paused) report(paused);
         return result;
       } catch (err) {
+        checkCancel();
         const why = pauseFor(err);
         if (!why) throw err;
         paused ??= phase;
@@ -126,15 +152,16 @@ export async function runStudy(study: StudyTrace, deps: RunnerDeps): Promise<Run
           onStatus: deps.onSession,
           watchFile: deps.watchFile,
           postTurnTimeoutMs: deps.postTurnTimeoutMs,
+          signal: deps.signal,
         }),
       ),
     );
+    for (const s of settled) if (s.status === 'fulfilled') results.push(s.value);
+    // The main thread's close handler removes what the closing panel's renders left.
+    checkCancel();
     // No session renders any more: whatever a render left on the page can go.
     await bridge.call('trace-cleanup', {});
-    for (const s of settled) {
-      if (s.status === 'rejected') throw s.reason;
-      results.push(s.value);
-    }
+    for (const s of settled) if (s.status === 'rejected') throw s.reason;
   }
 
   /** The next wave, waiting through wave_in_progress for up to WAVE_WAIT_MS; null when it lasts longer. */
@@ -148,6 +175,7 @@ export async function runStudy(study: StudyTrace, deps: RunnerDeps): Promise<Run
         since ??= deps.now();
         if (deps.now() - since >= WAVE_WAIT_MS) return null;
         await deps.sleep(WAVE_RETRY_MS);
+        checkCancel();
       }
     }
   }

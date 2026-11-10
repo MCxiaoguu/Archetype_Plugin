@@ -20,7 +20,7 @@ import type { Box, ProtoDoc, RawLayer, RoleHint, ScrollOffset, Size, TraceState,
 import { scrollRange } from '../lib/proto/scroll';
 import { reactionsFor } from '../lib/proto/variants';
 import { pageOf } from './document';
-import { exclusive, recordScratchNode, SCRATCH_KEY, SCRATCH_VALUE } from './scratch';
+import { exclusive, holdContainer, recordScratchNode, releaseContainer, SCRATCH_KEY, SCRATCH_VALUE } from './scratch';
 
 export interface RenderNote {
   /** Fonts that aren't available here: text set in them was left as designed. */
@@ -84,6 +84,7 @@ async function renderOnce(api: PluginAPI, doc: ProtoDoc, state: TraceState): Pro
   if (twice !== undefined) throw new Error(`The frame ${twice} is open twice on this screen, so its layers would share keys`);
   const container = api.createFrame();
   recordScratchNode(container.id);
+  holdContainer(container);
   try {
     container.name = 'Archetype trace (scratch)';
     container.setPluginData(SCRATCH_KEY, SCRATCH_VALUE);
@@ -125,7 +126,9 @@ async function renderOnce(api: PluginAPI, doc: ProtoDoc, state: TraceState): Pro
     const notes = r.missingFonts.size ? [{ missing_font: [...r.missingFonts] }] : [];
     return { image, layers, viewport: { width, height }, notes };
   } finally {
-    container.remove();
+    // Gone already when the plugin closed mid-render and the close handler removed it.
+    if (!container.removed) container.remove();
+    releaseContainer(container);
     // So the designer's next undo can't bring the copies back.
     api.commitUndo();
   }

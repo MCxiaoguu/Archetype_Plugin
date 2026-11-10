@@ -25,7 +25,10 @@ export async function mainThread(edit: (fake: Fake) => void = () => {}, log: str
   const saves: Array<SavedSession | null> = [];
   /** What clientStorage holds, by study and run. */
   const stored = new Map<string, Map<string, SavedSession>>();
-  const renders = { failures: 0, notes: null as RenderNote[] | null, change: null as ((r: TraceRenderReply) => TraceRenderReply) | null };
+  /** `failures` renders fail as an empty export; `errors` fail with these messages first. */
+  const renders = { failures: 0, errors: [] as string[], notes: null as RenderNote[] | null, change: null as ((r: TraceRenderReply) => TraceRenderReply) | null };
+  /** Saves fail with these messages, one per save, before they succeed again. */
+  const saveErrors: string[] = [];
   /** The launch gate's view of the file, and each read's importLibraryVariants. */
   const gate = { scratch: { ok: true, reason: null } as ScratchCheckReply, reads: [] as boolean[], readAs: null as ((importLibraryVariants: boolean) => ProtoDoc) | null };
   const call = vi.fn(async (type: string, payload: Record<string, unknown>) => {
@@ -36,6 +39,8 @@ export async function mainThread(edit: (fake: Fake) => void = () => {}, log: str
       return gate.readAs ? gate.readAs(importLibraryVariants) : structuredClone(doc);
     }
     if (type === 'trace-render') {
+      const error = renders.errors.shift();
+      if (error) throw new BridgeError('trace-render', error);
       if (renders.failures > 0) {
         renders.failures--;
         throw new BridgeError('trace-render', 'The export of the screen came back empty');
@@ -48,6 +53,8 @@ export async function mainThread(edit: (fake: Fake) => void = () => {}, log: str
       return renders.change ? renders.change(r) : r;
     }
     if (type === 'trace-save') {
+      const error = saveErrors.shift();
+      if (error) throw new BridgeError('trace-save', error);
       const session = structuredClone(payload.session) as SavedSession | null;
       const study = stored.get(payload.studyId as string) ?? new Map<string, SavedSession>();
       stored.set(payload.studyId as string, study);
@@ -65,8 +72,8 @@ export async function mainThread(edit: (fake: Fake) => void = () => {}, log: str
     throw new Error(`The panel should not ask for ${type}`);
   });
   // The in-process main thread answers the bridge's calls, whatever their type.
-  const bridge = { call: call as unknown as Bridge['call'] };
-  return { fake, doc, bridge, call, saves, stored, renders, gate, log };
+  const bridge = { call: call as unknown as Bridge['call'], close: vi.fn() };
+  return { fake, doc, bridge, call, saves, saveErrors, stored, renders, gate, log };
 }
 
 export type MainThread = Awaited<ReturnType<typeof mainThread>>;
