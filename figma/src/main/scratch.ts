@@ -12,6 +12,18 @@ export function isScratch(node: BaseNode): boolean {
   return 'getPluginData' in node && node.getPluginData(SCRATCH_KEY) === SCRATCH_VALUE;
 }
 
+const containers = new Set<string>();
+
+/** Notes a container this session made. A removed node's plugin data can't be read, so watchers go by these ids. */
+export function recordScratchContainer(id: string): void {
+  containers.add(id);
+}
+
+/** Every scratch container this session made, removed ones included: change watchers ignore them and their layers. */
+export function scratchContainerIds(): ReadonlySet<string> {
+  return containers;
+}
+
 const holds = new WeakMap<PluginAPI, { count: number; saved: boolean }>();
 
 /**

@@ -1356,7 +1356,13 @@
             "b": 0.9
            },
            "opacity": 1,
-           "visible": true
+           "visible": true,
+           "boundVariables": {
+            "color": {
+             "type": "VARIABLE_ALIAS",
+             "id": "VariableID:10:3"
+            }
+           }
           }
          ],
          "reactions": [
@@ -1375,14 +1381,6 @@
            ]
           }
          ],
-         "boundVariables": {
-          "fills": [
-           {
-            "type": "VARIABLE_ALIAS",
-            "id": "VariableID:10:3"
-           }
-          ]
-         },
          "children": [
           {
            "id": "I2:22;6:3",
@@ -2212,7 +2210,8 @@
             }
            ]
           }
-         ]
+         ],
+         "visible": false
         }
        ]
       }

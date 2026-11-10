@@ -4,6 +4,24 @@ import { vi } from 'vitest';
 export interface FakeWorld {
   nodes: Map<string, FakeNode>;
   flags: { skipInvisibleInstanceChildren: boolean };
+  /** Where clones and new nodes land, as on `figma.currentPage`. */
+  currentPage?: FakeNode | null;
+  /** Calls in order, for tests that check what happened when ("remove S:1", "commitUndo"). */
+  log?: string[];
+  nextId?: () => string;
+  /** Makes `exportAsync` throw, or return no bytes. */
+  exportFails?: 'throw' | 'empty' | null;
+}
+
+/** Figma names a layer inside an instance `I<instance>;<path>`: the instance's id, with one `I` in front, and the layer's path in its component. */
+const instancePrefix = (instanceId: string) => `${instanceId.startsWith('I') ? instanceId : `I${instanceId}`};`;
+
+/** A layer's path inside the component or instance it is shown in. */
+function localPath(child: FakeNode, container: FakeNode): string {
+  if (container.type !== 'INSTANCE') return child.id.replace(/^I/, '');
+  const prefix = instancePrefix(container.id);
+  if (!child.id.startsWith(prefix)) throw new Error(`Fixture: ${child.id} inside instance ${container.id} should start with ${prefix}`);
+  return child.id.slice(prefix.length);
 }
 
 /** A small stand in for the Figma Plugin API: enough of the node tree, storage and UI. */
@@ -78,6 +96,99 @@ export class FakeNode {
 
   async getMainComponentAsync(): Promise<FakeNode | null> {
     return this.mainComponentId ? (this.world?.nodes.get(this.mainComponentId) ?? null) : null;
+  }
+
+  private get w(): FakeWorld {
+    if (!this.world) throw new Error(`Fake node ${this.id} belongs to no world`);
+    return this.world;
+  }
+
+  /** A deep copy with new ids, placed on the current page as Figma does; layers inside instances get Figma's instance ids. */
+  clone(): FakeNode {
+    const copy = this.copyAs(this.w.nextId?.() ?? `${this.id}-copy`, null, null);
+    this.w.currentPage?.add(copy);
+    return copy;
+  }
+
+  private copyAs(id: string, instanceCopy: FakeNode | null, instanceOriginal: FakeNode | null): FakeNode {
+    const copy = new FakeNode(id, this.name, this.type);
+    for (const [k, v] of Object.entries(this)) {
+      if (k === 'id' || k === 'parent' || k === 'world' || k === 'kids' || typeof v === 'function') continue;
+      copy[k] = structuredClone(v);
+    }
+    copy.world = this.world;
+    this.w.nodes.set(id, copy);
+    const [into, from] = this.type === 'INSTANCE' ? [copy, this as FakeNode] : [instanceCopy, instanceOriginal];
+    for (const kid of this.kids) {
+      const kidId = into && from ? instancePrefix(into.id) + localPath(kid, from) : (this.w.nextId?.() ?? `${kid.id}-copy`);
+      copy.add(kid.copyAs(kidId, into, from));
+    }
+    return copy;
+  }
+
+  /** Shows another component in this instance: its layers replace the instance's, under Figma's instance ids. */
+  swapComponent(component: FakeNode): void {
+    this.w.log?.push(`swap ${this.id} ${component.id}`);
+    this.mainComponentId = component.id;
+    this.reactions = structuredClone(component.reactions);
+    if (component.fills !== undefined) this.fills = structuredClone(component.fills);
+    for (const kid of this.kids) kid.parent = null;
+    this.kids = [];
+    for (const kid of component.children) this.add(kid.copyAs(instancePrefix(this.id) + localPath(kid, component), this, component));
+  }
+
+  appendChild(child: FakeNode): void {
+    if (child.parent) child.parent.kids = child.parent.kids.filter((k) => k !== child);
+    this.add(child);
+  }
+
+  remove(): void {
+    this.w.log?.push(`remove ${this.id}`);
+    if (this.parent) this.parent.kids = this.parent.kids.filter((k) => k !== this);
+    this.parent = null;
+    const forget = (n: FakeNode) => {
+      n.removed = true;
+      this.w.nodes.delete(n.id);
+      n.kids.forEach(forget);
+    };
+    forget(this);
+  }
+
+  resize(width: number, height: number): void {
+    this.width = width;
+    this.height = height;
+  }
+
+  getRangeAllFontNames(): unknown[] {
+    return [this.fontName];
+  }
+
+  setExplicitVariableModeForCollection(collection: unknown, modeId: string): void {
+    // With dynamic page access, Figma refuses the deprecated form that takes a collection id.
+    if (typeof collection === 'string') throw new Error('Pass a variable collection, not its id');
+    this.explicitVariableModes = { ...(this.explicitVariableModes as Record<string, string>), [(collection as { id: string }).id]: modeId };
+  }
+
+  setBoundVariable(field: string, variable: unknown): void {
+    const bound = { ...((this.boundVariables as Record<string, unknown>) ?? {}) };
+    if (variable === null) delete bound[field];
+    else bound[field] = { type: 'VARIABLE_ALIAS', id: (variable as { id: string }).id };
+    this.boundVariables = bound;
+  }
+
+  /** What the export draws, as JSON bytes, so tests can see what was rendered. */
+  async exportAsync(settings: unknown): Promise<Uint8Array> {
+    this.w.log?.push(`export ${this.id} ${JSON.stringify(settings)} skipInvisible=${this.w.flags.skipInvisibleInstanceChildren}`);
+    if (this.w.exportFails === 'throw') throw new Error('Export failed');
+    if (this.w.exportFails === 'empty') return new Uint8Array();
+    return new TextEncoder().encode(JSON.stringify(this.drawn()));
+  }
+
+  drawn(): Record<string, unknown> {
+    const out: Record<string, unknown> = { id: this.id, name: this.name, x: this.x, y: this.y, width: this.width, height: this.height, visible: this.visible };
+    for (const k of ['characters', 'fills', 'opacity', 'explicitVariableModes', 'layoutMode']) if (this[k] !== undefined && this[k] !== '') out[k] = this[k];
+    if (this.kids.length) out.children = this.kids.map((k) => k.drawn());
+    return out;
   }
 
   findAll(pred: (n: FakeNode) => boolean): FakeNode[] {
@@ -231,7 +342,14 @@ function build(world: FakeWorld, spec: FixtureNode): FakeNode {
 
 /** A fake file built from a prototype fixture, with the variables API, library imports and the API flags. */
 export function fakeFromFixture(fixture: ProtoFixture) {
-  const world: FakeWorld = { nodes: new Map(), flags: { skipInvisibleInstanceChildren: true } };
+  let made = 0;
+  const world: FakeWorld = {
+    nodes: new Map(),
+    flags: { skipInvisibleInstanceChildren: true },
+    log: [],
+    nextId: () => `90:${++made}`,
+    exportFails: null,
+  };
   const root = new FakeNode('0:0', fixture.fileName, 'DOCUMENT');
   root.world = world;
   world.nodes.set(root.id, root);
@@ -247,9 +365,22 @@ export function fakeFromFixture(fixture: ProtoFixture) {
   });
 
   const pages = root.children;
+  world.currentPage = pages[0] as FakeNode;
+  const create = (type: string, name: string) => {
+    const node = new FakeNode(world.nextId?.() as string, name, type);
+    node.world = world;
+    world.nodes.set(node.id, node);
+    world.currentPage?.add(node);
+    world.log?.push(`create ${node.id}`);
+    return node;
+  };
   const api = {
     root,
     currentPage: pages[0] as FakeNode,
+    createFrame: vi.fn(() => Object.assign(create('FRAME', 'Frame'), { fills: [{ type: 'SOLID', color: { r: 1, g: 1, b: 1 }, opacity: 1, visible: true }], clipsContent: true })),
+    createRectangle: vi.fn(() => create('RECTANGLE', 'Rectangle')),
+    loadFontAsync: vi.fn(async (font: unknown) => void world.log?.push(`loadFont ${JSON.stringify(font)}`)),
+    commitUndo: vi.fn(() => void world.log?.push('commitUndo')),
     get skipInvisibleInstanceChildren() {
       return world.flags.skipInvisibleInstanceChildren;
     },
@@ -263,6 +394,7 @@ export function fakeFromFixture(fixture: ProtoFixture) {
       return node;
     }),
     variables: {
+      getVariableCollectionByIdAsync: vi.fn(async (id: string) => structuredClone(collections.find((c) => c.id === id) ?? null)),
       getLocalVariableCollectionsAsync: vi.fn(async () => structuredClone(collections)),
       getVariableByIdAsync: vi.fn(async (id: string) => (variables.has(id) ? structuredClone(variables.get(id)) : null)),
     },
