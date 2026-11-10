@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { liveConfig, openWireframer, readText, saveFile, type Wireframer } from '../harness/live.mjs';
-import { ApiClient, ApiError, type ClaimBody, type NextWave, type RunBriefing, type StudyRuns, type TurnBody, type TurnView } from '../src/lib/api';
+import { ApiClient, ApiError, type ClaimBody, type FlowMapCommit, type NextWave, type RunBriefing, type StudyPaths, type StudyRuns, type TurnBody, type TurnView } from '../src/lib/api';
+import type { FlowMap } from '../src/lib/proto/flow';
 import type { ProtoDoc } from '../src/lib/proto/model';
 import type { RunnerStatus } from '../src/lib/runs';
 import { runStudy, type RunnerDeps, type RunnerResult } from '../src/ui/trace/runner';
@@ -35,6 +36,8 @@ const REFUSED = new Set([400, 413]);
 /** A turn decided inside the request: about 4 s, 10 to 20 s with the debrief; a give-up review asks twice. */
 const POST_TURN_TIMEOUT_MS = 180_000;
 const MAX_SCREENSHOT_BYTES = 1.5 * 1024 * 1024;
+/** A persona quitting over things that didn't respond: what the flow map is there to end. */
+const UNRESPONSIVE = /unresponsive|not respond|n't respond|does nothing|do nothing|nothing happen|non-?functional|broken|n't work/i;
 /** The trace brain's model, as the report and each run name it. */
 const ACTOR_MODEL = 'google:gemini-3-flash-preview';
 
@@ -54,6 +57,7 @@ interface TurnRecord {
   visibleText: string;
   last: TurnBody['last'];
   flags: TurnBody['flags'];
+  flagDetails: TurnBody['flag_details'] | null;
   polls: number;
   decided: TurnView | null;
   /** From the post's start to the decision the panel read. */
@@ -106,7 +110,22 @@ describe.skipIf(!LIVE.url)('a live trace study against the local backend', () =>
   const startedAt = Date.now();
 
   const names = new Map<string, string>();
-  const claims: Array<{ runId: string; body: ClaimBody }> = [];
+  const claims: Array<{ runId: string; at: string; body: ClaimBody }> = [];
+  /** The flow map as the runner committed and polled it: each commit, each build poll, each version it held. */
+  const flow = {
+    commits: [] as Array<{ at: string; ms: number; body: FlowMapCommit; answer: { status: string; buildId?: string; version?: number } | null; error: string | null }>,
+    polls: [] as Array<{ at: string; status: string; nodesRead?: number; nodesToRead?: number; version?: number }>,
+    maps: new Map<number, FlowMap>(),
+    /** When the runner first held a ready version. */
+    readyAt: null as string | null,
+  };
+  const held = (map: FlowMap) => {
+    flow.maps.set(map.version, map);
+    flow.readyAt ??= new Date().toISOString();
+    return map;
+  };
+  let finalMap: FlowMap;
+  let paths: StudyPaths;
   const waves: Array<{ at: string; answer: NextWave | null; error: string | null }> = [];
   const runner: RunnerStatus[] = [];
 
@@ -133,7 +152,7 @@ describe.skipIf(!LIVE.url)('a live trace study against the local backend', () =>
       return listed;
     },
     async claimRun(runId: string, body: ClaimBody) {
-      claims.push({ runId, body });
+      claims.push({ runId, at: new Date().toISOString(), body });
       const run = logOf(runId);
       run.claimedAt = new Date().toISOString();
       const briefing = await client.claimRun(runId, body);
@@ -141,9 +160,34 @@ describe.skipIf(!LIVE.url)('a live trace study against the local backend', () =>
       run.briefing = briefing;
       return briefing;
     },
-    commitFlowMap: (id, body) => client.commitFlowMap(id, body),
-    getFlowBuild: (id, buildId) => client.getFlowBuild(id, buildId),
-    getFlowMap: (id, version) => client.getFlowMap(id, version),
+    async commitFlowMap(id, body) {
+      const at = Date.now();
+      const commit = { at: new Date(at).toISOString(), ms: 0, body, answer: null as { status: string; buildId?: string; version?: number } | null, error: null as string | null };
+      flow.commits.push(commit);
+      try {
+        const answer = await client.commitFlowMap(id, body);
+        commit.ms = Date.now() - at;
+        commit.answer = answer.status === 'ready' ? { status: 'ready', version: held(answer.map).version } : { status: 'building', buildId: answer.buildId };
+        return answer;
+      } catch (err) {
+        commit.ms = Date.now() - at;
+        commit.error = err instanceof ApiError ? `${err.status} ${err.code}: ${err.message}` : String(err);
+        throw err;
+      }
+    },
+    async getFlowBuild(id, buildId) {
+      const build = await client.getFlowBuild(id, buildId);
+      const poll = { at: new Date().toISOString(), status: build.status } as (typeof flow.polls)[number];
+      if (build.status === 'building') Object.assign(poll, { nodesRead: build.nodesRead, nodesToRead: build.nodesToRead });
+      if (build.status === 'ready') poll.version = held(build.map).version;
+      flow.polls.push(poll);
+      return build;
+    },
+    async getFlowMap(id, version) {
+      const read = await client.getFlowMap(id, version);
+      held(read.map);
+      return read;
+    },
     async nextWave(id: string) {
       const at = new Date().toISOString();
       try {
@@ -173,6 +217,7 @@ describe.skipIf(!LIVE.url)('a live trace study against the local backend', () =>
           visibleText: body.visible_text_excerpt,
           last: body.last,
           flags: body.flags,
+          flagDetails: body.flag_details ?? null,
           polls: 0,
           decided: null,
           decideMs: null,
@@ -237,12 +282,40 @@ describe.skipIf(!LIVE.url)('a live trace study against the local backend', () =>
       wallMs: Date.now() - startedAt,
     };
     log.refusals = refusals;
+    const lastCommit = last(flow.commits);
+    log.flowMap = {
+      commits: flow.commits.map((c) => ({ at: c.at, ms: c.ms, baseVersion: c.body.baseVersion, nodes: c.body.nodes.length, edges: c.body.edges.length, candidates: c.body.candidates.length, answer: c.answer, error: c.error })),
+      polls: flow.polls,
+      readyAt: flow.readyAt,
+      versions: [...flow.maps.keys()],
+      // Every reading of the version the runs played, as label → kind (and where an edge goes).
+      readings: finalMap ? readingsTable(finalMap) : null,
+      candidates: lastCommit ? lastCommit.body.candidates.map((c) => ({ node: c.node, label: c.label, role: c.role, shareKey: c.shareKey })) : null,
+    };
     log.claims = claims;
     log.waves = waves;
     log.runs = all;
     saveFile(folder, 'log.json', JSON.stringify(log, null, 2));
     if (report) saveFile(folder, 'report.json', JSON.stringify(report, null, 2));
     if (state) saveFile(folder, 'state.json', JSON.stringify(state, null, 2));
+    if (finalMap) saveFile(folder, 'flow-map.json', JSON.stringify(finalMap, null, 2));
+    if (paths) saveFile(folder, 'paths.json', JSON.stringify(paths, null, 2));
+  }
+
+  /** A map's readings as the run log shows them: label → kind, the frame an edge goes to, and where the label appears. */
+  function readingsTable(map: FlowMap) {
+    const nameOf = new Map(map.nodes.map((n) => [n.id, n.name]));
+    return map.readings.map((r) => ({
+      id: r.id,
+      label: r.label,
+      role: r.role,
+      kind: r.kind,
+      to: r.to,
+      toName: r.to ? (nameOf.get(r.to) ?? null) : null,
+      on: [...new Set(r.nodes.map((n) => nameOf.get(n) ?? n))],
+      by: r.by,
+      reason: r.reason,
+    }));
   }
 
   /** The live server's log from where this run began, line by line: what it refused, and the model calls it retried. */
@@ -333,6 +406,8 @@ describe.skipIf(!LIVE.url)('a live trace study against the local backend', () =>
         run.wave = row.wave ?? null;
         run.archetypeName = row.archetypeName;
       }
+      finalMap = held((await client.getFlowMap(studyId)).map);
+      paths = await client.getPaths(studyId);
       report = await client.getReport(studyId);
       state = await liveState(base);
       log.outcomes = testDocs().map((d) => {
@@ -348,7 +423,9 @@ describe.skipIf(!LIVE.url)('a live trace study against the local backend', () =>
           verdict: feedback.verdict ?? null,
           summary: feedback.summary ?? null,
           personaReaction: feedback.personaReaction ?? null,
-          findings: feedback.findings ?? [],
+          findings: feedback.findings ?? null,
+          needs: feedback.needs ?? null,
+          ...behaviourOf(d.test_id as string),
         };
       });
     } finally {
@@ -368,13 +445,137 @@ describe.skipIf(!LIVE.url)('a live trace study against the local backend', () =>
     return [...((logDoc?.steps as Doc[] | undefined) ?? [])].sort((a, b) => (a.seq as number) - (b.seq as number));
   };
 
+  /** What each turn's `last` says the action before it did, with the screen it was taken on. */
+  function actions(run: RunLog) {
+    return run.turns.slice(1).map((t, i) => ({ turn: t.turn, on: run.turns[i] as TurnRecord, last: t.last as NonNullable<TurnBody['last']>, flags: t.flags, details: t.flagDetails }));
+  }
+
+  /** What a persona did with the map: its path, how each kind of reading came out, and whether it quit over things that didn't respond. */
+  function behaviourOf(runId: string) {
+    const run = runs.get(runId) as RunLog;
+    const count = (pick: (a: ReturnType<typeof actions>[number]) => boolean) => actions(run).filter(pick).length;
+    const end = last(run.turns)?.decided as { action?: { type?: string; reason?: string } | null } | null | undefined;
+    const results = ((testDocs().find((d) => d.test_id === runId)?.results ?? {}) as Doc);
+    const quitWords = [end?.action?.type === 'give_up' ? end.action.reason ?? '' : '', String(((results.outcome ?? {}) as Doc).in_their_words ?? '')].join(' ');
+    const gapsClicked = [...new Set(actions(run).filter((a) => a.last.outcome === 'missing').map((a) => (a.last.target ?? '').replace(/ \(e\d+\)$/, '')))];
+    return {
+      steps: actions(run).map((a) => `${a.on.screen.title}${a.on.screen.overlays.length ? '+' + a.on.screen.overlays.join(',') : ''}: ${a.last.action.type} ${a.last.target ?? ''} → ${a.last.outcome}${a.last.reading ? ` (${a.last.reading})` : ''}`),
+      outcomes: {
+        accepted: count((a) => a.last.outcome === 'accepted'),
+        missing: count((a) => a.last.outcome === 'missing'),
+        alreadyHere: count((a) => a.last.outcome === 'already_here'),
+        inferred: count((a) => a.last.outcome === 'navigated' && !!a.last.reading),
+        nothingHappened: count((a) => a.last.outcome === 'nothing_happened'),
+        mapMisses: count((a) => a.flags.includes('map_miss')),
+      },
+      // A quit naming a gap it clicked is a feature it missed; one that says things didn't respond is what the map is there to end.
+      gaveUpOverGap: end?.action?.type === 'give_up' ? gapsClicked.filter((label) => quitWords.includes(label)) : [],
+      gaveUpOverUnresponsive: end?.action?.type === 'give_up' && UNRESPONSIVE.test(quitWords),
+      quitWords: quitWords.trim() || null,
+    };
+  }
+
   it('runs the study to done through the runner, claiming every run once, in whole pixels', () => {
     expect(runnerResult).toMatchObject({ stop: 'done' });
     expect(runnerResult.sessions.map((s) => s.runId).sort()).toEqual([...runs.keys()].sort());
     expect(claims.map((c) => c.runId).sort()).toEqual([...runs.keys()].sort());
     for (const { body } of claims) {
-      expect(body).toEqual({ owner: OWNER, browser: { engine: 'figma-trace', version: '0.1.0', viewport: [1280, 800] } });
+      expect(body).toEqual({ owner: OWNER, browser: { engine: 'figma-trace', version: '0.1.0', viewport: [1280, 800] }, flowMapVersion: finalMap.version });
     }
+  });
+
+  it('commits the flow map before the first claim, and every claim and run plays that version', () => {
+    expect(flow.commits.length).toBeGreaterThan(0);
+    expect(flow.commits.every((c) => c.error === null)).toBe(true);
+    expect(flow.readyAt).not.toBeNull();
+    const firstClaim = claims.map((c) => c.at).sort()[0] as string;
+    expect(Date.parse(flow.readyAt as string)).toBeLessThanOrEqual(Date.parse(firstClaim));
+    // One read of the file, one version: nothing edited the map while the runs played.
+    expect([...flow.maps.keys()]).toEqual([finalMap.version]);
+    for (const run of runs.values()) expect(run.briefing?.flowMapVersion, run.runId).toBe(finalMap.version);
+    for (const test of testDocs()) expect((test.test_meta as Doc).flow_map_version, test.test_id as string).toBe(finalMap.version);
+  });
+
+  it('reads the Farside billing flow plausibly: every candidate read once, edges to frames, the routing link a gap, the code field a control', () => {
+    const commit = last(flow.commits) as (typeof flow.commits)[number];
+    const keys = [...new Set(commit.body.candidates.map((c) => c.shareKey))].sort();
+    expect(finalMap.readings.map((r) => r.shareKey).sort()).toEqual(keys);
+    const frames = new Set(finalMap.nodes.filter((n) => n.kind === 'frame').map((n) => n.id));
+    for (const r of finalMap.readings) {
+      expect(r.by, r.label).toBe('model');
+      if (r.kind === 'edge') expect(frames.has(r.to as string), `${r.label} → ${r.to}`).toBe(true);
+      else expect(r.to, r.label).toBeNull();
+    }
+    const byLabel = (label: string) => finalMap.readings.filter((r) => r.label === label);
+    // No screen takes a routing number: there is no page behind it.
+    expect(byLabel('Use routing number instead').map((r) => r.kind)).toEqual(['gap']);
+    // Verify phone's code field takes the code.
+    expect(byLabel('Enter the 6 digit code').map((r) => r.kind)).toEqual(['control']);
+  });
+
+  it('plays a reading wherever a click on a candidate meets no reaction: nothing_happened only with a map_miss', () => {
+    const candidate = new Set((last(flow.commits) as (typeof flow.commits)[number]).body.candidates.map((c) => `${c.node} ${c.label.trim().toLowerCase()}`));
+    const isCandidate = (node: string, label: string) => candidate.has(`${node} ${label.trim().toLowerCase()}`);
+    const unflagged: unknown[] = [];
+    const blocked: unknown[] = [];
+    for (const run of runs.values()) {
+      for (const a of actions(run)) {
+        if (a.last.action.type !== 'click' || a.last.outcome !== 'nothing_happened') continue;
+        const label = a.on.elements.find((e) => e.id === (a.last.action as { element: string }).element)?.label ?? '';
+        const top = last(a.on.screen.overlays);
+        // With an overlay open only its layers can be hit (Figma's rule): a candidate beneath it is not reached.
+        if (top !== undefined && !isCandidate(top, label)) {
+          if (isCandidate(a.on.screen.frameId, label)) blocked.push({ runId: run.runId, turn: a.turn, label, overlay: top });
+          continue;
+        }
+        const node = top ?? a.on.screen.frameId;
+        if (isCandidate(node, label) && !a.flags.includes('map_miss')) unflagged.push({ runId: run.runId, turn: a.turn, node, label });
+      }
+    }
+    log.mapMissCheck = { unflagged, blockedByOverlay: blocked };
+    saveFile(folder, 'log.json', JSON.stringify(log, null, 2));
+    expect(unflagged).toEqual([]);
+  });
+
+  it('reports the flow, not findings: a path per run, every gap click a feature need, every inferred move a transition', () => {
+    expect(report.findings).toBeNull();
+    const reportFlow = report.flow as Doc;
+    expect(reportFlow).toBeTruthy();
+    const scored = testDocs().filter((d) => d.status !== 'aborted').map((d) => d.test_id as string);
+    expect((reportFlow.paths as Doc[]).map((p) => p.runId).sort()).toEqual([...scored].sort());
+    for (const row of report.runs as Doc[]) expect(row.findings, row.runId as string).toBeNull();
+    for (const test of testDocs()) {
+      if (test.status === 'aborted') continue;
+      expect(((test.results as Doc).plugin_feedback as Doc).findings, test.test_id as string).toEqual([]);
+    }
+    const needs = reportFlow.featureNeeds as Doc[];
+    const transitions = reportFlow.inferredTransitions as Doc[];
+    const listed = (entries: Doc[], reading: string, runId: string) => entries.some((e) => e.reading === reading && (e.runIds as string[]).includes(runId));
+    const unlisted: unknown[] = [];
+    for (const run of runs.values()) {
+      if (!scored.includes(run.runId)) continue;
+      for (const a of actions(run)) {
+        if (a.last.outcome === 'missing' && !listed(needs, a.last.reading as string, run.runId)) unlisted.push({ need: a.last.reading, runId: run.runId, turn: a.turn });
+        if (a.last.outcome === 'navigated' && a.last.reading && !listed(transitions, a.last.reading, run.runId)) unlisted.push({ transition: a.last.reading, runId: run.runId, turn: a.turn });
+      }
+    }
+    expect(unlisted).toEqual([]);
+  });
+
+  it('builds the recommendations from the flow: they cite its needs and transitions, never a finding', () => {
+    const reportFlow = report.flow as Doc;
+    const flowIds = [
+      ...(reportFlow.featureNeeds as Doc[]).map((n) => `need:${n.id as string}`),
+      ...(reportFlow.inferredTransitions as Doc[]).map((t) => `transition:${t.id as string}`),
+    ];
+    const refs = (report.recommendations as Doc[]).flatMap((r) => (r.evidenceRefs as string[] | undefined) ?? []);
+    const cited = refs.filter((r) => r.startsWith('need:') || r.startsWith('transition:'));
+    // The model picks what to recommend: a need or a transition it leaves out is recorded, not a failure.
+    log.recommendations = { flowIds, refs, uncited: flowIds.filter((id) => !cited.includes(id)) };
+    saveFile(folder, 'log.json', JSON.stringify(log, null, 2));
+    for (const ref of cited) expect(flowIds).toContain(ref);
+    if (flowIds.length) expect(cited.length).toBeGreaterThan(0);
+    expect(refs.filter((r) => r.startsWith('cluster:'))).toEqual([]);
   });
 
   it('ends every run: completed, abandoned or aborted', () => {
@@ -507,6 +708,7 @@ describe.skipIf(!LIVE.url)('a live trace study against the local backend', () =>
       words.push({ where: `finding ${i} description`, text: String(finding.description ?? '') });
       words.push({ where: `finding ${i} quote`, text: String(((finding.evidence ?? {}) as Doc).quote ?? '') });
     }
+    for (const [i, need] of ((feedback.needs as Doc[] | undefined) ?? []).entries()) words.push({ where: `need ${i}`, text: String(need.text ?? '') });
     return words.filter((w) => w.text);
   }
 
@@ -544,22 +746,16 @@ describe.skipIf(!LIVE.url)('a live trace study against the local backend', () =>
     expect(mentions).toEqual([]);
   });
 
-  it('never files the prototype\'s sample greeting as a wrong user name', () => {
+  it('never files the prototype\'s sample greeting as a wrong user name, as a finding or a need', () => {
     const wrong = testDocs().flatMap((test) => {
       const feedback = ((test.results as Doc | undefined)?.plugin_feedback ?? {}) as Doc;
-      return ((feedback.findings as Doc[] | undefined) ?? []).filter((f) => readsGreetingAsWrongName(f)).map((f) => ({ runId: test.test_id, description: f.description }));
+      const said = [
+        ...((feedback.findings as Doc[] | undefined) ?? []).map((f) => f.description),
+        ...((feedback.needs as Doc[] | undefined) ?? []).map((n) => n.text),
+      ];
+      return said.filter((text) => readsGreetingAsWrongName({ description: text })).map((text) => ({ runId: test.test_id, text }));
     });
     expect(wrong).toEqual([]);
-  });
-
-  it('cites, in each debrief finding, a step URL of that run', () => {
-    for (const test of testDocs()) {
-      const urls = new Set(stepsOf(test.test_id as string).map((s) => s.url as string));
-      const feedback = (test.results as Doc | undefined)?.plugin_feedback as Doc | undefined;
-      for (const finding of (feedback?.findings as Doc[] | undefined) ?? []) {
-        expect(urls.has((finding.evidence as Doc).url as string), `${test.test_id as string}: ${JSON.stringify(finding)}`).toBe(true);
-      }
-    }
   });
 
   it('leaves the file as it was: no scratch container, every original node untouched', async () => {
