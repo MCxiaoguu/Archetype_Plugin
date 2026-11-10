@@ -147,16 +147,12 @@ export function apply(
   const ctx = context(doc, index);
   const pointer = pointerDeps(ctx, index);
   const at = (element: string) => targetOf(targets, element);
-  /** The reading of the element's own layer, with the node the element is on. */
-  const readingAt = (target: ElementTarget) => {
-    const node = rootOf(index, target.layerKey);
-    const reading = readingOf ? readingOf(node, target.layerKey) : null;
-    return reading ? { reading, node } : null;
-  };
+  /** The reading of the element's own layer, on the node (frame or overlay) it is in. */
+  const readingAt = (target: ElementTarget) => (readingOf ? readingOf(rootOf(index, target.layerKey), target.layerKey) : null);
 
   let fallback: TraceOutcome = 'nothing_happened';
   let looped: string[] | null = null;
-  let read: { reading: ElementReading; node: string } | null = null;
+  let read: ElementReading | null = null;
   switch (action.type) {
     case 'click': {
       const target = at(action.element);
@@ -195,7 +191,7 @@ export function apply(
       s.focus = { layerKey: target.layerKey, frameId: rootOf(index, target.layerKey) };
       if (typeText(keyDeps(ctx, index), s, action.text)) break;
       const typedInto = readingAt(target);
-      if (typedInto?.reading.kind === 'control') read = typedInto;
+      if (typedInto?.kind === 'control') read = typedInto;
       break;
     }
     case 'wait': {
@@ -212,20 +208,24 @@ export function apply(
   }
   if (read) {
     // The reading's outcome stands for the action, whatever the pointer's move changed on the way.
-    const outcome = playReading(ctx, s, read.reading, read.node);
+    const outcome = playReading(ctx, s, read);
     prune(s);
-    return { state: s, outcome, effects: ctx.effects, looped, reading: read.reading };
+    return { state: s, outcome, effects: ctx.effects, looped, reading: read };
   }
   prune(s);
   return { state: s, outcome: outcomeOf(state, s, ctx.effects, fallback), effects: ctx.effects, looped, reading: null };
 }
 
-/** Plays the flow map's reading of an element on the node `node`: an edge navigates, unless it goes where the persona is. */
-function playReading(ctx: Context, s: TraceState, reading: ElementReading, node: string): TraceOutcome {
+/**
+ * Plays the flow map's reading of an element: an edge navigates, unless it
+ * goes to the frame the screen shows (overlays open on it or not), where
+ * the persona already is.
+ */
+function playReading(ctx: Context, s: TraceState, reading: ElementReading): TraceOutcome {
   if (reading.kind === 'control') return 'accepted';
   if (reading.kind === 'gap') return 'missing';
   if (reading.to === null) throw new EngineError('invalid_doc', `The flow map's edge ${reading.id} goes nowhere`);
-  if (reading.to === node) return 'already_here';
+  if (reading.to === s.frameId) return 'already_here';
   showBase(ctx, s, frameOf(ctx, reading.to), { ...INFERRED_NAVIGATE, destinationId: reading.to }, true);
   return 'navigated';
 }

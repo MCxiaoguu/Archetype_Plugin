@@ -89,14 +89,18 @@ describe('readings of the flow map', () => {
       expect(lookup.asked).toEqual(['A para']);
     });
 
-    it('in an overlay reads the overlay as its node', () => {
+    it('in an overlay reads the overlay as its node, and is already here on an edge to the frame under it', () => {
       const doc = protoDoc([A, B, overlayFrame('O', 200, 100)], { btn: [on('ON_CLICK', openOverlay('O'))] });
       const opened = run(doc, start(doc, 'A'), click('btn'), null).state;
       const withOverlay = [...screen, layer('O', null, [100, 350, 200, 100]), layer('o-link', 'O', [120, 370, 100, 30])];
-      const lookup = map({ 'O o-link': edge('c6', 'O') });
-      const { outcome } = run(doc, opened, click('o-link'), lookup, withOverlay);
+      const here = map({ 'O o-link': edge('c6', 'A') });
+      const { outcome, state } = run(doc, opened, click('o-link'), here, withOverlay);
       expect(outcome).toBe('already_here');
-      expect(lookup.asked).toEqual(['O o-link']);
+      expect(state.overlays.map((o) => o.frameId)).toEqual(['O']);
+      expect(here.asked).toEqual(['O o-link']);
+      const away = run(doc, opened, click('o-link'), map({ 'O o-link': edge('c6', 'B') }), withOverlay);
+      expect(away.outcome).toBe('navigated');
+      expect(away.state).toMatchObject({ frameId: 'B', overlays: [], history: ['A'] });
     });
 
     it("stands for the action, whatever the pointer's move changed on the way", () => {
