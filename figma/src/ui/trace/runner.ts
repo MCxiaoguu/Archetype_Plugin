@@ -282,8 +282,9 @@ async function run(study: StudyTrace, deps: RunnerDeps, results: SessionResult[]
     else await bridge.call('trace-save', { studyId, runId: s.runId, session: null });
   }
   // A running run nothing was saved for here: this panel's when it closed before the turn 0 save
-  // landed, or another panel's. Claimed again, the backend says which; one of ours starts from
-  // turn 1 and catches up with the turns the backend already holds.
+  // landed, or another panel's. Claimed again, the backend says which. One of ours starts from
+  // turn 1; if the backend already holds turns of it, nothing saved says the file is as it was
+  // then, so the session aborts it with panel_state_lost rather than replay them.
   const savedHere = new Set(saved.map((s) => s.runId));
   const unsaved = runs.filter((r) => r.status === 'running' && !savedHere.has(r.runId)).map((r) => r.runId);
   await claimEach([...runs.filter((r) => r.status === 'queued').map((r) => r.runId), ...unsaved]);

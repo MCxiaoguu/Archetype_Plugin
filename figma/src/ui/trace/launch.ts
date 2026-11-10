@@ -220,8 +220,10 @@ export function createTracePanel(deps: TracePanelDeps) {
 
   /**
    * Forgets the saved progress of the study on screen, which this plugin
-   * can't read, and runs it on without: its runs with saved state are left
-   * to the backend's watchdog, as runs with no saved state are.
+   * can't read, and runs it on without. Its running runs, saved here no
+   * more, are claimed again: one with no turns yet starts from the first,
+   * and one the backend already holds turns of is aborted with
+   * panel_state_lost, since nothing saved says where it was.
    */
   async function forgetProgress() {
     const st = store.get().study;

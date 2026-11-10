@@ -10,8 +10,8 @@ import { BridgeError } from '../src/ui/trace/bridge';
 import type { FakeNode } from './fake-figma';
 import { clock, click, DONE, farside, lastOf, mainThread, type Decision, type Fake } from './trace-fakes';
 
-// The engine runs for real; a test can make `apply` throw an EngineError the
-// engine has no way to raise yet (doc_changed lands with the engine review).
+// The engine runs for real; a test can make `apply` throw any EngineError,
+// also ones the Farside path never raises (doc_changed, invalid_doc).
 const hooks = vi.hoisted(() => ({ applyError: null as Error | null }));
 vi.mock('../src/lib/proto/engine', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/lib/proto/engine')>();

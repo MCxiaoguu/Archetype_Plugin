@@ -22,8 +22,8 @@ studies API. The account is the product; the listing is free.
 | Screen | What you see |
 | :-- | :-- |
 | Sign in | One button. Archetype opens in your browser with a short code; approve it there and the panel carries on by itself. |
-| New test | Start and goal screens (from your selection or a list), the goal, who your user is, an optional product line, the share link, and Quick or Thorough. A preflight runs on every change. |
-| Running | Three stages (understanding your users, building personas, running), then one row per persona with its status, the screen it is on and its step count. If nobody picks the tests up within three minutes it says, plainly, "Waiting for a runner". |
+| New test | Start and goal screens (from your selection or a list), the goal, who your user is, an optional product line, an optional share link, and Quick or Thorough. A preflight runs on every change. |
+| Running | Three stages (understanding your users, building personas, running), then one row per persona with its status, the screen it is on and its turn, while the panel itself walks each persona through the prototype. It says when it starts the next round of tries, when it lost touch with Archetype, and, for a test reopened on another page, which page the test runs on, with a button to go there. |
 | Report | How many tries reached the goal, the headline, each persona with the report's own confidence words ("99% likely lower completion"), the top findings with severity and the frames they happened on, where people gave up by screen, and what to change first. |
 | Past tests | Every test launched from this file, newest first. Reopening the plugin returns to the last one. |
 
@@ -93,19 +93,25 @@ still exists for other `execution: "remote"` studies, but it never claims a
 Figma study's runs.
 
 The panel must stay open while a test runs, because it is doing the walking.
-Closing it pauses every session it owns until it reopens; on the web, keep the
-tab visible — browsers slow or stop timers in a background tab, and the panel
-warns you when it notices itself running late. All queued runs of a wave run
-in parallel in the same panel, and the panel asks for the next wave itself
-once every run of the current one has ended.
+Closing it pauses every session it owns until it reopens, on the test's page;
+a run left closed for 20 minutes is ended by the backend's watchdog. On the
+web, keep the tab visible — browsers slow or stop timers in a background tab,
+and the panel warns you when it notices itself running late. All queued runs
+of a wave run in parallel in the same panel, and the panel asks for the next
+wave itself once every run of the current one has ended. Each wave plays the
+prototype as the file is when the wave starts; when you edit the file while a
+test runs, the steps after the edit are flagged, so the report can tell them
+apart.
 
 ## Privacy: what leaves the file
 
 | Sent to Archetype | Never sent |
 | :-- | :-- |
-| The goal, the user description and the product line you type | Screens no persona reaches, other pages, other files |
-| The file and page names, the start and goal frame ids, and the names of up to 20 screens on the paths from start to goal | Comments, the layer tree, variables, the reaction graph |
-| During a test, for every step: a screenshot of the screen the persona sees, its visible text, and the labels, roles and boxes of what can be clicked | Anything from your clipboard |
+| The goal, the user description and the product line you type | Screens no persona reaches, other files |
+| The file and page names, the start and goal frame ids, and the names of up to 20 screens on the paths from start to goal | Comments, the layer tree, variable values, the reaction graph |
+| During a test, for every step: a screenshot of the screen the persona sees, its name and step URL (page name and frame ids), its visible text, and the labels, roles and boxes of what can be clicked | Anything from your clipboard |
+| When a step's action can't be played: what it was, which can name a variable, a variable collection or a mode (for example "Can't set Bank linked, a boolean variable, to a string") | |
+| When a timer opens a link: the link's address, up to 200 characters | |
 | The share link, if you paste one | |
 
 The screenshots and text of each step go to Archetype and its AI model provider,
@@ -144,8 +150,14 @@ the history follows the file.
 | `manifest.json` | `editorType: ["figma"]`, `documentAccess: "dynamic-page"`, network access limited to the Archetype API. |
 | `src/code.ts` | Entry: shows the panel with theme colors, wires selection and page change events. |
 | `src/main/document.ts` | Turns the current page into a plain `DocSnapshot`: top level frames (sections included), every layer with reactions mapped to its frame, destinations resolved, conditional actions flattened. |
+| `src/main/protoReader.ts` | Reads the prototype into a `ProtoDoc` for the trace engine: frames, every reaction, the variants a CHANGE_TO can show, the local variables. |
+| `src/main/renderer.ts` | Renders a trace state on scratch copies of the screens, measures every layer and exports the viewport as a JPEG, then removes the copies. |
+| `src/main/trace.ts` | Answers the panel's trace requests (read, render by doc hash, save and load sessions, the edit access check, cleanup) and reports edits to the prototype's frames. |
+| `src/main/watch.ts`, `scratch.ts` | Telling the designer's edits from the renderer's own copies; the scratch marks, the containers renders hold, and the one queue reads and renders run through. |
 | `src/main/canvas.ts` | Show on canvas, pin and clear annotations. |
-| `src/main/storage.ts` | Settings, token, per file history and draft. |
+| `src/main/storage.ts` | Settings, token, per file history and draft, and the saved progress of running tests. |
+| `src/lib/proto/*` | The prototype engine, pure: navigation, overlays, scroll, pointer and keys, timers, variables and conditions, variants, what a persona can act on, step URLs. |
+| `src/ui/trace/*` | The trace runner: the bridge to the main thread (one render at a time), a persona's session, the runner of a study's waves, and the launch gate and runner wiring. |
 | `src/lib/ids.ts`, `links.ts` | Colon and dash node ids, share link parsing, and the prototype URL. |
 | `src/lib/graph.ts`, `preflight.ts`, `names.ts` | The reaction graph, breadth first reachability, dead ends, broken links, generic names. |
 | `src/lib/study.ts`, `launch.ts` | The `POST /api/studies` body and the resumable launch sequence (factors, personas, wave 1). |
@@ -158,9 +170,9 @@ the history follows the file.
 Prototype URLs put `node-id` first and `starting-point-node-id` second, as
 Figma does. The viewer rewrites `node-id` on every screen change (sometimes the
 URL ends right there, sometimes more parameters follow), so the goal is checked
-with `frame_reached` rather than a URL glob, and every step URL the runner
-records names the frame it was on. That is how findings and drop offs land on
-frames.
+with `frame_reached` rather than a URL glob, and every step URL the panel
+posts names the frame it is on, and the overlays open over it. That is how
+findings and drop offs land on frames.
 
 ## Development
 
@@ -215,9 +227,12 @@ to go through the real device flow; the verification page opens in a new tab.
 
 ## Backend contract notes
 
-- The plugin sends `source`, `execution` and `figma` on study creation (new fields on `feat/figma-channel`).
+- The plugin sends `source`, `execution: "plugin"` and `figma` on study creation.
+- For those studies the panel is the runner: it claims runs with `POST /api/plugin/runs/<id>/claim`, posts
+  each turn to `POST /api/plugin/runs/<id>/turn`, polls `GET /api/plugin/runs/<id>/turn/<n>`, aborts with
+  `POST /api/plugin/runs/<id>/abort`, and asks for the next wave with `POST /api/studies/<id>/runs/next`.
 - "The screen a persona is on" reads `lastStep.url` on `GET /api/studies/<id>/runs` rows (null until the
-  run's first step). The panel calls no `/api/plugin/*` route.
+  run's first step).
 - The panel's iframe has a `null` origin: the API's CORS list must include it.
 
 ## Publishing to the Figma Community
@@ -246,13 +261,13 @@ Listing copy, ready to paste:
 > others gave up and why, in their own words, with findings pinned to the frames they happened on.
 > A free preflight checks the flow first: unreachable goals, dead ends, broken hotspots and layer names like
 > "Rectangle 12" that personas and screen reader users hear as links. Requires a free Archetype account.
-> Only the share link, the screen names on the path and the text you type leave the file.
+> What you type, the file and page names and the screen names on the path leave the file, and during a test
+> every step sends a screenshot, its visible text and what can be clicked to Archetype and its AI model
+> provider. The share link is optional.
 >
 > **Tags:** usability testing, user research, prototype, synthetic users, personas, accessibility, UX
 >
-> **Network access reasoning:** The panel talks to the Archetype API to sign you in, create a persona study for
-> the selected prototype flow, and read its results. It sends the prototype share link, the names of the
-> screens on the path, the goal and the user description you type. It never sends file contents or images.
+> **Network access reasoning:** The panel talks to the Archetype API to sign you in, create a persona study for the selected prototype flow, run it and read its results. It sends the file and page names, the names of the screens on the path, the goal and the user description you type, and the prototype share link if you paste one. During a test, every step sends a screenshot of the screen a persona sees, its visible text and what can be clicked to Archetype and its AI model provider, so the persona can see and act on what you built.
 
 ## License
 

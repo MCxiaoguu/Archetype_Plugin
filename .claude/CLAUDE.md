@@ -46,6 +46,12 @@ actor carries zero dev context (sequential dispatch — one Chrome); the agent
 file is the single source of truth for the actor loop, and multi-run output
 is a cross-pool comparison report.
 
+Figma plugin-mode studies (`execution: "plugin"`, created by the plugin in
+`figma/`) run inside the Figma panel itself: the panel's trace runner walks the
+prototype and posts each turn to the backend's `/api/plugin/runs/<id>/turn`,
+whose model decides every step. `dispatch_study` refuses them, and
+`study_runner.py --watch` serves only `execution: "remote"` studies.
+
 Authoritative references for this work:
 - Design spec: `docs/superpowers/specs/2026-07-22-plugin-backend-pipeline-design.md` (§4.2 covers the skills).
 - Implementation plan: `docs/superpowers/plans/2026-07-22-plugin-backend-pipeline.md`.
