@@ -62,16 +62,19 @@ Pointing at a local backend: open the gear, set the API to
 `http://localhost:5013` (already in `devAllowedDomains`), and under Development
 paste any token (local backends run with the development bypass).
 
-## The one sharing requirement
+## Edit access, and the optional share link
 
-Personas open your prototype the way a stranger would. In the file, choose
-**Share**, set access to **Anyone with the link can view**, and **Copy link**.
-Paste that link in the panel. Links from `figma.com/design/...`,
-`figma.com/file/...` and `figma.com/proto/...` all work; the plugin builds the
-prototype URL from the key and your start screen. Public plugins cannot read the
-open file's key, so the plugin cannot check a pasted link against the file
-unless it runs as a private organization plugin (then it rejects links to other
-files).
+Tests run inside the panel, so nobody else has to open your prototype and no
+sharing is needed. The panel does need **edit access** to the file: to draw each
+screen a persona sees, it makes a temporary copy of the screen beside the canvas
+(locked, at x = -100 000), exports it and deletes it again, keeping it out of
+your undo history. In a view-only file the launch stops with "Duplicate to your
+drafts to test".
+
+A share link is optional. With one, step URLs in the report use the file's key
+and the real prototype URL form, so they open the prototype. Without one they
+use `figma-trace://` URLs, which the report shows as plain text. Links from
+`figma.com/design/...`, `figma.com/file/...` and `figma.com/proto/...` all work.
 
 ## How runs execute
 
@@ -100,15 +103,18 @@ once every run of the current one has ended.
 
 | Sent to Archetype | Never sent |
 | :-- | :-- |
-| The prototype share link you paste | File contents, layers, images or exports |
-| The names of up to 20 screens on the paths from start to goal | Comments, other pages, other files |
-| The ids of the start and goal frames, and the file key in the link | Anything from your clipboard |
-| The goal, the user description and the product line you type | |
+| The goal, the user description and the product line you type | Screens no persona reaches, other pages, other files |
+| The file and page names, the start and goal frame ids, and the names of up to 20 screens on the paths from start to goal | Comments, the layer tree, variables, the reaction graph |
+| During a test, for every step: a screenshot of the screen the persona sees, its visible text, and the labels, roles and boxes of what can be clicked | Anything from your clipboard |
+| The share link, if you paste one | |
 
-Everything else (the flow graph, the preflight, mapping results back to frames)
-happens inside Figma. The plugin stores its settings, your Archetype token and a
-short history of tests in Figma's `clientStorage` on your machine, and one
-random id in the file's plugin data so the history follows the file.
+The screenshots and text of each step go to Archetype and its AI model provider,
+which decides what the persona does next. The flow graph, the preflight, the
+prototype interpreter and mapping results back to frames all run inside Figma.
+The plugin stores its settings, your Archetype token, a short history of tests
+and the progress of running tests (so a closed panel can resume them) in Figma's
+`clientStorage` on your machine, and one random id in the file's plugin data so
+the history follows the file.
 
 ## Architecture
 
@@ -117,19 +123,20 @@ random id in the file's plugin data so the history follows the file.
 ┌──────────────────────────────────────────────────────────────┐
 │  main thread  (src/code.ts, src/main/*)                      │
 │   reads the page: frames, sections, flow starts, reactions   │
-│   selects and zooms, writes annotations, clientStorage       │
+│   reads the prototype (ProtoDoc), renders trace screens on   │
+│   scratch copies, selects and zooms, annotations, storage    │
 │                     ▲            │                           │
-│          postMessage│            │ DocSnapshot, selection    │
+│          postMessage│            │ DocSnapshot, renders      │
 │                     │            ▼                           │
 │  panel iframe, null origin  (src/ui/*, Preact)               │
 │   state machine, preflight, report view  (src/lib/*, pure)   │
+│   trace runner: engine (src/lib/proto/*), sessions, waves    │
 └──────────────────────────────┬───────────────────────────────┘
                                │ fetch, Bearer token
                                ▼
-     Archetype API: /api/oauth/device/code, /api/oauth/device/token, /api/studies/*
-                               ▲
-                               │ claims queued runs
-                     runner (study_runner.py) ──▶ figma.com/proto/<key>/...
+     Archetype API: /api/oauth/device/*, /api/studies/*,
+                    /api/plugin/runs/<id>/claim, /turn, /turn/<n>, /abort
+                    (the backend's model decides each persona step)
 ```
 
 | Path | Role |
