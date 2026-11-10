@@ -10,19 +10,18 @@
  * callbacks come in, so the live driver runs the same runner in Node.
  */
 
-import { ApiError, type ApiClient, type ClaimBody, type NextWave, type StudyRuns } from '../../lib/api';
+import { ApiError, type ApiClient, type ClaimBody, type NextWave, type RunRowApi, type StudyRuns } from '../../lib/api';
 import type { SavedSession } from '../../lib/messages';
 import { start } from '../../lib/proto/engine';
 import type { ProtoDoc } from '../../lib/proto/model';
+import { isTerminalRun } from '../../lib/poll';
 import type { RunnerStatus } from '../../lib/runs';
 import type { Bridge } from './bridge';
-import { pauseFor, RETRY_FIRST_MS, RETRY_MAX_MS, runSession, type SessionDeps, type SessionResult, type SessionRun, type SessionStatus } from './session';
+import { NOTICE, pauseFor, RETRY_FIRST_MS, RETRY_MAX_MS, runSession, type SessionDeps, type SessionResult, type SessionRun, type SessionStatus } from './session';
 
 /** Finalizing runs keep the wave open; the runner waits this long for the next one (spec, Error handling). */
 export const WAVE_WAIT_MS = 5 * 60_000;
 export const WAVE_RETRY_MS = 5_000;
-
-export const STUCK_MESSAGE = 'Archetype is still storing the last round of tries, so the next round has not started. Try again in a minute.';
 
 export interface StudyTrace {
   studyId: string;
@@ -66,145 +65,205 @@ class Cancelled extends Error {
 
 export async function runStudy(study: StudyTrace, deps: RunnerDeps): Promise<RunnerResult> {
   const results: SessionResult[] = [];
+  const started = new Map<string, Promise<SessionResult>>();
   try {
-    return await run(study, deps, results);
+    return await run(study, deps, results, started);
   } catch (err) {
-    if (err instanceof Cancelled) return { stop: 'cancelled', sessions: results };
-    throw err;
+    if (!(err instanceof Cancelled)) throw err;
+    // Every session has the same signal and stops at its next step: the runner stops once they have.
+    for (const s of await Promise.allSettled(started.values())) if (s.status === 'fulfilled' && !results.includes(s.value)) results.push(s.value);
+    return { stop: 'cancelled', sessions: results };
   }
 }
 
-async function run(study: StudyTrace, deps: RunnerDeps, results: SessionResult[]): Promise<RunnerResult> {
+const messageOf = (err: unknown) => (err instanceof Error ? err.message : String(err));
+
+/** The persona names of runs, for the designer: "Baseline founder and Low trust founder". */
+function names(runs: readonly RunRowApi[]): string {
+  const all = [...new Set(runs.map((r) => r.archetypeName || r.runId))];
+  return all.length > 1 ? `${all.slice(0, -1).join(', ')} and ${all[all.length - 1]}` : (all[0] ?? '');
+}
+
+/** Why the next wave hasn't started after WAVE_WAIT_MS, from the runs as the backend lists them. */
+function stuckMessage(runs: readonly RunRowApi[], ours: ReadonlySet<string>): string {
+  const open = runs.filter((r) => !isTerminalRun(r.status));
+  const elsewhere = open.filter((r) => !ours.has(r.runId));
+  if (elsewhere.length) {
+    const one = elsewhere.length === 1;
+    return `The next round of tries can't start while ${names(elsewhere)} ${one ? 'is' : 'are'} still open, and this panel isn't running ${one ? 'it' : 'them'}. Try again once ${one ? 'it ends' : 'they end'}.`;
+  }
+  if (open.length) return `Archetype is still finishing ${names(open)}, so the next round of tries hasn't started. Try again in a minute.`;
+  return "Archetype hasn't started the next round of tries yet. Try again in a minute.";
+}
+
+async function run(study: StudyTrace, deps: RunnerDeps, results: SessionResult[], started: Map<string, Promise<SessionResult>>): Promise<RunnerResult> {
   const { api, bridge } = deps;
   const { studyId, owner } = study;
   const checkCancel = () => {
     if (deps.signal?.aborted) throw new Cancelled();
   };
   // A start frame the engine can't start fails here, before any run is claimed.
-  const { width, height } = start(study.doc, study.startFrameId).viewport;
+  const startState = start(study.doc, study.startFrameId);
+  const { width, height } = startState.viewport;
   const claim: ClaimBody = { owner, browser: { engine: 'figma-trace', version: deps.pluginVersion, viewport: [width, height] } };
 
-  let phase: RunnerStatus['phase'] = 'running';
+  /** Where the runner is, apart from pauses (calls in parallel may pause at once); unset until a session starts. */
+  let phase: RunnerStatus['phase'] | null = null;
+  let pauses = 0;
   const report = (next: RunnerStatus['phase'], notice: string | null = null) => {
     phase = next;
-    deps.onRunner({ phase, notice });
+    if (pauses === 0) deps.onRunner({ phase, notice });
   };
 
   /** Calls the API until it answers or fails for good, pausing through network loss and sign in trouble. */
   async function call<T>(work: () => Promise<T>): Promise<T> {
     let delay = RETRY_FIRST_MS;
-    let paused: RunnerStatus['phase'] | null = null;
-    for (;;) {
-      checkCancel();
-      try {
-        const result = await work();
-        if (paused) report(paused);
-        return result;
-      } catch (err) {
+    let paused = false;
+    try {
+      for (;;) {
         checkCancel();
-        const why = pauseFor(err);
-        if (!why) throw err;
-        paused ??= phase;
-        report('paused', why);
-        await deps.sleep(delay);
-        delay = Math.min(delay * 2, RETRY_MAX_MS);
+        try {
+          return await work();
+        } catch (err) {
+          checkCancel();
+          const why = pauseFor(err);
+          if (!why) throw err;
+          if (!paused) {
+            paused = true;
+            pauses++;
+          }
+          deps.onRunner({ phase: 'paused', notice: why });
+          await deps.sleep(delay);
+          delay = Math.min(delay * 2, RETRY_MAX_MS);
+        }
       }
+    } finally {
+      if (paused && --pauses === 0) deps.onRunner({ phase: phase ?? 'running', notice: null });
     }
   }
 
-  const session = (runId: string, resume: SavedSession | null): SessionRun => ({
-    runId,
-    studyId,
-    owner,
-    doc: study.doc,
-    shareKey: study.shareKey,
-    startFrameId: study.startFrameId,
-    resume,
-  });
+  const readRuns = async (): Promise<RunRowApi[]> => {
+    const { runs } = await call(() => api.getRuns(studyId));
+    if (!Array.isArray(runs)) throw new Error('Archetype sent a runs list the panel cannot read.');
+    return runs;
+  };
 
-  /** Claims the runs at once, leaving a run another actor got first to that actor. */
-  async function claimAll(runIds: readonly string[]): Promise<SessionRun[]> {
-    const claimed = await Promise.all(
-      runIds.map(async (runId) => {
-        try {
-          await call(() => api.claimRun(runId, claim));
-          return session(runId, null);
-        } catch (err) {
-          if (err instanceof ApiError && err.status === 409) return null;
-          throw err;
-        }
-      }),
-    );
-    return claimed.filter((r): r is SessionRun => r !== null);
+  /** Claims the backend refused for good; they fail the runner once the sessions that did start are done. */
+  const refused: string[] = [];
+
+  function begin(runId: string, resume: SavedSession | null) {
+    if (phase !== 'running') report('running');
+    const run: SessionRun = { runId, studyId, owner, doc: study.doc, shareKey: study.shareKey, startFrameId: study.startFrameId, resume };
+    started.set(runId, runSession(run, { bridge, api, now: deps.now, sleep: deps.sleep, onStatus: deps.onSession, watchFile: deps.watchFile, postTurnTimeoutMs: deps.postTurnTimeoutMs, signal: deps.signal }));
   }
 
-  /** Runs every session to its end. One that broke fails the runner, once the others are done. */
-  async function runAll(runs: readonly SessionRun[]): Promise<void> {
-    if (!runs.length) return;
-    report('running');
-    const settled = await Promise.allSettled(
-      runs.map((run) =>
-        runSession(run, {
-          bridge,
-          api,
-          now: deps.now,
-          sleep: deps.sleep,
-          onStatus: deps.onSession,
-          watchFile: deps.watchFile,
-          postTurnTimeoutMs: deps.postTurnTimeoutMs,
-          signal: deps.signal,
-        }),
-      ),
-    );
-    for (const s of settled) if (s.status === 'fulfilled') results.push(s.value);
+  /**
+   * Claims a run and starts its session at once, without waiting for the
+   * other claims. It saves the run at turn 0 first, so a panel that closes
+   * now resumes it. A run another actor got first is theirs.
+   */
+  async function claimAndStart(runId: string): Promise<void> {
+    try {
+      await call(() => api.claimRun(runId, claim));
+    } catch (err) {
+      if (err instanceof Cancelled) throw err;
+      if (err instanceof ApiError && err.code === 'already_claimed') return;
+      refused.push(`${runId} (${messageOf(err)})`);
+      return;
+    }
+    await saveTurn0(runId);
+    checkCancel();
+    begin(runId, null);
+  }
+
+  async function saveTurn0(runId: string): Promise<void> {
+    const session: SavedSession = { owner, runId, turn: 0, state: startState, lastOutcome: null, timerEffects: [], loopFrames: [] };
+    let failure: unknown;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        await bridge.call('trace-save', { studyId, runId, session });
+        return;
+      } catch (err) {
+        failure = err;
+      }
+    }
+    // The run goes on; only a panel closed before its first turn is saved can't resume it.
+    deps.onRunner({ phase: phase ?? 'running', notice: `${NOTICE.notSaved} ${messageOf(failure)}` });
+  }
+
+  /** Claims and starts every queued run, each on its own; when the panel closes, once every claim is through. */
+  async function claimQueued(runs: readonly RunRowApi[]): Promise<void> {
+    const claims = await Promise.allSettled(runs.filter((r) => r.status === 'queued' && !started.has(r.runId)).map((r) => claimAndStart(r.runId)));
+    for (const c of claims) if (c.status === 'rejected') throw c.reason;
+  }
+
+  /** Waits for every session started so far, then cleans up; a session that broke or a refused claim fails the runner. */
+  async function settle(): Promise<void> {
+    let seen = -1;
+    const settled = new Map<string, PromiseSettledResult<SessionResult>>();
+    while (seen !== started.size) {
+      seen = started.size;
+      for (const [runId, session] of started) if (!settled.has(runId)) settled.set(runId, (await Promise.allSettled([session]))[0] as PromiseSettledResult<SessionResult>);
+    }
+    for (const s of settled.values()) if (s.status === 'fulfilled' && !results.includes(s.value)) results.push(s.value);
     // The main thread's close handler removes what the closing panel's renders left.
     checkCancel();
     // No session renders any more: whatever a render left on the page can go.
     await bridge.call('trace-cleanup', {});
-    for (const s of settled) if (s.status === 'rejected') throw s.reason;
+    for (const s of settled.values()) if (s.status === 'rejected') throw s.reason;
+    if (refused.length) throw new Error(`Archetype refused to let this panel run ${refused.join('; ')}.`);
   }
 
-  /** The next wave, waiting through wave_in_progress for up to WAVE_WAIT_MS; null when it lasts longer. */
-  async function nextWave(): Promise<NextWave | null> {
+  /**
+   * The next wave, or 'started' when the wait found queued runs to claim:
+   * a wave whose answer was lost, or runs queued meanwhile. Waits through
+   * wave_in_progress for up to WAVE_WAIT_MS; then it is stuck.
+   */
+  async function nextWave(): Promise<NextWave | 'started' | { stuck: string }> {
     let since: number | null = null;
     for (;;) {
       try {
-        return await call(() => api.nextWave(studyId));
+        const next = await call(() => api.nextWave(studyId));
+        if (!next || (!next.done && !Array.isArray(next.runs))) throw new Error('Archetype sent a next wave the panel cannot read.');
+        return next;
       } catch (err) {
         if (!(err instanceof ApiError && err.code === 'wave_in_progress')) throw err;
+        const runs = await readRuns();
+        const before = started.size;
+        await claimQueued(runs);
+        if (started.size > before || refused.length) return 'started';
         since ??= deps.now();
-        if (deps.now() - since >= WAVE_WAIT_MS) return null;
+        if (deps.now() - since >= WAVE_WAIT_MS) return { stuck: stuckMessage(runs, new Set(started.keys())) };
         await deps.sleep(WAVE_RETRY_MS);
         checkCancel();
       }
     }
   }
 
+  // `started` holds every session this runner started, in the order it started them.
   // Resume (spec, Data flow 10): only the runs this panel saved that the backend still runs.
   // A saved run of another owner, or a running run nothing was saved for, may be another panel's.
   const { sessions: saved } = await bridge.call('trace-load', { studyId });
-  const { runs } = await call(() => api.getRuns(studyId));
-  if (!Array.isArray(runs)) throw new Error('Archetype sent a runs list the panel cannot read.');
+  const runs = await readRuns();
   const statusOf = new Map(runs.map((r) => [r.runId, r.status]));
-  let pending: SessionRun[] = [];
   for (const s of saved) {
     if (s.owner !== owner) continue;
-    if (statusOf.get(s.runId) === 'running') pending.push(session(s.runId, s));
+    if (statusOf.get(s.runId) === 'running') begin(s.runId, s);
     // It ended while the panel was closed: there is nothing left to resume.
     else await bridge.call('trace-save', { studyId, runId: s.runId, session: null });
   }
-  let queued = runs.filter((r) => r.status === 'queued').map((r) => r.runId);
+  await claimQueued(runs);
 
   for (;;) {
-    await runAll([...pending, ...(await claimAll(queued))]);
-    pending = [];
+    await settle();
     report('next_wave');
     const next = await nextWave();
-    if (!next) return { stop: 'stuck', message: STUCK_MESSAGE, sessions: results };
+    if (next === 'started') continue;
+    if ('stuck' in next) return { stop: 'stuck', message: next.stuck, sessions: results };
     if (next.done) {
       report('done');
       return { stop: 'done', reason: next.reason, sessions: results };
     }
-    queued = next.runs.map((r) => r.runId);
+    await claimQueued(next.runs.map((r) => ({ runId: r.runId, archetypeId: r.archetypeId, archetypeName: r.archetypeName, status: 'queued' })));
   }
 }

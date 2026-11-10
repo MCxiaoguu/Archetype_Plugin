@@ -49,8 +49,9 @@ export interface StudyRecord {
 export interface TraceRecord {
   /** This panel's id for the study's runs, kept so a reopened panel resumes the runs it owns. */
   owner: string;
-  /** The ProtoDoc's hash at launch. */
-  docHash: string;
+  /** The page the flow is on: the prototype is read from the current page. */
+  pageId: string;
+  pageName: string;
   startFrameId: string;
   /** The share link's file key; null without a link. */
   shareKey: string | null;

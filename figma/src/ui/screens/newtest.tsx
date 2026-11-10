@@ -1,5 +1,5 @@
 import { useMemo } from 'preact/hooks';
-import { importText } from '../../lib/launch';
+import { importFailedText, importText } from '../../lib/launch';
 import { BLOCKER_TEXT, isFlowBlocker, runPreflight, type Preflight } from '../../lib/preflight';
 import type { AppState } from '../../lib/state';
 import { RUN_SIZES, validateForm, type RunSize } from '../../lib/study';
@@ -316,6 +316,25 @@ export function NewTest({ state, store, fx }: { state: AppState; store: Store; f
           </Banner>
         </div>
       )}
+      {state.gate?.kind === 'import-failed' && (
+        <div class="gate">
+          <Banner
+            kind="warn"
+            action={
+              <span class="banner-actions">
+                <button type="button" class="btn btn-small btn-secondary" onClick={() => fx.cancelImport()}>
+                  Cancel
+                </button>
+                <button type="button" class="btn btn-small btn-primary" onClick={() => void fx.launchAnyway()}>
+                  Launch
+                </button>
+              </span>
+            }
+          >
+            {importFailedText(state.gate.failures)}
+          </Banner>
+        </div>
+      )}
       <footer class="actionbar">
         {state.notice && state.notice.kind === 'error' && Object.keys(errors).length > 0 ? (
           <p class="actionbar-note error" role="alert">
@@ -328,7 +347,7 @@ export function NewTest({ state, store, fx }: { state: AppState; store: Store; f
         ) : (
           <p class="actionbar-note">{form.size === 'quick' ? 'Takes about 5 to 10 minutes' : 'Takes about 15 to 30 minutes'}</p>
         )}
-        <button type="submit" class="btn btn-primary" disabled={isFlowBlocker(pf?.blocker ?? null) || state.gate?.kind === 'checking' || state.gate?.kind === 'confirm-import'}>
+        <button type="submit" class="btn btn-primary" disabled={isFlowBlocker(pf?.blocker ?? null) || state.gate?.kind === 'checking' || state.gate?.kind === 'confirm-import' || state.gate?.kind === 'import-failed'}>
           {state.gate?.kind === 'checking' ? 'Checking the file' : 'Launch test'}
         </button>
       </footer>

@@ -30,12 +30,15 @@ export async function mainThread(edit: (fake: Fake) => void = () => {}, log: str
   /** Saves fail with these messages, one per save, before they succeed again. */
   const saveErrors: string[] = [];
   /** The launch gate's view of the file, and each read's importLibraryVariants. */
-  const gate = { scratch: { ok: true, reason: null } as ScratchCheckReply, reads: [] as boolean[], readAs: null as ((importLibraryVariants: boolean) => ProtoDoc) | null };
+  /** `readErrors`: reads that fail with these messages first. */
+  const gate = { scratch: { ok: true, reason: null } as ScratchCheckReply, reads: [] as boolean[], readErrors: [] as string[], readAs: null as ((importLibraryVariants: boolean) => ProtoDoc) | null };
   const call = vi.fn(async (type: string, payload: Record<string, unknown>) => {
     if (type === 'trace-scratch-check') return gate.scratch;
     if (type === 'trace-read') {
       const importLibraryVariants = payload.importLibraryVariants as boolean;
       gate.reads.push(importLibraryVariants);
+      const error = gate.readErrors.shift();
+      if (error) throw new BridgeError('trace-read', error);
       return gate.readAs ? gate.readAs(importLibraryVariants) : structuredClone(doc);
     }
     if (type === 'trace-render') {

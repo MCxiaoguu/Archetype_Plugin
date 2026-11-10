@@ -496,6 +496,11 @@ function createTraceRuns({ clock, thinkingPolls }) {
       throw badRequest('owner must be a string of 1 to 64 characters (letters, digits, _ or -).');
     }
     const run = runOf(runId);
+    // A repeat claim from the run's own panel, whose first answer it lost, gets the same briefing again.
+    const engineOk = body.browser === undefined || body.browser === null || body.browser.engine === 'figma-trace';
+    if (run.status === 'running' && !run.finalizing && run.owner !== null && body.owner === run.owner && engineOk) {
+      return [200, { ...structuredClone(run.briefing), claimedAt: run.claimedAt }];
+    }
     if (run.status !== 'queued') {
       throw new Refused(409, 'already_claimed', `run ${runId} is ${run.status}, not queued, so it cannot be claimed again. Another actor has it; take the next queued run of the study.`);
     }

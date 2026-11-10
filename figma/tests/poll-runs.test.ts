@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { RunRowApi } from '../src/lib/api';
 import { frameForUrl, indexFrames } from '../src/lib/frames';
 import { FAST_POLL_MS, SLOW_POLL_MS, isStudyDone, isTerminalRun, nextQueuedSince, pollDelay, runnerState } from '../src/lib/poll';
-import { panelNotices, personaRows, rowUrl, type LiveRun } from '../src/lib/runs';
+import { panelNotices, panelRunText, personaRows, rowUrl, type LiveRun } from '../src/lib/runs';
 import { fixtureDoc, protoAt } from './helpers';
 
 const run = (over: Partial<RunRowApi>): RunRowApi => ({ runId: 'r', archetypeId: 'a', archetypeName: 'Baseline founder', role: 'baseline', status: 'queued', ...over });
@@ -79,12 +79,15 @@ describe('persona rows', () => {
   it('shows the screen and step from the session this panel runs, ahead of the runs list', () => {
     const live = (runId: string, phase: LiveRun['phase'], frameName: string, turn: number): LiveRun => ({ runId, phase, frameName, turn, notices: [] });
     const rows = personaRows(runs, index, {
-      v1: live('v1', 'thinking', 'Bank connected', 7),
-      i1: live('i1', 'paused', 'Connect bank', 4),
-      // Queued in the last poll, already running here.
-      s1: live('s1', 'acting', 'Dashboard', 1),
-      // Ended here: the runs list says how.
-      b1: live('b1', 'ended', 'Plans', 9),
+      inPanel: true,
+      live: {
+        v1: live('v1', 'thinking', 'Bank connected', 7),
+        i1: live('i1', 'paused', 'Connect bank', 4),
+        // Queued in the last poll, already running here.
+        s1: live('s1', 'acting', 'Dashboard', 1),
+        // Ended here: the runs list says how.
+        b1: live('b1', 'ended', 'Plans', 9),
+      },
     });
     expect(rows.map((r) => [r.name, r.phase, r.statusText, r.screen, r.steps])).toEqual([
       ['Baseline founder', 'done', 'Reached the goal 1 of 2 times', null, null],
@@ -106,6 +109,30 @@ describe('persona rows', () => {
     expect(panelNotices({}, { phase: 'paused', notice: LOST })).toEqual([LOST]);
     expect(panelNotices({}, { phase: 'next_wave', notice: null })).toEqual([]);
     expect(panelNotices({}, null)).toEqual([]);
+  });
+
+  it('does not say a persona clicks through when no session in this panel runs it', () => {
+    const rows = personaRows(runs, index, { inPanel: true, live: {} });
+    expect(rows.map((r) => [r.name, r.phase, r.statusText, r.here])).toEqual([
+      ['Baseline founder', 'done', 'Reached the goal 1 of 2 times', false],
+      ['Low trust founder', 'waiting', 'Not running in this panel', false],
+      ['Impatient founder', 'waiting', 'Not running in this panel', false],
+      ['Stress: everything at risk', 'waiting', 'Waiting to start', false],
+    ]);
+  });
+
+  it("words the Running screen by the panel's own runner and sessions", () => {
+    const here = personaRows(runs, index, { inPanel: true, live: { v1: { runId: 'v1', phase: 'thinking', frameName: 'Verify phone', turn: 3, notices: [] } } });
+    const none = personaRows(runs, index, { inPanel: true, live: {} });
+    expect(panelRunText(here, { phase: 'running', notice: null }, 'running')).toBe('Personas are clicking through your prototype here in the panel.');
+    expect(panelRunText(none, { phase: 'next_wave', notice: null }, 'finishing')).toBe('Starting the next round of tries.');
+    expect(panelRunText(none, { phase: 'done', notice: null }, 'finishing')).toBe('All tries are in. Putting the results together.');
+    expect(panelRunText(none, null, 'queued')).toBe('Starting the personas.');
+    // Stopped: the banner says why, and nothing claims the personas go on.
+    for (const phase of ['stuck', 'failed', 'other_page'] as const) {
+      expect(panelRunText(none, { phase, notice: 'why' }, 'running')).toBe('');
+      expect(panelRunText(here, { phase, notice: 'why' }, 'running')).toBe('');
+    }
   });
 
   it('says what a single finished try did', () => {

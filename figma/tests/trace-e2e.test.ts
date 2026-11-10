@@ -906,13 +906,25 @@ describe('the mock backend', () => {
     return runId;
   }
 
-  it('claims a queued run once, and refuses a second claim, an unknown run and a bad owner', async () => {
+  it("claims a queued run once, answers its own owner's repeat claim again, and refuses another's, an unknown run and a bad owner", async () => {
     own.trace.addStudy({ studyId: 'study-claim', waves: [[{ runId: 'run-claim', script: [] }]] });
     expect(await refused(api.claimRun('run-claim', { browser, owner: 'not an owner!' }))).toMatchObject({ status: 400, code: 'bad_request' });
     const briefing = await api.claimRun('run-claim', { browser, owner: OWNER });
     expect(briefing).toMatchObject({ runId: 'run-claim', persona: { name: 'run-claim' }, claimedAt: expect.any(String) });
-    expect(await refused(api.claimRun('run-claim', { browser, owner: OWNER }))).toMatchObject({ status: 409, code: 'already_claimed' });
+    // The panel retries a claim whose answer it lost: the backend's own owner gets the same briefing (plugin_run_service.claim_run).
+    clock += 5_000;
+    expect(await api.claimRun('run-claim', { browser, owner: OWNER })).toEqual(briefing);
+    expect(await refused(api.claimRun('run-claim', { browser, owner: 'panel-other' }))).toMatchObject({ status: 409, code: 'already_claimed' });
     expect(await refused(api.claimRun('run-nobody', { browser, owner: OWNER }))).toMatchObject({ status: 404, code: 'run_not_found' });
+  });
+
+  it('refuses a repeat claim of a run that is finalizing, even from its own owner', async () => {
+    const runId = await claimed([{ expect: 'Dashboard', done: 'Done here.', debrief: 'held' }]);
+    await api.postTurn(runId, body(1));
+    let view = await api.getTurn(runId, 1);
+    for (let i = 0; i < 5 && view.status === 'thinking'; i++) view = await api.getTurn(runId, 1);
+    expect(view).toMatchObject({ status: 'ready', ended: { status: 'finalizing' } });
+    expect(await refused(api.claimRun(runId, { browser, owner: OWNER }))).toMatchObject({ status: 409, code: 'already_claimed' });
   });
 
   it('takes the claim of a start frame of fractional size, in the whole pixels the panel claims with', async () => {

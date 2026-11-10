@@ -1,16 +1,14 @@
 import { ApiClient, ApiError, pollDeviceFlow, type StudyLike, type StudyRuns, type StudyStatus } from '../lib/api';
-import { componentsToImport, continueLaunch } from '../lib/launch';
+import { continueLaunch } from '../lib/launch';
 import { isSafeWebUrl, studyWebUrl, type MainToUi, type Settings, type StudyRecord } from '../lib/messages';
 import { isStudyDone, pollDelay } from '../lib/poll';
-import type { ProtoDoc } from '../lib/proto/model';
 import { runPreflight } from '../lib/preflight';
 import { buildReportView, type StudyReport } from '../lib/report';
 import { indexFrames } from '../lib/frames';
 import { buildStudyRequest, shareKeyOf, validateForm } from '../lib/study';
 import { toMain } from './bridge';
 import type { Store } from './store';
-import { createBridge, panelTransport, type Bridge } from './trace/bridge';
-import { runStudy } from './trace/runner';
+import { createTracePanel, type GatedRead, type TraceBridge } from './trace/launch';
 
 function message(err: unknown): string {
   if (err instanceof ApiError) {
@@ -32,7 +30,7 @@ function newOwner(): string {
 
 export interface EffectsDeps {
   /** The trace runner's line to the main thread; postMessage by default. */
-  bridge?: Pick<Bridge, 'call'> & Partial<Pick<Bridge, 'close'>>;
+  bridge?: TraceBridge;
 }
 
 /**
@@ -43,15 +41,6 @@ export interface EffectsDeps {
 export function createEffects(store: Store, deps: EffectsDeps = {}) {
   let watchGen = 0;
   let signinGen = 0;
-  let traceBridge = deps.bridge ?? null;
-  const bridge = () => (traceBridge ??= createBridge(panelTransport()));
-  /** The ProtoDoc read at launch, for the runner of the study it created. */
-  let launched: { studyId: string; doc: ProtoDoc } | null = null;
-  /** Studies whose runner is going: one runner per study, through retries and sign ins. */
-  const runners = new Set<string>();
-  const fileWatchers = new Set<(frameIds: string[]) => void>();
-  /** Fires when the panel closes: every session stops where it is, to resume when it reopens. */
-  const closing = new AbortController();
 
   const api = () => {
     const s = store.get();
@@ -66,6 +55,7 @@ export function createEffects(store: Store, deps: EffectsDeps = {}) {
       },
     });
   };
+  const trace = createTracePanel({ store, api, bridge: deps.bridge, sleep, message });
 
   async function signIn() {
     const gen = ++signinGen;
@@ -116,13 +106,8 @@ export function createEffects(store: Store, deps: EffectsDeps = {}) {
     store.dispatch({ type: 'notice', notice: { kind: 'success', text: 'Settings saved.' } });
   }
 
-  /**
-   * The launch gate (spec, Data flow 1), then the study. A file the panel
-   * can't render in blocks the launch; a flow that would import library
-   * components waits for the designer to confirm, then reads again with the
-   * import allowed.
-   */
-  async function launch(importConfirmed = false) {
+  /** The launch gate (spec, Data flow 1), then the study. */
+  async function launch() {
     store.dispatch({ type: 'attempt-launch' });
     const s = store.get();
     if (!s.doc || s.gate?.kind === 'checking') return;
@@ -135,40 +120,28 @@ export function createEffects(store: Store, deps: EffectsDeps = {}) {
       }
       return;
     }
-    store.dispatch({ type: 'gate', gate: { kind: 'checking' } });
-    let doc: ProtoDoc;
-    try {
-      const check = await bridge().call('trace-scratch-check', {});
-      if (!check.ok) {
-        store.dispatch({ type: 'gate', gate: { kind: 'blocked', reason: check.reason, detail: check.detail } });
-        return;
-      }
-      doc = await bridge().call('trace-read', { importLibraryVariants: importConfirmed });
-    } catch (err) {
-      store.dispatch({ type: 'gate', gate: null });
-      store.dispatch({ type: 'notice', notice: { kind: 'error', text: message(err) } });
-      return;
-    }
-    const components = importConfirmed ? [] : componentsToImport(doc);
-    if (components.length > 0) {
-      store.dispatch({ type: 'gate', gate: { kind: 'confirm-import', components } });
-      return;
-    }
-    await create(doc, importConfirmed);
+    const ready = await trace.gate(false);
+    if (ready) await create(ready);
   }
 
   /** The designer agreed that testing adds the library components to the file. */
   async function confirmImport() {
     if (store.get().gate?.kind !== 'confirm-import') return;
-    store.dispatch({ type: 'gate', gate: null });
-    await launch(true);
+    const ready = await trace.gate(true);
+    if (ready) await create(ready);
+  }
+
+  /** The designer read which components the import couldn't add, and launches anyway. */
+  async function launchAnyway() {
+    const ready = trace.launchAnyway();
+    if (ready) await create(ready);
   }
 
   function cancelImport() {
-    store.dispatch({ type: 'gate', gate: null });
+    trace.cancel();
   }
 
-  async function create(doc: ProtoDoc, importLibraryVariants: boolean) {
+  async function create({ doc, importLibraryVariants }: GatedRead) {
     const s = store.get();
     if (!s.doc) return;
     const preflight = runPreflight(s.doc, s.form.startId, s.form.goalId);
@@ -194,13 +167,14 @@ export function createEffects(store: Store, deps: EffectsDeps = {}) {
         outcome: null,
         trace: {
           owner: newOwner(),
-          docHash: doc.docHash,
+          pageId: doc.pageId,
+          pageName: doc.pageName,
           startFrameId: s.form.startId as string,
           shareKey: shareKeyOf(s.form, s.fileKey),
           importLibraryVariants,
         },
       };
-      launched = { studyId: study.studyId, doc };
+      trace.launchedOn(study.studyId, doc);
       toMain({ type: 'save-study', record });
       store.dispatch({ type: 'study-created', record });
       await proceed(gen);
@@ -212,61 +186,17 @@ export function createEffects(store: Store, deps: EffectsDeps = {}) {
   async function proceed(gen: number) {
     const id = store.get().study?.id;
     if (!id) return;
-    const result = await continueLaunch(api(), id, {
+    const status = await continueLaunch(api(), id, {
       sleep,
       cancelled: () => gen !== watchGen,
       onStage: (stage) => {
         if (gen === watchGen) store.dispatch({ type: 'stage', stage, now: Date.now() });
       },
     });
-    if (result === 'watching' && gen === watchGen) {
-      startRunner();
-      void loop(gen);
-    }
-  }
-
-  /**
-   * Runs a plugin-mode study's personas in this panel, or resumes the ones it
-   * owns when the panel reopened. One runner per study: a retry or a sign in
-   * while it goes on leaves it be.
-   */
-  function startRunner() {
-    const st = store.get().study;
-    const trace = st?.record?.trace;
-    if (!st?.id || !trace || runners.has(st.id)) return;
-    const studyId = st.id;
-    runners.add(studyId);
-    const shown = () => store.get().study?.id === studyId;
-    const fail = (text: string) => {
-      if (shown()) store.dispatch({ type: 'launch-failed', message: text });
-      else toMain({ type: 'notify', text });
-    };
-    (async () => {
-      const doc = launched?.studyId === studyId ? launched.doc : await bridge().call('trace-read', { importLibraryVariants: trace.importLibraryVariants });
-      if (launched?.studyId === studyId) launched = null;
-      return runStudy(
-        { studyId, owner: trace.owner, doc, shareKey: trace.shareKey, startFrameId: trace.startFrameId },
-        {
-          bridge: bridge(),
-          api: api(),
-          now: () => Date.now(),
-          sleep,
-          pluginVersion: store.get().pluginVersion,
-          onSession: (status) => store.dispatch({ type: 'session', studyId, status }),
-          onRunner: (status) => store.dispatch({ type: 'runner', studyId, status }),
-          watchFile: (onChange) => {
-            fileWatchers.add(onChange);
-            return () => fileWatchers.delete(onChange);
-          },
-          signal: closing.signal,
-        },
-      );
-    })()
-      .then((result) => {
-        if (result.stop === 'stuck') fail(result.message);
-      })
-      .catch((err: unknown) => fail(message(err)))
-      .finally(() => runners.delete(studyId));
+    if (status === 'cancelled' || gen !== watchGen) return;
+    // Only a running study has personas to run: a finished one is only shown.
+    if (status === 'running') trace.start();
+    void loop(gen);
   }
 
   /** Resume a study: finish any missing launch step, then poll. */
@@ -284,6 +214,13 @@ export function createEffects(store: Store, deps: EffectsDeps = {}) {
     const st = store.get().study;
     if (!st) return;
     if (!st.id) {
+      // The study was never created: try again with the read the gate passed, or show the gate again on the form.
+      const ready = trace.lastRead();
+      if (ready) {
+        await create(ready);
+        return;
+      }
+      store.dispatch({ type: 'navigate', screen: 'new' });
       await launch();
       return;
     }
@@ -353,8 +290,11 @@ export function createEffects(store: Store, deps: EffectsDeps = {}) {
    */
   function closePanel() {
     watchGen++;
-    closing.abort();
-    traceBridge?.close?.();
+    trace.close();
+  }
+
+  function goToTestPage() {
+    trace.goToPage();
   }
 
   function newTest() {
@@ -389,6 +329,7 @@ export function createEffects(store: Store, deps: EffectsDeps = {}) {
       }
       case 'doc':
         store.dispatch({ type: 'doc', doc: msg.doc });
+        trace.pageChanged();
         return;
       case 'selection':
         store.dispatch({ type: 'selection', selection: msg.selection });
@@ -403,7 +344,7 @@ export function createEffects(store: Store, deps: EffectsDeps = {}) {
         if (!msg.ok && msg.message) store.dispatch({ type: 'notice', notice: { kind: 'error', text: msg.message } });
         return;
       case 'trace-file-changed':
-        for (const onChange of fileWatchers) onChange(msg.frameIds);
+        trace.fileChanged(msg.frameIds);
         return;
       default:
         return;
@@ -418,8 +359,10 @@ export function createEffects(store: Store, deps: EffectsDeps = {}) {
     saveSettings,
     launch: () => launch(),
     confirmImport,
+    launchAnyway,
     cancelImport,
     closePanel,
+    goToTestPage,
     retry,
     openStudy,
     newTest,

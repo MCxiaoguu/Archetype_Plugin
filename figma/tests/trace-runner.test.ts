@@ -18,17 +18,30 @@ const shortWalk = (_runId: string, body: TurnBody): Decision => (body.screen.tit
 // --- The backend: a study's runs, claims, turns and waves ------------------------
 
 interface BackendOptions {
-  runs: Array<{ runId: string; status: string }>;
+  runs: Array<{ runId: string; status: string; owner?: string }>;
   /** The run ids of each wave `nextWave` creates, in order. */
   waves?: string[][];
-  /** How many times `nextWave` answers wave_in_progress after every run ended (results still being stored). */
+  /** How many times `nextWave` answers wave_in_progress after every run ended (a debrief still running). */
   busy?: number;
+  /** Claims the backend refuses with these errors, claiming nothing. */
   claimErrors?: Record<string, unknown[]>;
+  /** Claims the backend makes, whose answer is then lost with these errors. */
+  lostClaims?: Record<string, unknown[]>;
+  /** Runs another actor claims just before this panel's claim reaches the backend. */
+  takenBy?: Record<string, string>;
+  /** The next wave is made, then its answer is lost with this error. */
+  lostNextWave?: unknown;
+  /** The next wave's answer, as the backend sends it, when it can't be read. */
+  badNextWave?: unknown;
   postErrors?: Record<string, unknown[]>;
+  onClaim?: (runId: string) => void;
+  /** Claims that reach the backend only once these settle. */
+  claimWaits?: Record<string, Promise<void>>;
+  onPost?: (runId: string, turn: number) => void;
 }
 
 function studyBackend(brain: (runId: string, body: TurnBody) => Decision, opts: BackendOptions, log: string[]) {
-  const rows: RunRowApi[] = opts.runs.map((r) => ({ archetypeId: `a-${r.runId}`, archetypeName: `Persona ${r.runId}`, ...r }));
+  const rows: Array<RunRowApi & { owner?: string }> = opts.runs.map((r) => ({ archetypeId: `a-${r.runId}`, archetypeName: `Persona ${r.runId}`, ...r }));
   const waves = [...(opts.waves ?? [])];
   let busy = opts.busy ?? 0;
   let wave = 1;
@@ -44,20 +57,30 @@ function studyBackend(brain: (runId: string, body: TurnBody) => Decision, opts: 
   const api = {
     getRuns: vi.fn(async (studyId: string) => ({ studyId, status: 'running' as const, runs: rows.map((r) => ({ ...r })) })),
     claimRun: vi.fn(async (runId: string, body: ClaimBody) => {
-      const error = opts.claimErrors?.[runId]?.shift();
-      if (error) throw error;
+      await opts.claimWaits?.[runId];
+      const refused = opts.claimErrors?.[runId]?.shift();
+      if (refused) throw refused;
       const r = row(runId);
+      const other = opts.takenBy?.[runId];
+      if (other && r.status === 'queued') Object.assign(r, { status: 'running', owner: other });
+      const briefing = { runId, sessionId: `sess-${runId}`, claimedAt: '2026-11-10T10:00:00Z', brief: '', persona: { name: r.archetypeName }, instructions: { targetUrl: '', goal: '' } };
+      // As the backend does since 2f16ec9: the run's own owner, claiming again after a lost answer, gets the briefing again.
+      if (r.status === 'running' && r.owner === body.owner) return briefing;
       if (r.status !== 'queued') throw new ApiError(409, 'already_claimed', `run ${runId} is ${r.status}, not queued, so it cannot be claimed again.`);
-      r.status = 'running';
+      Object.assign(r, { status: 'running', owner: body.owner });
       claims.push({ runId, body: structuredClone(body) });
       log.push(`claim ${runId}`);
-      return { runId, sessionId: `sess-${runId}`, claimedAt: '2026-11-10T10:00:00Z', brief: '', persona: { name: r.archetypeName }, instructions: { targetUrl: '', goal: '' } };
+      opts.onClaim?.(runId);
+      const lost = opts.lostClaims?.[runId]?.shift();
+      if (lost) throw lost;
+      return briefing;
     }),
     postTurn: vi.fn(async (runId: string, body: TurnBody): Promise<TurnView> => {
       const error = opts.postErrors?.[runId]?.shift();
       if (error) throw error;
       posted.push({ runId, body: structuredClone(body) });
       log.push(`post ${runId} ${body.turn}`);
+      opts.onPost?.(runId, body.turn);
       const key = `${runId}/${body.turn}`;
       if (!decisions.has(key)) decisions.set(key, brain(runId, body));
       return { turn: body.turn, status: 'thinking' };
@@ -84,6 +107,12 @@ function studyBackend(brain: (runId: string, body: TurnBody) => Decision, opts: 
       if (!ids) return { studyId, done: true as const, reason: 'every wave ran', wave };
       wave++;
       for (const runId of ids) rows.push({ runId, archetypeId: `a-${runId}`, archetypeName: `Persona ${runId}`, status: 'queued', wave });
+      if (opts.lostNextWave) {
+        const lost = opts.lostNextWave;
+        delete opts.lostNextWave;
+        throw lost;
+      }
+      if (opts.badNextWave) return opts.badNextWave as never;
       return { studyId, wave, created: true, runs: ids.map((runId, i) => ({ runId, archetypeId: `a-${runId}`, archetypeName: `Persona ${runId}`, repeatIndex: i })) };
     }),
   };
@@ -92,12 +121,19 @@ function studyBackend(brain: (runId: string, body: TurnBody) => Decision, opts: 
 
 async function runner(
   brain: (runId: string, body: TurnBody) => Decision,
-  opts: BackendOptions & { main?: MainThread; study?: (main: MainThread) => Partial<StudyTrace>; fails?: boolean; signal?: AbortSignal },
+  opts: BackendOptions & {
+    main?: MainThread;
+    /** The backend of an earlier runner on the same study, as the panel finds it on reopening. */
+    server?: ReturnType<typeof studyBackend>;
+    study?: (main: MainThread) => Partial<StudyTrace>;
+    fails?: boolean;
+    signal?: AbortSignal;
+  },
 ) {
   const main = opts.main ?? (await mainThread());
   // One log for the main thread and the backend, in the order things happened.
   const log = main.log;
-  const server = studyBackend(brain, opts, log);
+  const server = opts.server ?? studyBackend(brain, opts, log);
   const time = clock();
   const sessions: SessionStatus[] = [];
   const statuses: RunnerStatus[] = [];
@@ -121,7 +157,7 @@ async function runner(
     error = err;
   }
   if (opts.fails && !error) throw new Error('The runner was meant to fail');
-  return { result: result as RunnerResult, error, log, sessions, statuses, time, main, ...server };
+  return { ...server, backend: server, result: result as RunnerResult, error, log, sessions, statuses, time, main };
 }
 
 const postsOf = (posted: Array<{ runId: string; body: TurnBody }>, runId: string) => posted.filter((p) => p.runId === runId).map((p) => p.body);
@@ -183,30 +219,48 @@ describe('running a study in the panel', () => {
     expect(result.sessions.map((s) => s.runId)).toEqual(['r1', 'r2', 'r3']);
   });
 
-  it('stops waiting for the next wave after 5 minutes and says to try again', async () => {
-    const { result, log, time } = await runner(shortWalk, { runs: [{ runId: 'r1', status: 'queued' }], busy: Infinity });
-    expect(result).toMatchObject({ stop: 'stuck', message: expect.stringMatching(/Try again/) });
+  it('stops waiting for the next wave after 5 minutes, naming the open runs this panel is not running', async () => {
+    const { result, log, time } = await runner(shortWalk, { runs: [{ runId: 'r1', status: 'queued' }, { runId: 'rX', status: 'running', owner: 'p_other' }] });
+    expect(result).toMatchObject({ stop: 'stuck', message: expect.stringMatching(/Persona rX.*this panel isn't running.*Try again/) });
     const waited = time.waits.filter((w) => w === WAVE_RETRY_MS).length * WAVE_RETRY_MS;
     expect(waited).toBeGreaterThanOrEqual(WAVE_WAIT_MS);
     expect(waited).toBeLessThan(WAVE_WAIT_MS + 2 * WAVE_RETRY_MS);
     expect(lastOf(log)).toBe('next');
   });
 
+  it('says the next round has not started when no run is open and the backend still waits', async () => {
+    const { result } = await runner(shortWalk, { runs: [{ runId: 'r1', status: 'queued' }], busy: Infinity });
+    expect(result).toMatchObject({ stop: 'stuck', message: expect.stringMatching(/hasn't started the next round.*Try again/) });
+    expect((result as { message: string }).message).not.toMatch(/storing/);
+  });
+
   it('leaves a run another actor claimed first to that actor', async () => {
-    const taken = new ApiError(409, 'already_claimed', 'run r2 was claimed by another actor a moment ago.');
-    const { claims, posted, result } = await runner(shortWalk, { runs: [{ runId: 'r1', status: 'queued' }, { runId: 'r2', status: 'queued' }], claimErrors: { r2: [taken] } });
+    const { claims, posted, result } = await runner(shortWalk, { runs: [{ runId: 'r1', status: 'queued' }, { runId: 'r2', status: 'queued' }], takenBy: { r2: 'p_other' } });
     expect(claims.map((c) => c.runId)).toEqual(['r1']);
     expect(postsOf(posted, 'r2')).toEqual([]);
     expect(result.sessions.map((s) => s.runId)).toEqual(['r1']);
   });
 
-  it('pauses claims through network loss, saying so, and goes on', async () => {
-    const offline = new ApiError(0, 'network', 'Could not reach Archetype.');
-    const { claims, statuses, time, result } = await runner(shortWalk, { runs: [{ runId: 'r1', status: 'queued' }], claimErrors: { r1: [offline, offline] } });
+  it('pauses claims through network loss, and keeps a claim whose answer was lost as its own', async () => {
+    const offline = () => new ApiError(0, 'network', 'Could not reach Archetype.');
+    const { claims, statuses, time, result, api } = await runner(shortWalk, { runs: [{ runId: 'r1', status: 'queued' }], claimErrors: { r1: [offline()] }, lostClaims: { r1: [offline()] } });
+    // Not made, made with its answer lost, then the same briefing again.
+    expect(api.claimRun).toHaveBeenCalledTimes(3);
     expect(claims.map((c) => c.runId)).toEqual(['r1']);
     expect(statuses).toContainEqual({ phase: 'paused', notice: 'Lost touch with Archetype. Retrying.' });
     expect(time.waits.slice(0, 2)).toEqual([2_000, 4_000]);
-    expect(result.stop).toBe('done');
+    expect(result).toMatchObject({ stop: 'done', sessions: [{ runId: 'r1', stop: 'ended' }] });
+  });
+
+  it('comes back from a pause once every paused claim is through, whatever order they recover in', async () => {
+    const offline = () => new ApiError(0, 'network', 'Could not reach Archetype.');
+    const { statuses } = await runner(shortWalk, {
+      runs: [{ runId: 'r1', status: 'queued' }, { runId: 'r2', status: 'queued' }],
+      claimErrors: { r1: [offline()], r2: [offline(), offline()] },
+    });
+    const lastPause = statuses.map((s) => s.phase).lastIndexOf('paused');
+    expect(statuses[lastPause + 1]).toEqual({ phase: 'running', notice: null });
+    expect(statuses.slice(lastPause + 1).some((s) => s.phase === 'paused')).toBe(false);
   });
 
   it('stops when the panel closes, leaving every run where it was to resume', async () => {
@@ -223,11 +277,67 @@ describe('running a study in the panel', () => {
     expect([...(main.stored.get('s1')?.keys() ?? [])].sort()).toEqual(['r1', 'r2']);
   });
 
-  it('fails loudly on a claim the backend refuses for good', async () => {
-    const gone = new ApiError(404, 'run_not_found', 'No run r1 for this user.');
-    const { error, posted } = await runner(shortWalk, { runs: [{ runId: 'r1', status: 'queued' }], claimErrors: { r1: [gone] }, fails: true });
-    expect(error).toBe(gone);
-    expect(posted).toEqual([]);
+  it("takes only already_claimed for another actor's run; another refusal fails the runner once the rest ran", async () => {
+    const odd = new ApiError(409, 'not_editable', 'This study is archived.');
+    const gone = new ApiError(404, 'run_not_found', 'No run r3 for this user.');
+    const { error, posted, log } = await runner(shortWalk, {
+      runs: [{ runId: 'r1', status: 'queued' }, { runId: 'r2', status: 'queued' }, { runId: 'r3', status: 'queued' }],
+      claimErrors: { r1: [odd], r3: [gone] },
+      fails: true,
+    });
+    // r2's claim and session did not wait for the others, and ran to the end.
+    expect(postsOf(posted, 'r2').map((b) => b.turn)).toEqual([1, 2]);
+    expect(log).toContain('save r2 null');
+    expect((error as Error).message).toMatch(/r1.*This study is archived\./);
+    expect((error as Error).message).toMatch(/r3.*No run r3 for this user\./);
+    expect(log).not.toContain('next');
+  });
+
+  it('starts each run as soon as its own claim is through, without waiting for the others', async () => {
+    let r1Posted = () => {};
+    const posted1 = new Promise<void>((resolve) => (r1Posted = resolve));
+    const { log, result } = await runner(shortWalk, {
+      runs: [{ runId: 'r1', status: 'queued' }, { runId: 'r2', status: 'queued' }],
+      // r2's claim is slow: it gets through only after r1 took its first turn.
+      claimWaits: { r2: posted1 },
+      onPost: (runId, turn) => runId === 'r1' && turn === 1 && r1Posted(),
+    });
+    expect(log.indexOf('post r1 1')).toBeLessThan(log.indexOf('claim r2'));
+    expect(result).toMatchObject({ stop: 'done', sessions: [{ runId: 'r1', stop: 'ended' }, { runId: 'r2', stop: 'ended' }] });
+  });
+
+  it('saves each run at turn 0 as soon as it is claimed, so a panel closed right after the claims resumes them all', async () => {
+    const closing = new AbortController();
+    const main = await mainThread();
+    const runs = [{ runId: 'r1', status: 'queued' }, { runId: 'r2', status: 'queued' }];
+    let claimed = 0;
+    const first = await runner(shortWalk, { main, runs, signal: closing.signal, onClaim: () => ++claimed === 2 && closing.abort() });
+    // Closed before either session started: no session runs on, and both runs are saved.
+    expect(first.result).toEqual({ stop: 'cancelled', sessions: [] });
+    const turn0 = (runId: string) => ({ owner: OWNER, runId, turn: 0, state: start(main.doc, '1:2'), lastOutcome: null, timerEffects: [], loopFrames: [] });
+    expect([...(main.stored.get('s1')?.values() ?? [])]).toEqual([turn0('r1'), turn0('r2')]);
+    expect(first.claims.map((c) => c.runId)).toEqual(['r1', 'r2']);
+
+    // Reopened: both runs go on under this owner, neither claimed again.
+    const again = await runner(shortWalk, { main, runs, server: first.backend });
+    expect(again.result).toMatchObject({ stop: 'done', sessions: [{ runId: 'r1', stop: 'ended' }, { runId: 'r2', stop: 'ended' }] });
+    expect(first.claims.map((c) => c.runId)).toEqual(['r1', 'r2']);
+    expect(postsOf(first.posted, 'r1').map((b) => b.turn)).toEqual([1, 2]);
+    expect(postsOf(first.posted, 'r2').map((b) => b.turn)).toEqual([1, 2]);
+    expect(main.stored.get('s1')?.size ?? 0).toBe(0);
+  });
+
+  it('claims and runs a wave whose answer was lost, when the backend says one is in progress', async () => {
+    const lost = new ApiError(0, 'network', 'Could not reach Archetype.');
+    const { claims, result, log } = await runner(shortWalk, { runs: [{ runId: 'r1', status: 'queued' }], waves: [['r2']], lostNextWave: lost });
+    expect(claims.map((c) => c.runId)).toEqual(['r1', 'r2']);
+    expect(log.filter((l) => l === 'next')).toHaveLength(3);
+    expect(result).toMatchObject({ stop: 'done', sessions: [{ runId: 'r1' }, { runId: 'r2' }] });
+  });
+
+  it('fails loudly on a next wave it cannot read', async () => {
+    const { error } = await runner(shortWalk, { runs: [{ runId: 'r1', status: 'queued' }], waves: [['r2']], badNextWave: { studyId: 's1', wave: 2, created: true }, fails: true });
+    expect((error as Error).message).toMatch(/next wave/);
   });
 
   it('lets the other sessions finish, then fails loudly, when one session breaks', async () => {
