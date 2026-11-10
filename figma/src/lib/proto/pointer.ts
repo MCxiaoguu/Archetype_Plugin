@@ -7,7 +7,7 @@
  * left. A click is a press and a release at one point.
  */
 
-import { baseOf, bubble, chainOf, contains, hitAt, isShown, type LayerIndex, rootOf, screenOf } from './hitTest';
+import { baseOf, bubble, chainOf, contains, hitAt, hittableFrame, isShown, type LayerIndex, rootOf, screenOf } from './hitTest';
 import type { HeldEffect, OpenOverlay, Point, ProtoTrigger, TraceState, TraceTimer } from './model';
 import { variantChanges } from './variants';
 
@@ -56,9 +56,12 @@ export function movePointer(deps: PointerDeps, s: TraceState, point: Point): boo
 /**
  * MOUSE_DOWN, ON_PRESS, MOUSE_UP and ON_CLICK at one point, each on the
  * layer the hit bubbles to for that trigger. Once one of them shows a
- * different frame or overlay the rest don't fire, but the release still
- * undoes the press. A click outside an overlay reaches nothing below it;
- * it closes the overlay when that closes on an outside click.
+ * different frame or overlay that lasts, the rest don't fire; a "while
+ * pressing" effect undone at the release doesn't last, so it stops
+ * nothing. A click outside the top overlay reaches nothing below it; it
+ * closes the overlay when that closes on an outside click. The hit is
+ * found among the layers the persona saw, so an overlay this click's own
+ * pointer move opened can't take it.
  */
 export function click(deps: PointerDeps, s: TraceState, point: Point): void {
   if (!movePointer(deps, s, point)) return;
@@ -68,30 +71,34 @@ export function click(deps: PointerDeps, s: TraceState, point: Point): void {
   // Typed keys go to the layer a click lands on.
   s.focus = hit ? { layerKey: hit.key, frameId: rootOf(layers, hit.key) } : null;
   if (!hit) {
-    if (s.overlays[s.overlays.length - 1]?.closeOnOutsideClick) s.overlays.pop();
+    const top = hittableFrame(layers, s);
+    const overlay = s.overlays.find((o) => o.frameId === top);
+    if (overlay?.closeOnOutsideClick) s.overlays.splice(s.overlays.indexOf(overlay), 1);
     return;
   }
 
   const shown = screenOf(s);
   let stopped = false;
-  const press = (trigger: TriggerType, held: boolean) => {
+  const press = (trigger: TriggerType) => {
     if (stopped) return;
     const key = bubble(layers, hit.key, (k) => deps.handles(s, k, trigger));
     if (key === null) return;
-    if (held) hold(deps, s, key, 'ON_PRESS');
-    else deps.fire(s, key, trigger);
+    deps.fire(s, key, trigger);
     stopped = screenOf(s) !== shown;
   };
 
   s.pointer.pressing = hit.key;
-  press('MOUSE_DOWN', false);
-  press('ON_PRESS', true);
+  press('MOUSE_DOWN');
+  const pressed = stopped ? null : bubble(layers, hit.key, (k) => deps.handles(s, k, 'ON_PRESS'));
+  if (pressed !== null) hold(deps, s, pressed, 'ON_PRESS');
   s.pointer.pressing = null;
   for (const held of [...s.pointer.held]) {
     if (held.trigger === 'ON_PRESS') undo(deps, s, held);
   }
-  press('MOUSE_UP', false);
-  press('ON_CLICK', false);
+  // What the press changed and the release didn't undo lasts, and stops the rest.
+  stopped = stopped || screenOf(s) !== shown;
+  press('MOUSE_UP');
+  press('ON_CLICK');
 }
 
 export function drag(deps: PointerDeps, s: TraceState, point: Point): void {

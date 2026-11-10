@@ -8,7 +8,7 @@
 import type { Box, ProtoDoc, TraceState, TraceTimer } from './model';
 import { instancesIn, reactionsFor } from './variants';
 
-/** `settle` fires AFTER_TIMEOUT timers this short or shorter: a person wouldn't act sooner. Longer ones wait for `wait`. */
+/** `settle` fires AFTER_TIMEOUT timers due this soon or sooner: a person wouldn't act sooner. Later ones wait for `wait`. */
 export const SETTLE_LIMIT_MS = 2000;
 
 /** How many timers one `settle` or `wait` fires before it stops a loop. */
@@ -20,9 +20,9 @@ export function isMouseTimer(timer: TraceTimer): boolean {
   return MOUSE.has(timer.triggerType);
 }
 
-/** What `settle` fires: delayed mouse reactions, whatever their delay, and short AFTER_TIMEOUT timers. */
-export function firesAtSettle(timer: TraceTimer): boolean {
-  return isMouseTimer(timer) || (timer.triggerType === 'AFTER_TIMEOUT' && timer.delayMs <= SETTLE_LIMIT_MS);
+/** What `settle` fires at `clockMs`: delayed mouse reactions, whatever their delay, and AFTER_TIMEOUT timers due within 2 s. */
+export function firesAtSettle(timer: TraceTimer, clockMs: number): boolean {
+  return isMouseTimer(timer) || (timer.triggerType === 'AFTER_TIMEOUT' && timer.dueAtMs - clockMs <= SETTLE_LIMIT_MS);
 }
 
 export function addTimer(s: TraceState, timer: Omit<TraceTimer, 'dueAtMs'>): void {
@@ -40,7 +40,9 @@ function schedule(doc: ProtoDoc, s: TraceState, frameId: string, layerKey: strin
 /**
  * Starts the AFTER_TIMEOUT timers of a frame that has just shown: its own,
  * and those of the variants its interactive components show. Timers it
- * already had start again.
+ * already had start again. A component nested in a swapped variant
+ * (keyed `<instance>;<path>`) gets its reactions through that variant, so
+ * it has timers only while the variant showing it shows.
  */
 export function startFrameTimers(doc: ProtoDoc, s: TraceState, frameId: string, frameBox: Box): void {
   s.timers = s.timers.filter((t) => t.triggerType !== 'AFTER_TIMEOUT' || t.frameId !== frameId);
@@ -48,10 +50,12 @@ export function startFrameTimers(doc: ProtoDoc, s: TraceState, frameId: string, 
   for (const instanceKey of instancesIn(doc, frameId)) schedule(doc, s, frameId, instanceKey, null);
 }
 
-/** Starts an interactive component's AFTER_TIMEOUT timers again, for the variant it shows now. */
+/** Starts an interactive component's AFTER_TIMEOUT timers again, its nested components' too, for the variant it shows now. */
 export function restartInstanceTimers(doc: ProtoDoc, s: TraceState, frameId: string, instanceKey: string): void {
-  s.timers = s.timers.filter((t) => t.triggerType !== 'AFTER_TIMEOUT' || t.layerKey !== instanceKey);
-  schedule(doc, s, frameId, instanceKey, null);
+  const nested = `${instanceKey};`;
+  const inside = (key: string) => key === instanceKey || key.startsWith(nested);
+  s.timers = s.timers.filter((t) => t.triggerType !== 'AFTER_TIMEOUT' || !inside(t.layerKey));
+  for (const key of instancesIn(doc, frameId)) if (inside(key)) schedule(doc, s, frameId, key, null);
 }
 
 /** The index of the earliest timer `eligible` picks (the first of equals), or -1. */

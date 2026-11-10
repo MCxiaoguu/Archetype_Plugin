@@ -18,13 +18,13 @@ async function read(options = { importLibraryVariants: true }, edit: (f: ReturnT
 
 const node = (fake: ReturnType<typeof fakeFromFixture>, id: string) => fake.nodes.get(id) as FakeNode;
 
-/** A NODE action with the flags the reader fills in when Figma leaves them out. */
+/** A NODE action with the flags the reader fills in when Figma leaves them out: by default, a navigation resets the scroll. */
 const go = (destinationId: string | null, navigation = 'NAVIGATE', flags: Partial<Extract<ProtoAction, { type: 'NODE' }>> = {}): ProtoAction => ({
   type: 'NODE',
   navigation: navigation as Extract<ProtoAction, { type: 'NODE' }>['navigation'],
   destinationId,
-  resetScrollPosition: false,
-  preserveScrollPosition: true,
+  resetScrollPosition: true,
+  preserveScrollPosition: false,
   resetInteractiveComponents: false,
   overlayRelativePosition: null,
   ...flags,
@@ -141,6 +141,21 @@ describe('readProto', () => {
       ]);
       expect(doc.reactions['1:11']?.[0]?.actions).toEqual([{ type: 'SET_VARIABLE_MODE', collectionId: COLL, modeId: '10:1' }]);
       expect(doc.reactions['2:42']?.[0]?.actions).toEqual([{ type: 'URL', url: 'https://www.nacha.org/content/what-is-ach' }]);
+    });
+
+    it.each([
+      { flags: {}, reset: true, preserve: false },
+      { flags: { resetScrollPosition: false }, reset: false, preserve: true },
+      { flags: { resetScrollPosition: true }, reset: true, preserve: false },
+      { flags: { preserveScrollPosition: true }, reset: false, preserve: true },
+      { flags: { preserveScrollPosition: false }, reset: true, preserve: false },
+      // When both are there, resetScrollPosition is the one Figma reads; the deprecated flag is kept as it is.
+      { flags: { resetScrollPosition: false, preserveScrollPosition: false }, reset: false, preserve: false },
+    ])('reads the scroll flags $flags as reset $reset', async ({ flags, reset, preserve }) => {
+      const { doc } = await read(undefined, (f) => {
+        node(f, '1:8').reactions = [{ trigger: { type: 'ON_CLICK' }, actions: [{ type: 'NODE', destinationId: '3:5', navigation: 'NAVIGATE', transition: null, ...flags }] }];
+      });
+      expect(doc.reactions['1:8']?.[0]?.actions[0]).toMatchObject({ resetScrollPosition: reset, preserveScrollPosition: preserve });
     });
 
     it('keeps what it does not model as UNKNOWN or unsupported, and leaves out a reaction with no trigger', async () => {

@@ -42,11 +42,6 @@ describe('listElements', () => {
   it.each<{ what: string; layers: RawLayer[]; expected: Array<[string, string]> }>([
     { what: 'plain text is text', layers: [text('t', 'A', [20, 20, 200, 20], 'Your invoices')], expected: [['text', 'Your invoices']] },
     {
-      what: 'text with a reaction is a link',
-      layers: [text('t', 'A', [20, 20, 200, 20], 'Forgot password?', { hasReactions: true })],
-      expected: [['link', 'Forgot password?']],
-    },
-    {
       what: 'text that looks like a link is a link',
       layers: [text('t', 'A', [20, 20, 200, 20], 'Terms', { roleHint: 'link' })],
       expected: [['link', 'Terms']],
@@ -150,6 +145,31 @@ describe('listElements', () => {
 
     it('are left out when they carry no reaction either', () => {
       expect(labels([root, layer('ghost', 'A', [50, 50, 100, 40], { paints: false })])).toEqual([]);
+    });
+  });
+
+  describe('show nothing of the wiring', () => {
+    /** The same screen twice, once with every layer wired and once with none: the lists must match. */
+    const twice = (build: (wired: boolean) => RawLayer[]) => [list([root, ...build(true)]).elements, list([root, ...build(false)]).elements];
+
+    it.each<{ what: string; build: (wired: boolean) => RawLayer[] }>([
+      { what: 'a text', build: (wired) => [text('t', 'A', [20, 20, 200, 20], 'Forgot password?', { hasReactions: wired })] },
+      {
+        what: 'a filled card of texts',
+        build: (wired) => [
+          layer('card', 'A', [0, 100, 400, 100], { name: 'Frame 9', hasReactions: wired }),
+          text('t1', 'card', [10, 110, 100, 20], 'Pro plan'),
+          text('t2', 'card', [10, 140, 100, 20], '$12 a month'),
+        ],
+      },
+      { what: 'a filled shape without text', build: (wired) => [layer('dot', 'A', [20, 20, 40, 40], { type: 'ELLIPSE', name: 'Ellipse 3', hasReactions: wired })] },
+      {
+        what: 'a transparent frame around a text',
+        build: (wired) => [layer('wrap', 'A', [20, 20, 200, 40], { name: 'Frame 2', paints: false, hasReactions: wired }), text('t', 'wrap', [30, 30, 180, 20], 'See all plans')],
+      },
+    ])('list $what the same whether it is wired or not', ({ build }) => {
+      const [wired, unwired] = twice(build);
+      expect(wired).toEqual(unwired);
     });
   });
 

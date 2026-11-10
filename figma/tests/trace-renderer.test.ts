@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import fixtureJson from '../harness/fixtures/farside-proto.json';
 import { listElements } from '../src/lib/proto/elements';
 import { apply, start } from '../src/lib/proto/engine';
-import type { OpenOverlay, ProtoDoc, RawLayer, TraceState } from '../src/lib/proto/model';
+import { activeMode } from '../src/lib/proto/expr';
+import type { OpenOverlay, ProtoDoc, RawLayer, TraceState, VariableCollection } from '../src/lib/proto/model';
 import { readProto } from '../src/main/protoReader';
 import { createRenderer } from '../src/main/renderer';
 import { SCRATCH_KEY, SCRATCH_VALUE, scratchContainerIds } from '../src/main/scratch';
@@ -127,6 +128,19 @@ describe('render', () => {
     const error: OpenOverlay = { frameId: '3:1', position: 'CENTER', origin: { x: 400, y: 330 }, closeOnOutsideClick: true };
     const tooltip: OpenOverlay = { frameId: '3:3', position: 'MANUAL', origin: { x: 300, y: 244 }, closeOnOutsideClick: false };
 
+    it('draws a scrolled overlay moved up by its offset, its fixed children staying put', async () => {
+      const fake = await setup((f) => {
+        node(f, '3:1').height = 1200;
+        node(f, '3:1').numberOfFixedChildren = 1;
+      });
+      const s = state(fake.doc, '2:20', { overlays: [{ ...error, origin: { x: 400, y: 0 } }], scroll: { '3:1': { x: 0, y: 100, areas: {} } } });
+      const { image, layers } = await fake.renderer.render(fake.doc, s);
+      expect(drawn(image).children?.[2]).toMatchObject({ name: 'Bank sign in error', x: 400, y: -100 });
+      // "Try again" is the overlay's last child, so its fixed one.
+      expect(layerOf(layers, '3:2')).toMatchObject({ fixed: true, box: { x: 424, y: 168, width: 160, height: 48 } });
+      expect(layerOf(layers, '3:4').box.y).toBe(-76);
+    });
+
     it('copies each open overlay at its origin, over a backdrop when it has one', async () => {
       const fake = await setup();
       const { image, layers } = await fake.renderer.render(fake.doc, state(fake.doc, '2:20', { overlays: [error, tooltip] }));
@@ -138,6 +152,7 @@ describe('render', () => {
         ['ACH tooltip', 300, 244],
       ]);
       expect(children[1]).toMatchObject({ width: 1280, height: 900, fills: [{ color: { r: 0, g: 0, b: 0 }, opacity: 0.4 }] });
+      expect(layerOf(layers, '3:1').scroll).toBeNull();
       // The backdrop is the renderer's, not a layer of the prototype.
       expect(layers.filter((l) => l.parentKey === null).map((l) => l.key)).toEqual(['2:20', '3:1', '3:3']);
       expect(layerOf(layers, '3:1').box).toEqual({ x: 400, y: 330, width: 480, height: 240 });
@@ -177,6 +192,9 @@ describe('render', () => {
       const fake = await setup();
       const { image } = await fake.renderer.render(fake.doc, state(fake.doc, frameId, { modes }));
       expect(drawn(image).children?.[0]?.explicitVariableModes).toEqual({ [COLL]: mode });
+      // The same helper the expressions use decides it, so a render and an expression can't disagree.
+      const collection = fake.doc.variableCollections[COLL] as VariableCollection;
+      expect(activeMode({ doc: fake.doc, state: state(fake.doc, frameId, { modes }), frameId }, collection)).toBe(mode);
     });
 
     it('writes assigned variable values into the copies, unbinding them: text, visibility and fills', async () => {
@@ -281,8 +299,8 @@ describe('render', () => {
       const fake = await setup();
       const { layers } = await fake.renderer.render(fake.doc, state(fake.doc, '2:20'));
       expect(layerOf(layers, '2:25').scroll).toEqual({ direction: 'VERTICAL', maxX: 0, maxY: 400 });
-      // The frame scrolls as a page; its own content doesn't reach past it.
-      expect(layerOf(layers, '2:20').scroll).toEqual({ direction: 'VERTICAL', maxX: 0, maxY: 0 });
+      // A frame scrolls as a page, from its own size: its root layer carries no scroll area.
+      expect(layerOf(layers, '2:20').scroll).toBeNull();
       expect(layerOf(layers, '2:28').fixed).toBe(true);
       expect(layerOf(layers, '2:22').fixed).toBe(false);
     });

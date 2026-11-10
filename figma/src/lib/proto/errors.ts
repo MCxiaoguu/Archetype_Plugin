@@ -13,7 +13,9 @@ export type EngineErrorCode =
   /** The document lacks something the action needs, such as a start frame or a MANUAL overlay's offset. */
   | 'invalid_doc'
   /** The action itself is malformed, such as a wait that isn't a positive number of seconds. */
-  | 'invalid_action';
+  | 'invalid_action'
+  /** The state was made from another version of the document (its `docHash` differs). */
+  | 'doc_changed';
 
 export class EngineError extends Error {
   readonly code: EngineErrorCode;

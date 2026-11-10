@@ -92,20 +92,23 @@ async function renderOnce(api: PluginAPI, doc: ProtoDoc, state: TraceState): Pro
     container.locked = true;
 
     const r: Render = { api, doc, state, keyOf: new Map(), byKey: new Map(), missingFonts: new Set() };
-    const page = state.scroll[state.frameId] ?? { x: 0, y: 0 };
-    const copies: Copy[] = [{ frameId: state.frameId, root: await copyInto(r, container, state.frameId, { x: -page.x, y: -page.y }) }];
+    // A page offset moves its frame's copy up and left: the base frame's, and an overlay's bigger than the viewport.
+    const pageOf = (frameId: string) => state.scroll[frameId] ?? { x: 0, y: 0 };
+    const base = pageOf(state.frameId);
+    const copies: Copy[] = [{ frameId: state.frameId, root: await copyInto(r, container, state.frameId, { x: -base.x, y: -base.y }) }];
     for (const overlay of state.overlays) {
       const frame = doc.frames.find((f) => f.id === overlay.frameId);
       if (!frame) throw new Error(`The overlay ${overlay.frameId} isn't in the prototype`);
       if (frame.overlay.background.type === 'SOLID_COLOR') backdrop(api, container, state.viewport, frame.overlay.background.color);
-      copies.push({ frameId: overlay.frameId, root: await copyInto(r, container, overlay.frameId, overlay.origin) });
+      const page = pageOf(overlay.frameId);
+      copies.push({ frameId: overlay.frameId, root: await copyInto(r, container, overlay.frameId, { x: overlay.origin.x - page.x, y: overlay.origin.y - page.y }) });
     }
 
     for (const copy of copies) {
       await applyVariants(r, copy);
       await applyModes(r, copy);
       await applyValues(r, copy);
-      applyScroll(r, copy, copy.frameId === state.frameId ? page : null);
+      applyScroll(r, copy, pageOf(copy.frameId));
     }
 
     const layers: RawLayer[] = [];
@@ -324,12 +327,12 @@ function shift(node: SceneNode, children: readonly SceneNode[], dx: number, dy: 
 }
 
 /**
- * The page offset moved the base copy up and left; its fixed children move
- * back by as much, so they stay put on screen. Each scrolled area's
- * content moves by its offset, its fixed children staying.
+ * The page offset moved the copy up and left; its fixed children move back
+ * by as much, so they stay put on screen. Each scrolled area's content
+ * moves by its offset, its fixed children staying.
  */
-function applyScroll(r: Render, copy: Copy, page: ScrollOffset | null): void {
-  if (page) shift(copy.root, [...fixedChildren(copy.root)], page.x, page.y);
+function applyScroll(r: Render, copy: Copy, page: ScrollOffset): void {
+  shift(copy.root, [...fixedChildren(copy.root)], page.x, page.y);
   for (const [key, offset] of Object.entries(r.state.scroll[copy.frameId]?.areas ?? {})) {
     const area = nodeAt(r, key);
     if (!('children' in area)) throw new Error(`The scroll area ${key} has no layers to scroll`);
@@ -379,9 +382,13 @@ function roleHintOf(node: SceneNode): RoleHint | null {
   return null;
 }
 
-/** How far a scrolling frame's content (its visible, non-fixed children) reaches past it, at offset zero. */
+/**
+ * How far a nested scrolling frame's content (its visible, non-fixed
+ * children) reaches past it, at offset zero. A root has none: a top level
+ * frame scrolls as a page, by its own size.
+ */
 function scrollOf(r: Render, copy: Copy, node: SceneNode, key: string, origin: Rect): RawLayer['scroll'] {
-  if (!('overflowDirection' in node) || node.overflowDirection === 'NONE' || !('children' in node)) return null;
+  if (node === copy.root || !('overflowDirection' in node) || node.overflowDirection === 'NONE' || !('children' in node)) return null;
   const own = boxIn(node, origin);
   const offset = r.state.scroll[copy.frameId]?.areas[key] ?? { x: 0, y: 0 };
   const fixed = fixedChildren(node);

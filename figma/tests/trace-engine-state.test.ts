@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { settle, start } from '../src/lib/proto/engine';
 import { evaluate, ExprError } from '../src/lib/proto/expr';
+import { KEY_NAMES, keyCodes, MODIFIER_NAMES } from '../src/lib/proto/keys';
 import type {
   KeyDevice,
   ProtoAction,
@@ -169,7 +170,7 @@ describe('evaluate', () => {
       expect(evaluate(ref('count'), scope(start(doc, 'A'), doc))).toBe(5);
     });
 
-    it("keeps a frame's explicit mode over the page's, as Figma does", () => {
+    it("keeps a frame's explicit mode over the one SET_VARIABLE_MODE chose, as Figma does", () => {
       const doc = protoDoc([frame('A', 400, 800, { explicitVariableModes: { ui: 'light' } })], {}, { variableCollections: collections });
       expect(evaluate(ref('count'), scope({ ...start(doc, 'A'), modes: { ui: 'dark' } }, doc))).toBe(2);
     });
@@ -325,9 +326,22 @@ describe('CHANGE_TO', () => {
     expect(state.variants).toEqual({});
   });
 
-  it('a variant no instance around the trigger has does nothing', () => {
+  it('a CHANGE_TO to a variant no instance around the trigger has is unsupported, not a misclick', () => {
     const d = doc([], { btn: [on('ON_CLICK', changeTo('v2'))] });
-    expect(run(d, start(d, 'A'), click('btn'), asV1).outcome).toBe('nothing_happened');
+    const { outcome, effects } = run(d, start(d, 'A'), click('btn'), asV1);
+    expect(outcome).toBe('unsupported');
+    expect(effects).toEqual([{ type: 'unsupported', action: 'missing_variant_set:v2' }]);
+  });
+
+  it('a CHANGE_TO with no destination does nothing', () => {
+    const d = doc([on('ON_CLICK', node('CHANGE_TO', null))]);
+    expect(run(d, start(d, 'A'), click('tgl'), asV1)).toMatchObject({ outcome: 'nothing_happened', effects: [] });
+  });
+
+  it('changing a variant clears the overrides of instances nested in the old one', () => {
+    const d = doc([on('ON_CLICK', changeTo('v1'))]);
+    const s = { ...start(d, 'A'), variants: { A: { tgl: 'v2', 'tgl;badge': 'b2', other: 'o1' } } };
+    expect(run(d, s, click('tgl'), asV2).state.variants).toEqual({ A: { tgl: 'v1', other: 'o1' } });
   });
 
   it('"while pressing" changes the variant back at release', () => {
@@ -362,6 +376,37 @@ describe('CHANGE_TO', () => {
 
 describe('press_key', () => {
   const press = (key: string): TraceAction => ({ type: 'press_key', key });
+
+  it.each<{ key: string; codes: number[] }>([
+    { key: 'Esc', codes: [27] },
+    { key: 'Escape', codes: [27] },
+    { key: 'Space', codes: [32] },
+    { key: 'Spacebar', codes: [32] },
+    { key: 'Return', codes: [13] },
+    { key: 'Enter', codes: [13] },
+    { key: 'Tab', codes: [9] },
+    { key: 'Backspace', codes: [8] },
+    { key: 'Delete', codes: [46] },
+    { key: 'ArrowUp', codes: [38] },
+    { key: 'Up', codes: [38] },
+    { key: 'Ctrl+K', codes: [17, 75] },
+    { key: 'Cmd+K', codes: [91, 75] },
+    { key: 'Meta+K', codes: [91, 75] },
+    { key: 'Shift+Tab', codes: [16, 9] },
+  ])('reads the key name $key as $codes', ({ key, codes }) => {
+    expect(keyCodes(key)).toEqual(codes);
+  });
+
+  it('accepts every name in KEY_NAMES, alone and after a modifier, and lists the aliases', () => {
+    for (const name of KEY_NAMES) {
+      expect(keyCodes(name), name).not.toBeNull();
+      expect(keyCodes(`Shift+${name}`), name).not.toBeNull();
+    }
+    for (const modifier of MODIFIER_NAMES) expect(KEY_NAMES).toContain(modifier);
+    expect(KEY_NAMES).toEqual(expect.arrayContaining(['Esc', 'Space', 'Return', 'Enter', 'a', 'Z', '7', 'F12', 'ArrowLeft']));
+    expect(keyCodes('Hyper')).toBeNull();
+    expect(keyCodes('Hyper+K')).toBeNull();
+  });
 
   it.each<{ key: string; codes: number[]; fires: boolean }>([
     { key: 'Enter', codes: [13], fires: true },
@@ -411,27 +456,25 @@ describe('type', () => {
   const layers = [...screenA, field];
   const type = (text: string): TraceAction => ({ type: 'type', element: 'field', text });
 
-  it('fires the key reactions of the layer the last click landed on', () => {
-    const doc = protoDoc([A, P], { field: [keyDown([65], openOverlay('P'))] });
-    const focused = run(doc, start(doc, 'A'), click('field'), layers).state;
-    expect(focused.focus).toEqual({ layerKey: 'field', frameId: 'A' });
-    expect(run(doc, focused, type('mara'), layers).outcome).toBe('opened_overlay');
-  });
-
-  it('bubbles a typed key up from the focused layer', () => {
-    const doc = protoDoc([A, B], { A: [keyDown([13], navigate('B'))] });
-    const focused = run(doc, start(doc, 'A'), click('field'), layers).state;
-    expect(run(doc, focused, type('done\n'), layers).state.frameId).toBe('B');
-  });
-
   it.each([
-    { name: 'nothing has been clicked', clicked: null, text: 'mara' },
-    { name: 'the last click landed on another layer', clicked: 'btn', text: 'mara' },
-    { name: 'no typed key has a reaction', clicked: 'field', text: 'xyz' },
-  ])('gives typed_nothing when $name', ({ clicked, text }) => {
+    { what: 'without a click first', clicked: null },
+    { what: 'after a click elsewhere', clicked: 'btn' },
+  ])('focuses the element typed into, then fires its key reactions, $what', ({ clicked }) => {
     const doc = protoDoc([A, P], { field: [keyDown([65], openOverlay('P'))] });
     const s = clicked ? run(doc, start(doc, 'A'), click(clicked), layers).state : start(doc, 'A');
-    expect(run(doc, s, type(text), layers).outcome).toBe('typed_nothing');
+    const typed = run(doc, s, type('mara'), layers);
+    expect(typed.outcome).toBe('opened_overlay');
+    expect(typed.state.focus).toEqual({ layerKey: 'field', frameId: 'A' });
+  });
+
+  it('bubbles a typed key up from the element typed into', () => {
+    const doc = protoDoc([A, B], { A: [keyDown([13], navigate('B'))] });
+    expect(run(doc, start(doc, 'A'), type('done\n'), layers).state.frameId).toBe('B');
+  });
+
+  it('gives typed_nothing when no typed key has a reaction', () => {
+    const doc = protoDoc([A, P], { field: [keyDown([65], openOverlay('P'))] });
+    expect(run(doc, start(doc, 'A'), type('xyz'), layers).outcome).toBe('typed_nothing');
   });
 
   it('leaving the frame drops the focus', () => {
@@ -474,16 +517,44 @@ describe('timers', () => {
     expect(settle(doc, start(doc, 'A')).state.frameId).toBe(fires ? 'B' : 'A');
   });
 
-  it('a timer of 5 s fires only on wait(5)', () => {
+  it('a timer of 5 s fires on wait(5), or at settle once 2 s or less are left', () => {
     const doc = protoDoc([A, B], { A: [afterDelay(5000, navigate('B'))] });
     const s = settle(doc, start(doc, 'A')).state;
     expect(s.frameId).toBe('A');
-    const early = run(doc, s, wait(4));
+    const early = run(doc, s, wait(2));
     expect(early.outcome).toBe('waited');
-    expect(early.state.clockMs).toBe(4000);
+    expect(early.state.clockMs).toBe(2000);
+    expect(settle(doc, early.state).state.frameId).toBe('A');
+    const later = run(doc, s, wait(3));
+    expect(later.outcome).toBe('waited');
+    expect(settle(doc, later.state).state).toMatchObject({ frameId: 'B', clockMs: 5000 });
     const late = run(doc, s, wait(5));
     expect(late.outcome).toBe('timers_fired');
     expect(late.state).toMatchObject({ frameId: 'B', clockMs: 5000 });
+  });
+
+  it('settle fires what is due in order of time left, whatever the delays', () => {
+    const doc = protoDoc([A, B, C], { A: [afterDelay(5000, navigate('B'))] });
+    const s = run(doc, start(doc, 'A'), wait(4.5)).state;
+    // A 1 s timer set at 4.5 s comes due after the 5 s one.
+    s.timers.push({ layerKey: 'A', chain: ['A'], frameId: 'A', triggerType: 'AFTER_TIMEOUT', delayMs: 1000, dueAtMs: 5500, actions: [navigate('C')], triggerBox: null });
+    expect(settle(doc, s).state).toMatchObject({ frameId: 'B', history: ['A'], clockMs: 5000 });
+  });
+
+  it('wait reports what its timers did that the screen cannot show', () => {
+    const doc = protoDoc([A], { A: [afterDelay(3000, { type: 'URL', url: 'https://example.com/promo' }, { type: 'UPDATE_MEDIA_RUNTIME' })] });
+    const { outcome, effects } = run(doc, start(doc, 'A'), wait(5));
+    expect(outcome).toBe('timers_fired');
+    expect(effects).toEqual([{ type: 'url', url: 'https://example.com/promo' }, { type: 'unsupported', action: 'UPDATE_MEDIA_RUNTIME' }]);
+  });
+
+  it('a wait that meets a loop of timers stops at 20, where the loop stood, and reports the frames', () => {
+    const doc = protoDoc([A, B], { A: [afterDelay(3000, navigate('B'))], B: [afterDelay(3000, navigate('A'))] });
+    const { state, outcome, looped } = run(doc, start(doc, 'A'), wait(1000));
+    expect(outcome).toBe('timers_fired');
+    expect(looped).toEqual(['A', 'B']);
+    expect(state).toMatchObject({ frameId: 'A', clockMs: 60000 });
+    expect(state.timers).toMatchObject([{ layerKey: 'A', dueAtMs: 63000 }]);
   });
 
   it('wait with no timers gives waited and moves the clock', () => {
@@ -562,6 +633,32 @@ describe('timers', () => {
       const once = run(doc, s, wait(1));
       expect(once.state.variants).toEqual({ A: { car: 's2' } });
       expect(once.state.timers).toMatchObject([{ layerKey: 'car', dueAtMs: 2000 }]);
+    });
+
+    it('times a component nested in a variant only while that variant shows', () => {
+      // Slide 2 holds a dot component that changes itself after 1.5 s; slide 1 has no dot.
+      const withDot: ProtoVariant[] = [
+        slides[0] as ProtoVariant,
+        { id: 's2', name: 'Slide=2', componentId: 's2', reactions: { '': [afterDelay(1000, changeTo('s1'))], dot: [afterDelay(1500, changeTo('d2'))] } },
+      ];
+      const dots: ProtoVariant[] = [
+        { id: 'd1', name: 'Dot=1', componentId: 'd1', reactions: {} },
+        { id: 'd2', name: 'Dot=2', componentId: 'd2', reactions: {} },
+      ];
+      const d = protoDoc([A], { car: [afterDelay(1000, changeTo('s2'))] }, {
+        variantSets: { car: { frameId: 'A', variants: withDot }, 'car;dot': { frameId: 'A', variants: dots } },
+      });
+      const s = start(d, 'A');
+      expect(s.timers.map((t) => t.layerKey)).toEqual(['car']);
+      const onSlide2 = run(d, s, wait(1)).state;
+      expect(onSlide2.timers.map((t) => [t.layerKey, t.dueAtMs])).toEqual([
+        ['car', 2000],
+        ['car;dot', 2500],
+      ]);
+      // Back on slide 1 at 2 s, the dot is gone, and so is its timer.
+      const onSlide1 = run(d, onSlide2, wait(1)).state;
+      expect(onSlide1.variants).toEqual({ A: { car: 's1' } });
+      expect(onSlide1.timers.map((t) => [t.layerKey, t.dueAtMs])).toEqual([['car', 3000]]);
     });
 
     it('a change by hand while a timer is pending replaces that timer', () => {

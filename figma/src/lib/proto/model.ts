@@ -215,10 +215,11 @@ export interface FrameScroll extends ScrollOffset {
 }
 
 /**
- * Per top level frame id: its page offset (used for the base frame only)
- * and its nested areas. A frame that never scrolled has no entry, which
- * means zero offsets. Keeping areas under their frame lets a navigation
- * reset everything under its destination.
+ * Per top level frame id: its page offset (the base frame's, or an open
+ * overlay's when it is bigger than the viewport) and its nested areas. A
+ * frame that never scrolled has no entry, which means zero offsets.
+ * Keeping areas under their frame lets a navigation reset everything
+ * under its destination.
  */
 export type TraceScroll = Record<string, FrameScroll>;
 
@@ -330,26 +331,6 @@ export type TraceOutcome =
   | 'left_prototype'
   | 'unsupported';
 
-export type ActResult = 'ok' | 'no_change';
-
-/** How each `TraceOutcome` is recorded as a step's `act.result`. */
-export const OUTCOME_ACT_RESULT: Record<TraceOutcome, ActResult> = {
-  navigated: 'ok',
-  swapped: 'ok',
-  opened_overlay: 'ok',
-  closed_overlay: 'ok',
-  changed_state: 'ok',
-  scrolled: 'ok',
-  timers_fired: 'ok',
-  nothing_happened: 'no_change',
-  scroll_at_end: 'no_change',
-  back_empty: 'no_change',
-  waited: 'no_change',
-  typed_nothing: 'no_change',
-  left_prototype: 'no_change',
-  unsupported: 'no_change',
-};
-
 // --- Rendering: measured layers and what the persona sees --------------
 
 export interface Box {
@@ -407,7 +388,11 @@ export interface RawLayer {
   hasReactions: boolean;
   roleHint: RoleHint | null;
   parentKey: string | null;
-  /** Set on a frame whose `overflowDirection` isn't NONE; the content leaves out its fixed children. */
+  /**
+   * Set on a nested frame whose `overflowDirection` isn't NONE; the content
+   * leaves out its fixed and hidden children. Never set on a root layer: a
+   * top level frame scrolls as a page, by its own size.
+   */
   scroll: ScrollArea | null;
   /**
    * A fixed child of a scrolling frame ("Fix position when scrolling"): it

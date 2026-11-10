@@ -44,8 +44,21 @@ export function indexLayers(layers: RawLayer[]): LayerIndex {
     }
     rootOf.set(layer.key, top.key);
     if (shown) visible.add(layer.key);
+    if (layer.parentKey === null && layer.scroll) {
+      throw new EngineError('invalid_layers', `The root layer ${layer.key} has a scroll area; a top level frame scrolls as a page`);
+    }
   }
   return { layers, byKey, rootOf, visible };
+}
+
+/**
+ * Every overlay open on the screen the persona acted on must have been
+ * measured: otherwise a click on it would read as a click outside it.
+ */
+export function checkMeasured(index: LayerIndex, s: TraceState): void {
+  for (const overlay of s.overlays) {
+    if (!index.byKey.has(overlay.frameId)) throw new EngineError('invalid_layers', `The open overlay ${overlay.frameId} wasn't measured`);
+  }
 }
 
 export function layerOf(index: LayerIndex, key: string): RawLayer {
@@ -75,15 +88,24 @@ export const baseOf = (s: TraceState) => JSON.stringify([s.frameId, s.history]);
 /** What "shows a different frame or overlay" is measured against. */
 export const screenOf = (s: TraceState) => JSON.stringify([s.frameId, s.history, s.overlays.map((o) => o.frameId)]);
 
-/** The frame whose layers can be hit: the top overlay while one is open, otherwise the base frame. */
-export function hittableFrame(s: TraceState): string {
-  const top = s.overlays[s.overlays.length - 1];
-  return top ? top.frameId : s.frameId;
+/**
+ * The frame whose layers can be hit: the top overlay the persona saw,
+ * otherwise the base frame. An overlay that opened during this action (a
+ * "while hovering" one the click's own pointer move opened) wasn't drawn
+ * or measured yet, so it can't take the click; `checkMeasured` makes sure
+ * every overlay the persona saw was measured.
+ */
+export function hittableFrame(index: LayerIndex, s: TraceState): string {
+  for (let i = s.overlays.length - 1; i >= 0; i--) {
+    const id = (s.overlays[i] as { frameId: string }).frameId;
+    if (index.byKey.has(id)) return id;
+  }
+  return s.frameId;
 }
 
 /** The topmost layer at `p` that can be hit, or null. */
 export function hitAt(index: LayerIndex, s: TraceState, p: Point): RawLayer | null {
-  const frameId = hittableFrame(s);
+  const frameId = hittableFrame(index, s);
   for (let i = index.layers.length - 1; i >= 0; i--) {
     const layer = index.layers[i] as RawLayer;
     if (index.rootOf.get(layer.key) !== frameId || !index.visible.has(layer.key)) continue;

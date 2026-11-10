@@ -1,25 +1,40 @@
 /**
  * Keys. Figma's ON_KEY_DOWN triggers hold JavaScript key codes
  * (`KeyboardEvent.keyCode`), modifiers included for a combination. The
- * persona names keys as `KeyboardEvent.key` does ("Enter", "a", "ArrowLeft"),
- * joining a combination with '+' ("Shift+Tab"). Only keyboard triggers
- * match: the persona has no game controller.
+ * persona names a key as `KeyboardEvent.key` does ("Enter", "a",
+ * "ArrowLeft") or by a common alias ("Esc", "Return", "Space"), and joins
+ * a combination with '+', modifiers first ("Shift+Tab", "Ctrl+K",
+ * "Cmd+K"). Only keyboard triggers match: the persona has no game
+ * controller. `KEY_NAMES` and `MODIFIER_NAMES` are the names accepted; the
+ * backend validates the brain's keys against the same lists.
  */
 
 import { bubble, hittableFrame, isShown, type LayerIndex, rootOf, screenOf } from './hitTest';
 import type { ProtoTrigger, TraceState } from './model';
 
-const MODIFIERS: Record<string, number> = { Shift: 16, Control: 17, Alt: 18, Meta: 91 };
+const MODIFIERS: Record<string, number> = {
+  Shift: 16,
+  Control: 17,
+  Ctrl: 17,
+  Alt: 18,
+  Option: 18,
+  Meta: 91,
+  Cmd: 91,
+  Command: 91,
+};
 
 const NAMED: Record<string, number> = {
   Backspace: 8,
   Tab: 9,
   Enter: 13,
+  Return: 13,
   ...MODIFIERS,
   Pause: 19,
   CapsLock: 20,
   Escape: 27,
+  Esc: 27,
   ' ': 32,
+  Space: 32,
   Spacebar: 32,
   PageUp: 33,
   PageDown: 34,
@@ -29,8 +44,13 @@ const NAMED: Record<string, number> = {
   ArrowUp: 38,
   ArrowRight: 39,
   ArrowDown: 40,
+  Left: 37,
+  Up: 38,
+  Right: 39,
+  Down: 40,
   Insert: 45,
   Delete: 46,
+  Del: 46,
   ';': 186,
   '=': 187,
   ',': 188,
@@ -43,6 +63,20 @@ const NAMED: Record<string, number> = {
   ']': 221,
   "'": 222,
 };
+
+const LETTERS = 'abcdefghijklmnopqrstuvwxyz';
+const FUNCTION_KEYS = Array.from({ length: 12 }, (_, i) => `F${i + 1}`);
+
+export const MODIFIER_NAMES: readonly string[] = Object.keys(MODIFIERS);
+
+/** Every key name accepted on its own or as the last part of a combination. */
+export const KEY_NAMES: readonly string[] = [
+  ...Object.keys(NAMED),
+  ...LETTERS,
+  ...LETTERS.toUpperCase(),
+  ...'0123456789',
+  ...FUNCTION_KEYS,
+];
 
 /** The key code of one key: a named key, a letter (either case), a digit, or F1 to F12. Null when Figma has none. */
 function codeOf(key: string): number | null {
@@ -93,7 +127,7 @@ export interface KeyDeps {
  */
 export function pressKey(deps: KeyDeps, s: TraceState, codes: number[]): void {
   const { layers } = deps;
-  const frameId = hittableFrame(s);
+  const frameId = hittableFrame(layers, s);
   const shown = screenOf(s);
   for (const layer of layers.layers) {
     if (layers.rootOf.get(layer.key) !== frameId || !layers.visible.has(layer.key)) continue;
@@ -104,16 +138,16 @@ export function pressKey(deps: KeyDeps, s: TraceState, codes: number[]): void {
 }
 
 /**
- * Typing goes to the focused layer, the one the last click landed on: each
- * character presses its key there, bubbling up to the nearest layer with a
- * trigger for it, until one shows a different frame or overlay. Figma has
- * no text fields, so the text itself goes nowhere.
+ * Typing goes to the focused layer (`type` focuses the element typed into
+ * first): each character presses its key there, bubbling up to the
+ * nearest layer with a trigger for it, until one shows a different frame
+ * or overlay. Figma has no text fields, so the text itself goes nowhere.
  */
 export function typeText(deps: KeyDeps, s: TraceState, text: string): void {
   const { layers } = deps;
   const focus = s.focus;
   if (!focus || !layers.byKey.has(focus.layerKey) || !isShown(s, focus.frameId)) return;
-  if (rootOf(layers, focus.layerKey) !== hittableFrame(s)) return;
+  if (rootOf(layers, focus.layerKey) !== hittableFrame(layers, s)) return;
   const shown = screenOf(s);
   for (const char of text) {
     const code = charCode(char);

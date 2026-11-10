@@ -1,11 +1,14 @@
 /**
  * What the persona sees: the measured layers turned into a short list of
  * elements, `{id, label, role, box}`, in reading order. Listed are text
- * blocks, instances, and frames or shapes that look actionable, wired or
- * not, inside the viewport. Layers that carry reactions but draw nothing
- * (hotspots over screenshots) are listed as "unlabeled area"; nothing else
- * of the wiring shows. Labels are the text inside a layer or a readable
- * layer name, never a generic one like "Rectangle 12".
+ * blocks, instances, and frames or shapes that look actionable, inside the
+ * viewport. What is listed, and as what, comes from how layers look and
+ * what they are, never from their wiring: a wired and an unwired layer
+ * list the same. The one exception is a layer that carries reactions but
+ * draws nothing, with nothing drawn inside it (a hotspot over a
+ * screenshot): it is listed as "unlabeled area", the price of supporting
+ * such prototypes. Labels are the text inside a layer or a readable layer
+ * name, never a generic one like "Rectangle 12".
  */
 
 import { indexLayers, type LayerIndex } from './hitTest';
@@ -123,13 +126,21 @@ export function listElements(layers: RawLayer[], s: TraceState): { elements: Ele
   const shown = layers.filter((l) => index.visible.has(l.key));
   const texts = shown.filter(isText);
 
+  // A hotspot: wired, and neither it nor anything inside it draws.
+  const drawing = new Set<string>();
+  for (const l of shown) {
+    if (!l.paints) continue;
+    for (let p: string | null = l.key; p !== null; p = (index.byKey.get(p) as RawLayer).parentKey) drawing.add(p);
+  }
+  const isHotspot = (l: RawLayer) => l.hasReactions && !drawing.has(l.key);
+
   // Decide the controls from the innermost out, so a frame knows which texts are its own.
   const controls = new Set<string>();
   const others = shown.filter((l) => l.parentKey !== null && l.type !== 'TEXT');
   for (const layer of [...others].sort((a, b) => depthOf(index, b) - depthOf(index, a))) {
     const framed = layer.paints && (CONTROL_NAME.test(layer.name) || ownTexts(index, texts, controls, layer.key).length === 1);
     const hinted = layer.roleHint !== null && layer.roleHint !== 'text';
-    if (layer.type === 'INSTANCE' || layer.hasReactions || hinted || framed) controls.add(layer.key);
+    if (layer.type === 'INSTANCE' || hinted || framed || isHotspot(layer)) controls.add(layer.key);
   }
 
   const consumed = new Set<string>();
@@ -146,12 +157,12 @@ export function listElements(layers: RawLayer[], s: TraceState): { elements: Ele
     // A control with one text is labelled by it, which then isn't listed on its own.
     if (own.length === 1) consumed.add((own[0] as RawLayer).key);
     const first = own[0];
-    const fallback = layer.hasReactions && !layer.paints ? 'unlabeled area' : role;
+    const fallback = isHotspot(layer) ? 'unlabeled area' : role;
     add(layer, role, first ? cleanText(first.text ?? '') : (readableName(layer.name) ?? fallback));
   }
   for (const layer of texts) {
     if (consumed.has(layer.key)) continue;
-    add(layer, layer.hasReactions || layer.roleHint === 'link' ? 'link' : 'text', cleanText(layer.text ?? ''));
+    add(layer, layer.roleHint === 'link' ? 'link' : 'text', cleanText(layer.text ?? ''));
   }
 
   const elements: Element[] = [];

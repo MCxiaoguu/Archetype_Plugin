@@ -9,7 +9,7 @@
 
 import { EngineError } from './errors';
 import { ExprError, type ExprScope } from './expr';
-import { chainOf, indexLayers, isShown, type LayerIndex, layerOf, rootOf } from './hitTest';
+import { chainOf, checkMeasured, indexLayers, isShown, type LayerIndex, layerOf, rootOf } from './hitTest';
 import { keyCodes, type KeyDeps, matchesKeys, pressKey, typeText } from './keys';
 import type {
   ElementTarget,
@@ -93,10 +93,17 @@ export function start(doc: ProtoDoc, startFrameId: string): TraceState {
   return s;
 }
 
+/** A state belongs to the document it was made from; the session aborts a run whose file changed. */
+function checkDoc(doc: ProtoDoc, state: TraceState): void {
+  if (state.docHash !== doc.docHash) {
+    throw new EngineError('doc_changed', `The state was made from document ${state.docHash}, not ${doc.docHash}`);
+  }
+}
+
 /**
  * Plays one persona action. `layers` are the measured layers of the screen
  * the action was taken on, and `targets` map that screen's element ids to
- * their layer and point. Never mutates `state`.
+ * their layer and point. Never mutates `state`, `doc` or `layers`.
  */
 export function apply(
   doc: ProtoDoc,
@@ -108,8 +115,10 @@ export function apply(
   if (action.type === 'give_up' || action.type === 'done') {
     throw new EngineError('run_ending_action', `${action.type} ends the run, which the backend handles`);
   }
+  checkDoc(doc, state);
   const s = structuredClone(state);
   const index = indexLayers(layers);
+  checkMeasured(index, s);
   const ctx = context(doc, index);
   const pointer = pointerDeps(ctx, index);
   const at = (element: string) => targetOf(targets, element);
@@ -130,7 +139,7 @@ export function apply(
       fallback = 'scroll_at_end';
       const target = action.element === undefined ? null : at(action.element);
       if (target && !movePointer(pointer, s, target.point)) break;
-      scrollBy(index, s, frameOf(ctx, s.frameId), action.direction, action.amount ?? 'page', target?.layerKey ?? null);
+      scrollBy(index, s, ctx.frames, action.direction, action.amount ?? 'page', target?.layerKey ?? null);
       break;
     }
     case 'back':
@@ -143,17 +152,23 @@ export function apply(
       else ctx.effects.push({ type: 'unsupported', action: `press_key ${action.key}` });
       break;
     }
-    case 'type':
+    case 'type': {
       fallback = 'typed_nothing';
-      if (movePointer(pointer, s, at(action.element).point)) typeText(keyDeps(ctx, index), s, action.text);
+      const target = at(action.element);
+      if (!movePointer(pointer, s, target.point)) break;
+      // Typing into an element focuses it first.
+      s.focus = { layerKey: target.layerKey, frameId: rootOf(index, target.layerKey) };
+      typeText(keyDeps(ctx, index), s, action.text);
       break;
+    }
     case 'wait': {
       if (!(Number.isFinite(action.seconds) && action.seconds > 0)) {
         throw new EngineError('invalid_action', `wait needs a positive number of seconds, not ${action.seconds}`);
       }
       const end = s.clockMs + action.seconds * 1000;
       const result = fireTimers(ctx, s, (t) => t.triggerType === 'AFTER_TIMEOUT' && t.dueAtMs <= end);
-      s.clockMs = Math.max(s.clockMs, end);
+      // A wait the loop guard stopped keeps the state the loop reached, clock included.
+      if (!result.looped) s.clockMs = Math.max(s.clockMs, end);
       prune(s);
       return { state: s, outcome: result.fired ? 'timers_fired' : 'waited', effects: ctx.effects, looped: result.looped };
     }
@@ -165,13 +180,14 @@ export function apply(
 /**
  * Fires what would happen before a person acted again: pending delayed
  * mouse reactions (each only if the pointer is still where its trigger
- * needs it) and AFTER_TIMEOUT timers of 2 s or less, earliest first. Never
- * mutates `state`.
+ * needs it) and AFTER_TIMEOUT timers due within 2 s, in the order they
+ * come due. Never mutates `state` or `doc`.
  */
 export function settle(doc: ProtoDoc, state: TraceState): SettleResult {
+  checkDoc(doc, state);
   const s = structuredClone(state);
   const ctx = context(doc, null);
-  const { fired, looped } = fireTimers(ctx, s, firesAtSettle);
+  const { fired, looped } = fireTimers(ctx, s, (t) => firesAtSettle(t, s.clockMs));
   prune(s);
   return { state: s, fired, looped, effects: ctx.effects };
 }
@@ -214,7 +230,12 @@ function delayOf(trigger: ProtoTrigger): number {
   }
 }
 
-/** Runs the layer's reactions for one trigger (those `only` keeps), or sets a timer for one whose trigger has a delay. */
+/**
+ * Runs the layer's reactions for one trigger (those `only` keeps), or sets
+ * a timer for one whose trigger has a delay. Triggers are matched by type
+ * here; nothing ever fires ON_MEDIA_HIT, ON_MEDIA_END or UNKNOWN: the
+ * engine plays no video, and an unknown trigger has no meaning to play.
+ */
 function fire(
   ctx: Context,
   layers: LayerIndex,
@@ -323,24 +344,33 @@ function runAction(ctx: Context, s: TraceState, action: ProtoAction, source: Sou
 }
 
 function runNode(ctx: Context, s: TraceState, action: NodeAction, source: Source): void {
+  // A link without a destination does nothing, as in the viewer. A
+  // destination the document doesn't have is no misclick: the reader didn't
+  // deliver it, so the persona is told the prototype couldn't play it.
+  const destinationId = action.destinationId;
+  if (destinationId === null) return;
+  const missing = (what: string) => ctx.effects.push({ type: 'unsupported', action: `${what}:${destinationId}` });
+
   if (action.navigation === 'SCROLL_TO') {
     // `settle` runs before the render, so there is no measured screen to scroll in.
     if (!ctx.layers) ctx.effects.push({ type: 'unsupported', action: 'SCROLL_TO' });
-    else if (action.destinationId !== null) scrollIntoView(ctx.layers, s, frameOf(ctx, s.frameId), action.destinationId);
+    else if (!ctx.layers.byKey.has(destinationId)) missing('missing_destination');
+    else scrollIntoView(ctx.layers, s, ctx.frames, destinationId);
     return;
   }
   if (action.navigation === 'CHANGE_TO') {
-    const found = action.destinationId === null ? null : instanceFor(ctx.doc, source.chain, action.destinationId);
-    // A variant no instance around the trigger has: nothing changes, as in the viewer.
-    if (!found) return;
-    if (found.variant.unavailable) ctx.effects.push({ type: 'unsupported', action: 'CHANGE_TO' });
+    const found = instanceFor(ctx.doc, source.chain, destinationId);
+    if (!found) missing('missing_variant_set');
+    else if (found.variant.unavailable) ctx.effects.push({ type: 'unsupported', action: 'CHANGE_TO' });
     else setVariant(ctx, s, found.frameId, found.instanceKey, found.variant.id);
     return;
   }
 
-  const dest = action.destinationId === null ? undefined : ctx.frames.get(action.destinationId);
-  // A link to a frame that isn't there does nothing, as in the viewer.
-  if (!dest) return;
+  const dest = ctx.frames.get(destinationId);
+  if (!dest) {
+    missing('missing_destination');
+    return;
+  }
   if (action.navigation === 'NAVIGATE') {
     showBase(ctx, s, dest, action, true);
     return;

@@ -125,7 +125,7 @@ describe('navigation', () => {
     const s = start(doc, 'B');
     s.history = ['A'];
     s.overlays = [{ frameId: 'M', position: 'CENTER', origin: { x: 100, y: 350 }, closeOnOutsideClick: false }];
-    const { state, outcome } = act(doc, s, { type: 'back' }, screenA);
+    const { state, outcome } = act(doc, s, { type: 'back' }, [layer('B', null, [0, 0, 400, 800]), layer('M', null, [100, 350, 200, 100])]);
     expect(outcome).toBe('navigated');
     expect(state).toMatchObject({ frameId: 'A', history: [], overlays: [] });
   });
@@ -151,12 +151,28 @@ describe('navigation', () => {
   });
 
   it.each([
-    { what: 'a destination that is not in the document', destinationId: 'gone' },
-    { what: 'no destination', destinationId: null },
-  ])('a link to $what does nothing, as in the viewer', ({ destinationId }) => {
-    const doc = protoDoc([A], { btn: [on('ON_CLICK', node('NAVIGATE', destinationId))] });
-    const { state, outcome } = act(doc, start(doc, 'A'), click('btn'), screenA);
+    { navigation: 'NAVIGATE' as const },
+    { navigation: 'SWAP' as const },
+    { navigation: 'OVERLAY' as const },
+    { navigation: 'SCROLL_TO' as const },
+  ])('a $navigation with no destination does nothing, as in the viewer', ({ navigation }) => {
+    const doc = protoDoc([A], { btn: [on('ON_CLICK', node(navigation, null))] });
+    const { state, outcome, effects } = act(doc, start(doc, 'A'), click('btn'), screenA);
     expect(outcome).toBe('nothing_happened');
+    expect(effects).toEqual([]);
+    expect(state.frameId).toBe('A');
+  });
+
+  it.each([
+    { navigation: 'NAVIGATE' as const },
+    { navigation: 'SWAP' as const },
+    { navigation: 'OVERLAY' as const },
+    { navigation: 'SCROLL_TO' as const },
+  ])("a $navigation to a destination the document doesn't have is unsupported, not a misclick", ({ navigation }) => {
+    const doc = protoDoc([A], { btn: [on('ON_CLICK', node(navigation, '2:99'))] });
+    const { state, outcome, effects } = act(doc, start(doc, 'A'), click('btn'), screenA);
+    expect(outcome).toBe('unsupported');
+    expect(effects).toEqual([{ type: 'unsupported', action: 'missing_destination:2:99' }]);
     expect(state.frameId).toBe('A');
   });
 });
@@ -397,6 +413,34 @@ describe('pointer', () => {
     expect(state.pointer).toMatchObject({ pressing: null, held: [] });
   });
 
+  it('a "while pressing" overlay that closes at release stops nothing: MOUSE_UP and ON_CLICK still fire', () => {
+    const doc = protoDoc([A, B, overlayFrame('P', 10, 10)], { btn: [on('ON_PRESS', openOverlay('P')), on('ON_CLICK', navigate('B'))] });
+    const { state, outcome } = act(doc, start(doc, 'A'), click('btn'), screenA);
+    expect(outcome).toBe('navigated');
+    expect(state).toMatchObject({ frameId: 'B', overlays: [] });
+  });
+
+  it("an overlay the click's own pointer move opens, not yet drawn, doesn't intercept the click", () => {
+    const tip = overlayFrame('tip', 100, 40, { position: 'TOP_LEFT', closeOnOutsideClick: true });
+    const doc = protoDoc([A, B, tip], { btn: [on('ON_HOVER', openOverlay('tip')), on('ON_CLICK', navigate('B'))] });
+    const { state, outcome } = act(doc, start(doc, 'A'), click('btn'), screenA);
+    expect(outcome).toBe('navigated');
+    expect(state.frameId).toBe('B');
+  });
+
+  it('refuses a screen whose open overlay was not measured, rather than treating a click as outside it', () => {
+    const doc = protoDoc([A, B, overlayFrame('M', 200, 100, { closeOnOutsideClick: true })], { btn: [on('ON_CLICK', navigate('B'))] });
+    const s = start(doc, 'A');
+    s.overlays = [{ frameId: 'M', position: 'CENTER', origin: { x: 100, y: 350 }, closeOnOutsideClick: true }];
+    expect(() => act(doc, s, click('btn'), screenA)).toThrow(expect.objectContaining({ code: 'invalid_layers' }));
+  });
+
+  it('a "while pressing" navigation lasts, so it stops the rest of the click', () => {
+    const doc = protoDoc([A, B, C], { btn: [on('ON_PRESS', navigate('B')), on('ON_CLICK', navigate('C'))] });
+    const { state } = act(doc, start(doc, 'A'), click('btn'), screenA);
+    expect(state).toMatchObject({ frameId: 'B', history: ['A'] });
+  });
+
   it('a "while pressing" navigation is not undone at release', () => {
     const doc = protoDoc([A, B], { btn: [on('ON_PRESS', navigate('B'))] });
     const { state, outcome } = act(doc, start(doc, 'A'), click('btn'), screenA);
@@ -542,6 +586,40 @@ describe('scroll', () => {
       expect(state.scroll).toEqual({});
     });
 
+    describe('with an overlay open', () => {
+      // A 400x1200 overlay is taller than the 844 high viewport, so it scrolls itself, by up to 356.
+      const tallOverlay = overlayFrame('M', 400, 1200, { position: 'TOP_LEFT' });
+      const d = protoDoc([tall(), tallOverlay, overlayFrame('S', 200, 100)]);
+      const open = (frameId: string): TraceState => {
+        const s = start(d, 'T');
+        s.overlays = [{ frameId, position: 'TOP_LEFT', origin: { x: 0, y: 0 }, closeOnOutsideClick: false }];
+        return s;
+      };
+      const layers = [tallRoot(), layer('pageItem', 'T', [0, 500, 400, 40]), layer('M', null, [0, 0, 400, 1200]), layer('ok', 'M', [20, 20, 100, 40])];
+
+      it.each([
+        { how: 'without an element', element: undefined },
+        { how: 'over an element in it', element: 'ok' },
+      ])('a scroll $how moves the top overlay, never the page under it', ({ element }) => {
+        const { state, outcome } = act(d, open('M'), scroll('down', element), layers);
+        expect(outcome).toBe('scrolled');
+        expect(state.scroll).toEqual({ M: { x: 0, y: 356, areas: {} } });
+      });
+
+      it('a scroll gives scroll_at_end when the top overlay cannot scroll', () => {
+        const small = [tallRoot(), layer('S', null, [0, 0, 200, 100])];
+        const { state, outcome } = act(d, open('S'), scroll('down'), small);
+        expect(outcome).toBe('scroll_at_end');
+        expect(state.scroll).toEqual({});
+      });
+
+      it('a scroll over an element of the page under the overlay moves nothing', () => {
+        const { state, outcome } = act(d, open('M'), scroll('down', 'pageItem'), layers);
+        expect(outcome).toBe('scroll_at_end');
+        expect(state.scroll).toEqual({});
+      });
+    });
+
     it('a scroll over an overlay moves only areas inside it, never the page under it', () => {
       const M = overlayFrame('M', 200, 100);
       const d = protoDoc([tall(), M]);
@@ -657,6 +735,21 @@ describe('other outcomes', () => {
     expect(() => act(doc, start(doc, 'A'), click('e99'), screenA)).toThrow(expect.objectContaining({ code: 'unknown_element' }));
   });
 
+  it('refuses a root layer that carries a scroll area: a frame scrolls as a page', () => {
+    const doc = protoDoc([frame('T', 400, 2000, { overflowDirection: 'VERTICAL' })]);
+    const root = layer('T', null, [0, 0, 400, 2000], { scroll: { direction: 'VERTICAL', maxX: 0, maxY: 600 } });
+    expect(() => act(doc, start(doc, 'T'), scroll('down'), [root])).toThrow(expect.objectContaining({ code: 'invalid_layers' }));
+  });
+
+  it.each([
+    { what: 'apply', run: (doc: ReturnType<typeof protoDoc>, s: TraceState) => act(doc, s, click('btn'), screenA) },
+    { what: 'settle', run: (doc: ReturnType<typeof protoDoc>, s: TraceState) => settle(doc, s) },
+  ])('$what refuses a state made from another version of the document', ({ run }) => {
+    const doc = protoDoc([A]);
+    const s = start(doc, 'A');
+    expect(() => run({ ...doc, docHash: 'hash-2' }, s)).toThrow(expect.objectContaining({ code: 'doc_changed' }));
+  });
+
   it('refuses measured layers whose parent was not measured', () => {
     const doc = protoDoc([A]);
     const orphan = [layer('A', null, [0, 0, 400, 800]), layer('btn', 'missing', [20, 20, 100, 40])];
@@ -672,12 +765,18 @@ describe('determinism', () => {
     open: [on('ON_CLICK', openOverlay('menu'))],
     x: [mouse('MOUSE_ENTER', 200, navigate('B'))],
   });
-  const layers = [layer('T', null, [0, 0, 400, 2000]), layer('open', 'T', [0, 0, 100, 40]), layer('x', 'T', [0, 100, 100, 40])];
+  const base = [layer('T', null, [0, 0, 400, 2000]), layer('open', 'T', [0, 0, 100, 40]), layer('x', 'T', [0, 100, 100, 40])];
+  /** The layers a render of the state would measure: the menu's too once it is open. */
+  const layersFor = (s: TraceState) => (s.overlays.length ? [...base, layer('menu', null, [200, 0, 200, 300])] : base);
+  const layers = base;
   const script: TraceAction[] = [hover('x'), click('open'), scroll('down'), { type: 'back' }];
 
   function play(state: TraceState): TraceState[] {
     const states = [state];
-    for (const action of script) states.push(act(doc, states[states.length - 1] as TraceState, action, layers).state);
+    for (const action of script) {
+      const last = states[states.length - 1] as TraceState;
+      states.push(act(doc, last, action, layersFor(last)).state);
+    }
     return states;
   }
 
@@ -685,16 +784,21 @@ describe('determinism', () => {
     expect(play(start(doc, 'T'))).toEqual(play(start(doc, 'T')));
   });
 
-  it('never mutates the state it is given', () => {
+  it('never mutates the state, the document or the layers it is given', () => {
+    const frozenDoc = deepFreeze(structuredClone(doc));
+    const frozenLayers = deepFreeze(structuredClone(layers));
     const first = start(doc, 'T');
     const snapshot = structuredClone(first);
+    let s = first;
     for (const action of script) {
-      const frozen = deepFreeze(structuredClone(first));
-      act(doc, frozen, action, layers);
+      const frozen = deepFreeze(structuredClone(s));
+      const frozenScreen = deepFreeze(structuredClone(layersFor(s)));
+      s = act(frozenDoc, frozen, action, frozenScreen).state;
     }
-    const frozen = deepFreeze(act(doc, first, hover('x'), layers).state);
-    expect(() => settle(doc, frozen)).not.toThrow();
+    const hovered = deepFreeze(act(frozenDoc, first, hover('x'), frozenLayers).state);
+    expect(() => settle(frozenDoc, hovered)).not.toThrow();
     expect(first).toEqual(snapshot);
+    expect(frozenDoc).toEqual(doc);
   });
 
   it('settle with nothing pending fires nothing and keeps the state', () => {

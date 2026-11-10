@@ -108,10 +108,11 @@ function expression(data: VariableData | undefined): VariableExpr {
 }
 
 function nodeAction(a: Extract<Action, { type: 'NODE' }>): ProtoAction {
-  // Figma leaves these out when they are unset. A file that sets only the
-  // deprecated preserveScrollPosition says the scroll resets when it is
-  // false; with neither, the scroll is kept.
-  const reset = a.resetScrollPosition ?? (a.preserveScrollPosition === undefined ? false : !a.preserveScrollPosition);
+  // Figma leaves these out when they are unset. resetScrollPosition decides
+  // when it is there; an old file that has only the deprecated
+  // preserveScrollPosition resets unless it preserves; with neither, the
+  // scroll resets, as a navigation does in Figma by default.
+  const reset = a.resetScrollPosition ?? (a.preserveScrollPosition === undefined ? true : !a.preserveScrollPosition);
   return {
     type: 'NODE',
     navigation: a.navigation,

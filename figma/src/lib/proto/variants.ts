@@ -58,10 +58,15 @@ export function instancesIn(doc: ProtoDoc, frameId: string): string[] {
   return Object.keys(doc.variantSets).filter((key) => doc.variantSets[key]?.frameId === frameId);
 }
 
-/** Sets (or, with null, clears) an instance's override. Returns whether it changed. */
+/**
+ * Sets (or, with null, clears) an instance's override. The overrides of
+ * instances nested in its old variant go with it: those layers are gone.
+ * Returns whether it changed.
+ */
 export function setOverride(s: TraceState, frameId: string, instanceKey: string, variantId: string | null): boolean {
   const overrides = s.variants[frameId] ?? {};
   if ((overrides[instanceKey] ?? null) === variantId) return false;
+  for (const key of Object.keys(overrides)) if (key.startsWith(`${instanceKey};`)) delete overrides[key];
   if (variantId === null) delete overrides[instanceKey];
   else overrides[instanceKey] = variantId;
   if (Object.keys(overrides).length) s.variants[frameId] = overrides;
