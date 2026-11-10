@@ -692,6 +692,14 @@ describe('other outcomes', () => {
     expect(state.frameId).toBe('A');
   });
 
+  it.each(['', '   '])('an Open link with no URL (%j) does nothing, by a click or a timer', (url) => {
+    const doc = protoDoc([A], { btn: [on('ON_CLICK', { type: 'URL', url })], A: [{ trigger: { type: 'AFTER_TIMEOUT', delayMs: 1000 }, actions: [{ type: 'URL', url }] }] });
+    expect(settle(doc, start(doc, 'A'))).toMatchObject({ fired: 1, effects: [] });
+    const { outcome, effects } = act(doc, start(doc, 'A'), click('btn'), screenA);
+    expect(outcome).toBe('nothing_happened');
+    expect(effects).toEqual([]);
+  });
+
   it.each([
     { what: 'UPDATE_MEDIA_RUNTIME', action: { type: 'UPDATE_MEDIA_RUNTIME' } as ProtoAction, name: 'UPDATE_MEDIA_RUNTIME' },
     { what: 'an unknown action type', action: { type: 'UNKNOWN', rawType: 'OPEN_APP' } as ProtoAction, name: 'OPEN_APP' },

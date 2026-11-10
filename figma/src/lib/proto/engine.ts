@@ -316,7 +316,8 @@ function runAction(ctx: Context, s: TraceState, action: ProtoAction, source: Sou
       s.overlays.pop();
       return;
     case 'URL':
-      ctx.effects.push({ type: 'url', url: action.url });
+      // An Open link with no URL filled in has nowhere to go: it does nothing, as an unfinished action does.
+      if (action.url.trim()) ctx.effects.push({ type: 'url', url: action.url });
       return;
     case 'UPDATE_MEDIA_RUNTIME':
       ctx.effects.push({ type: 'unsupported', action: action.type });
