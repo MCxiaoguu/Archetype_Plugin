@@ -128,6 +128,13 @@ interface Placement {
   layer: RawLayer;
 }
 
+/** The share key of a measured layer, which every measured layer has. */
+const shareIn = (shares: ReadonlyMap<string, string>) => (key: string) => {
+  const share = shares.get(key);
+  if (share === undefined) throw new Error(`The layer ${key} was measured without a share key`);
+  return share;
+};
+
 /** The layers of `scene` with the instance `key` and everything inside it left out. */
 const without = (scene: RawLayer[], key: string) => scene.filter((l) => l.key !== key && !isInside(key, l.key));
 
@@ -185,7 +192,7 @@ export async function readFlow(api: PluginAPI, doc: ProtoDoc, frameOf: ReadonlyM
         candidates.push(c);
       }
     };
-    add(candidatesOf(frame.id, own.layers, (key) => own.shares.get(key) as string));
+    add(candidatesOf(frame.id, own.layers, shareIn(own.shares)));
     const frameScenes: Scene[] = [{ scene: own.layers, shares: own.shares, overrides: {} }];
 
     // Each variant an interactive component in the frame can show; outer components before those inside them.
@@ -228,9 +235,9 @@ export async function readFlow(api: PluginAPI, doc: ProtoDoc, frameOf: ReadonlyM
         root.name = placement.layer.name;
         root.visible = placement.layer.visible;
         shown.shares.set(instanceKey, placement.at.shares.get(instanceKey) as string);
-        const scene = [...without(placement.at.scene, instanceKey), ...shown.layers];
-        add(candidatesOf(frame.id, scene, (key) => shown.shares.get(key) as string).filter((c) => c.layerKey === instanceKey || isInside(instanceKey, c.layerKey)));
-        frameScenes.push({ scene, shares: new Map([...placement.at.shares, ...shown.shares]), overrides });
+        const next: Scene = { scene: [...without(placement.at.scene, instanceKey), ...shown.layers], shares: new Map([...placement.at.shares, ...shown.shares]), overrides };
+        add(candidatesOf(frame.id, next.scene, shareIn(next.shares)).filter((c) => c.layerKey === instanceKey || isInside(instanceKey, c.layerKey)));
+        frameScenes.push(next);
       }
     }
     scenes.set(frame.id, frameScenes);

@@ -46,8 +46,8 @@ export interface FlowCandidate {
   layerKey: string;
   /**
    * One reading covers every candidate with the same share key: inside an
-   * instance `C:<main component>;<path inside it>`, otherwise
-   * `L:<node>:<layerKey>`.
+   * instance `C:<main component>;<path inside it>|<label, lowercased>`, so
+   * an overridden text gets its own; otherwise `L:<node>:<layerKey>`.
    */
   shareKey: string;
   label: string;
@@ -98,6 +98,9 @@ function readsAsLabel(layer: RawLayer): boolean {
   return !/[\n\r\u2028\u2029]/.test(text) && flat(text).split(' ').filter(Boolean).length <= MAX_LABEL_WORDS;
 }
 
+/** Inside an instance the label is part of the share key: instances of one component can show different texts. */
+const shareKeyOf = (base: string, label: string) => (base.startsWith('C:') ? `${base}|${label.trim().toLowerCase()}` : base);
+
 const CLICKABLE: ReadonlySet<RoleHint> = new Set<RoleHint>(['button', 'link', 'input', 'card', 'icon']);
 
 const centre = (l: RawLayer) => ({ x: l.unclippedBox.x + l.unclippedBox.width / 2, y: l.unclippedBox.y + l.unclippedBox.height / 2 });
@@ -118,7 +121,7 @@ export function visibleTexts(layers: RawLayer[], index: LayerIndex = indexLayers
  * The candidates of one node, from its measured layers (boxes in the node's
  * coordinates, unclipped). Hidden layers are listed as if shown, since a
  * variable or a variant may show them; nothing is cut by the viewport,
- * covered or capped. `shareOf` gives each layer's share key.
+ * covered or capped. `shareOf` gives each layer's share key, before its label.
  */
 export function candidatesOf(node: string, layers: RawLayer[], shareOf: (key: string) => string): FlowCandidate[] {
   const index = indexLayers(layers);
@@ -139,7 +142,7 @@ export function candidatesOf(node: string, layers: RawLayer[], shareOf: (key: st
     out.push({
       node,
       layerKey: layer.key,
-      shareKey: shareOf(layer.key),
+      shareKey: shareKeyOf(shareOf(layer.key), label),
       label,
       role,
       box: [Math.round(x), Math.round(y), Math.round(width), Math.round(height)],

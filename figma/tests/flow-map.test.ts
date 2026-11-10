@@ -34,11 +34,23 @@ const text = (id: string, characters: string, extra: Record<string, unknown> = {
 /**
  * The fake Farside page, with unwired elements where the renderer keys
  * layers its own ways: inside a variant (`2:33;8:7`) and inside a variant
- * of an instance inside a variant (`2:33;8:6;6:15`); and on the Dashboard
- * a hidden text, a seven word line and a line break.
+ * of an instance inside a variant (`2:33;8:6;6:15`); on the Dashboard a
+ * hidden text, a seven word line and a line break; and on Bank connected
+ * a second Chip row (`2:90`), its first chip's text overridden to Weekly.
  */
 function fixture(): ProtoFixture {
   const json = structuredClone(fixtureJson) as unknown as { pages: Spec[] };
+  const find = (id: string) => {
+    const walk = (n: Spec): Spec | null => (n.id === id ? n : (n.children ?? []).map(walk).find(Boolean) ?? null);
+    const found = json.pages.map(walk).find(Boolean);
+    if (!found) throw new Error(`The fixture has no node ${id}`);
+    return found;
+  };
+  const chips = JSON.parse(JSON.stringify(find('3:8')).replace(/"3:8"/g, '"2:90"').replace(/I3:8;/g, 'I2:90;')) as Spec;
+  chips.y = 400;
+  const weekly = (chips.children?.[0]?.children?.[0]?.children?.[0] ?? null) as Spec | null;
+  if (!weekly || weekly.id !== 'I2:90;6:33') throw new Error('The Chip row copy has no Monthly label');
+  weekly.characters = 'Weekly';
   const added: Record<string, Spec[]> = {
     '8:4': [
       {
@@ -54,6 +66,7 @@ function fixture(): ProtoFixture {
       },
     ],
     '6:13': [text('6:15', 'Saved just now', { x: 0, y: 22 })],
+    '2:50': [chips],
     '1:2': [
       text('1:12', 'See what changed since your last visit', { x: 280, y: 400, width: 400 }),
       text('1:13', 'Beta', { x: 280, y: 440, visible: false }),
@@ -117,10 +130,10 @@ describe('flow map candidates', () => {
       expect([...listed].sort(), frame.name).toEqual([...(await renderedCandidates(t.api, t.doc, frame.id))].sort());
     }
     // Inside a variant, and inside a variant of an instance inside a variant.
-    expect(of(t.flow.candidates, '2:30', '2:33;8:7')).toMatchObject({ label: 'On for this device', role: 'button', shareKey: 'C:8:4;8:7' });
-    expect(of(t.flow.candidates, '2:30', '2:33;8:6;6:15')).toMatchObject({ label: 'Saved just now', role: 'text', shareKey: 'C:6:13;6:15' });
+    expect(of(t.flow.candidates, '2:30', '2:33;8:7')).toMatchObject({ label: 'On for this device', role: 'button', shareKey: 'C:8:4;8:7|on for this device' });
+    expect(of(t.flow.candidates, '2:30', '2:33;8:6;6:15')).toMatchObject({ label: 'Saved just now', role: 'text', shareKey: 'C:6:13;6:15|saved just now' });
     // Inside an instance showing its main component.
-    expect(of(t.flow.candidates, '3:5', 'I3:8;6:22')).toMatchObject({ label: 'Monthly', role: 'button', shareKey: 'C:6:20;6:22' });
+    expect(of(t.flow.candidates, '3:5', 'I3:8;6:22')).toMatchObject({ label: 'Monthly', role: 'button', shareKey: 'C:6:20;6:22|monthly' });
   });
 
   it('list hidden layers, and leave out a seven word line, a line break and anything with a reaction of its own', async () => {
@@ -134,7 +147,16 @@ describe('flow map candidates', () => {
     // The spinner inside every button is hidden, and still read: once, under one share key, wherever the button is.
     const spinners = t.flow.candidates.filter((c) => c.label === 'Spinner');
     expect(new Set(spinners.map((c) => c.node)).size).toBeGreaterThan(3);
-    expect(new Set(spinners.map((c) => c.shareKey))).toEqual(new Set(['C:6:2;6:4']));
+    expect(new Set(spinners.map((c) => c.shareKey))).toEqual(new Set(['C:6:2;6:4|spinner']));
+  });
+
+  it('share a key across instances of one component, split by an overridden label', async () => {
+    const t = await setup();
+    expect(of(t.flow.candidates, '2:50', 'I2:90;6:23')?.shareKey).toBe(of(t.flow.candidates, '3:5', 'I3:8;6:23')?.shareKey);
+    expect(of(t.flow.candidates, '2:50', 'I2:90;6:22')).toMatchObject({ label: 'Weekly', shareKey: 'C:6:20;6:22|weekly' });
+    expect(of(t.flow.candidates, '3:5', 'I3:8;6:22')).toMatchObject({ label: 'Monthly', shareKey: 'C:6:20;6:22|monthly' });
+    // Outside an instance the key is the layer's own.
+    expect(of(t.flow.candidates, '2:50', '2:90')?.shareKey).toBe('L:2:50:2:90');
   });
 
   it('carry their box in frame coordinates, unscrolled, and the visible text nearest to them', async () => {
