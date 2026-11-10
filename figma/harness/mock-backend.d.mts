@@ -68,8 +68,8 @@ export interface TraceRefusal {
 }
 
 export interface TraceRuns {
-  handle(method: string, path: string, body: unknown): [number, Record<string, unknown>] | null;
-  addStudy(study: { studyId: string; goal?: string; waves: TraceRunSpec[][] }): unknown;
+  handle(method: string, path: string, body: unknown, request: { bytes?: number }): [number, Record<string, unknown>] | null;
+  addStudy(study: { studyId: string; goal?: string; waves: TraceRunSpec[][]; execution?: 'plugin' | 'remote' }): unknown;
   release(runId: string, name: string): void;
   runs: Map<string, TraceRun>;
   studies: Map<string, unknown>;
@@ -80,7 +80,7 @@ export interface TraceRuns {
 }
 
 export interface MockBackend {
-  handle(method: string, path: string, body: unknown, headers: Record<string, string | undefined>): Promise<[number, unknown] | null>;
+  handle(method: string, path: string, body: unknown, headers: Record<string, string | undefined>, request?: { bytes?: number }): Promise<[number, unknown] | null>;
   studies: Map<string, unknown>;
   trace: TraceRuns;
 }

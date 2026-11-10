@@ -487,6 +487,37 @@ describe('the finalizing window', () => {
   }, 30_000);
 });
 
+describe("the backend's bounds on a turn", () => {
+  it('takes every turn of a frame whose name is longer than a turn carries, its title cut', async () => {
+    mock.trace.addStudy({ studyId: 'study-long-name', waves: [[{ runId: 'run-long-name', script: [{ give_up: 'Too long to read.' }] }]] });
+    const fake = fakeFile();
+    const long = `Dashboard ${'for the whole finance team '.repeat(15)}`;
+    (fake.nodes.get('1:2') as FakeNode).name = long;
+    const plugin = openPlugin(fake);
+    const doc = await plugin.bridge.call('trace-read', { importLibraryVariants: true });
+    await claim('run-long-name');
+    expect(await persona(plugin, doc, 'run-long-name')).toMatchObject({ stop: 'ended', ended: { status: 'finalizing', reason: 'give_up' } });
+    expect(refusalsOf('run-long-name')).toEqual([]);
+    const title = bodiesOf('run-long-name')[0]?.screen.title ?? '';
+    expect([...title].length).toBeLessThanOrEqual(300);
+    expect(title.endsWith('…')).toBe(true);
+  }, 30_000);
+
+  it('stops, aborting nothing itself, when the decider crashed on a turn', async () => {
+    mock.trace.addStudy({ studyId: 'study-crash', waves: [[{ runId: 'run-crash', script: [{ expect: 'Dashboard', fail: 'decider_error' }] }]] });
+    const fake = fakeFile();
+    const plugin = openPlugin(fake);
+    const doc = await plugin.bridge.call('trace-read', { importLibraryVariants: true });
+    await claim('run-crash');
+    const result = await persona(plugin, doc, 'run-crash');
+    expect(result).toMatchObject({ stop: 'ended', ended: { status: 'aborted', reason: 'decider_error' }, message: expect.stringMatching(/decider_error/) });
+    expect(mock.trace.runs.get('run-crash')).toMatchObject({ status: 'aborted', abortReason: 'decider_error' });
+    // The panel sent no abort of its own: the backend had ended the run.
+    expect(refusalsOf('run-crash')).toEqual([]);
+    expect(await plugin.bridge.call('trace-load', { studyId: 'study-crash' })).toEqual({ sessions: [] });
+  }, 30_000);
+});
+
 describe('a timer that opens a link', () => {
   /** The golden path, with Bank connected opening `url` a second after it shows. Returns the last turn's body. */
   async function linkOnBankConnected(runId: string, url: string): Promise<TurnBody> {
@@ -968,11 +999,75 @@ describe('the mock backend', () => {
     clock += 5_000;
     expect(await api.claimRun('run-claim', { browser, owner: OWNER })).toEqual(briefing);
     expect(await refused(api.claimRun('run-claim', { browser, owner: 'panel-other' }))).toMatchObject({ status: 409, code: 'already_claimed' });
-    // The rest of 2f16ec9's rule: an owner is needed, and a figma-trace engine when a browser is sent.
+    // The rest of 2f16ec9's rule: an owner is needed; and since e9c955a an owner comes only with the figma-trace engine.
     expect(await refused(api.request('POST', '/api/plugin/runs/run-claim/claim', { browser }))).toMatchObject({ status: 409, code: 'already_claimed' });
-    expect(await refused(api.request('POST', '/api/plugin/runs/run-claim/claim', { browser: { ...browser, engine: 'chrome' }, owner: OWNER }))).toMatchObject({ status: 409, code: 'already_claimed' });
-    expect(await api.request('POST', '/api/plugin/runs/run-claim/claim', { owner: OWNER })).toEqual(briefing);
+    for (const claimBody of [{ browser: { ...browser, engine: 'chrome' }, owner: OWNER }, { owner: OWNER }]) {
+      const err = await refused(api.request('POST', '/api/plugin/runs/run-claim/claim', claimBody));
+      expect(err).toMatchObject({ status: 400, code: 'bad_request' });
+      expect(err.message).toBe("owner is only for a Figma panel's claim: browser.engine must be figma-trace.");
+    }
     expect(await refused(api.claimRun('run-nobody', { browser, owner: OWNER }))).toMatchObject({ status: 404, code: 'run_not_found' });
+  });
+
+  it('claims with an owner only the runs of a plugin-mode study', async () => {
+    own.trace.addStudy({ studyId: 'study-remote', execution: 'remote', waves: [[{ runId: 'run-remote', script: [] }]] });
+    const err = await refused(api.claimRun('run-remote', { browser, owner: OWNER }));
+    expect(err).toMatchObject({ status: 400, code: 'bad_request', message: 'run run-remote is not a run of a plugin-mode study: only those are claimed with an owner.' });
+    // An actor that names no owner (a remote runner) still claims it.
+    expect(await api.request('POST', '/api/plugin/runs/run-remote/claim', { browser: { engine: 'chrome' } })).toMatchObject({ runId: 'run-remote' });
+  });
+
+  it('bounds the turn body as the backend does since e9c955a', async () => {
+    const runId = await claimed([{ click: 'Continue' }]);
+    const screen = body(1).screen;
+    const bad: Array<[Record<string, unknown>, RegExp]> = [
+      [{ screen: { ...screen, title: 'T'.repeat(301) } }, /screen\.title must be a string of at most 300 characters/],
+      [{ screen: { ...screen, overlays: Array.from({ length: 21 }, () => '3:1') } }, /screen\.overlays must be a list of at most 20 frame ids/],
+      [{ screen: { ...screen, overlays: ['overlay'] } }, /screen\.overlays must be a list/],
+      [{ screen: { ...screen, scroll: { x: 0, y: 0, maxX: 0 } } }, /screen\.scroll must be \{x, y, maxX, maxY\}/],
+      [{ screen: { ...screen, scroll: { x: 0, y: -1, maxX: 0, maxY: 0 } } }, /screen\.scroll must be/],
+      [{ screen: { ...screen, scroll: { x: 0, y: 0, maxX: 0, maxY: 0, z: 0 } } }, /screen\.scroll must be/],
+      [{ elements: [{ ...BUTTON, label: 'L'.repeat(301) }] }, /elements\[0\]\.label must be a string of at most 300 characters/],
+      [{ flags: ['missing_font', 'missing_font'] }, /each at most once/],
+      [{ visible_text_excerpt: 'x'.repeat(301) }, /visible_text_excerpt must be a string of at most 300 characters/],
+      [{ frame_name: 'Dashboard' }, /frame_name is not a turn field/],
+      [{ turn: 10_001 }, /turn must be a whole number from 1 to 10000 \(got 10001\)/],
+    ];
+    for (const [change, message] of bad) {
+      const err = await refused(api.postTurn(runId, { ...body(1), ...change } as TurnBody));
+      expect(err, String(message)).toMatchObject({ status: 400, code: 'bad_request' });
+      expect(err.message).toMatch(message);
+    }
+    // At the bounds, and a title of 300 characters some of which are outside the BMP (as Python counts them).
+    expect(() => cleanTurn(body(1, { screen: { ...screen, title: '🏦'.repeat(300), overlays: Array.from({ length: 20 }, () => 'I3:1;6:2') } }))).not.toThrow();
+    expect(await refused(api.getTurn(runId, 10_001))).toMatchObject({ status: 404, code: 'turn_not_found' });
+  });
+
+  it('refuses a turn body over 3 MB unread, with 413 payload_too_large', async () => {
+    const runId = await claimed([{ click: 'Continue' }]);
+    const err = await refused(api.postTurn(runId, body(1, { screenshot_b64: 'A'.repeat(3 * 1024 * 1024) })));
+    expect(err).toMatchObject({ status: 413, code: 'payload_too_large' });
+    expect(err.message).toBe('A turn body is at most 3 MB: a screenshot of at most 1.5 MB and what the screen shows.');
+  });
+
+  it("refuses a turn whose last.action is not the action the turn before chose", async () => {
+    const runId = await claimed([{ click: 'Continue' }, { done: 'Done.' }]);
+    await api.postTurn(runId, body(1));
+    expect(await api.getTurn(runId, 1)).toMatchObject({ action: { type: 'click', element: 'e1' } });
+    const other = body(2, { last: { action: { type: 'hover', element: 'e1' }, outcome: 'nothing_happened', target: 'Continue (e1)' } });
+    const err = await refused(api.postTurn(runId, other));
+    expect(err).toMatchObject({ status: 400, code: 'bad_request' });
+    expect(err.message).toBe('last.action must be the action turn 1 chose, {"type":"click","element":"e1"} (got {"type":"hover","element":"e1"}).');
+    // The same action with its fields in another order is that action.
+    expect(await api.postTurn(runId, body(2, { last: { action: { element: 'e1', type: 'click' } as never, outcome: 'navigated', target: 'Continue (e1)' } }))).toMatchObject({ turn: 2, status: 'thinking' });
+  });
+
+  it('fails a turn the decider crashed on with decider_error, aborting the run, a code the panel cannot send', async () => {
+    const runId = await claimed([{ fail: 'decider_error' }]);
+    await api.postTurn(runId, body(1));
+    expect(await api.getTurn(runId, 1)).toMatchObject({ status: 'failed', error: { code: 'decider_error' }, ended: { status: 'aborted', reason: 'decider_error' } });
+    const other = await claimed([{ hold: 'never', click: 'Continue' }]);
+    expect(await refused(api.abortRun(other, { owner: OWNER, code: 'decider_error' as 'engine_error', detail: 'x' }))).toMatchObject({ status: 400, code: 'bad_request' });
   });
 
   it('refuses a repeat claim of a run that ended, even from its own owner', async () => {

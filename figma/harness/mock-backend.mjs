@@ -102,8 +102,8 @@ export function createMockBackend({ log = () => {}, clock = () => Date.now(), th
     };
   }
 
-  /** Returns [status, body] or null when the route is unknown. */
-  async function handle(method, path, body, headers) {
+  /** Returns [status, body] or null when the route is unknown. `request.bytes` is the body's size, which a turn needs. */
+  async function handle(method, path, body, headers, request = {}) {
     if (path === '/api/oauth/device/code' && method === 'POST') {
       const device_code = `dev-${++deviceSeq}`;
       devicePolls.set(device_code, 0);
@@ -121,7 +121,7 @@ export function createMockBackend({ log = () => {}, clock = () => Date.now(), th
     if (!/^Bearer \S+/.test(headers.authorization ?? '')) return [401, { error: 'Authorization header missing', message: 'Sign in first.' }];
     if (headers.authorization === 'Bearer expired') return [401, { error: 'Invalid token', message: 'Token expired.' }];
 
-    const traced = trace.handle(method, path, body);
+    const traced = trace.handle(method, path, body, request);
     if (traced) return traced;
 
     if (path === '/api/studies' && method === 'POST') {
@@ -178,7 +178,18 @@ const MAX_SCREENSHOT_BYTES = 1536 * 1024;
 const MAX_SCREENSHOT_B64 = 4 * Math.ceil(MAX_SCREENSHOT_BYTES / 3);
 const MAX_ELEMENTS = 80;
 const MAX_DETAIL = 500;
+const MAX_OVERLAYS = 20;
+/** A whole turn body: the screenshot's base64 (2 MB at most) and the rest of the screen. */
+const MAX_TURN_BODY_BYTES = 3 * 1024 * 1024;
+/** What a step stores (run_protocol.MAX_TEXT), and an element's label. */
+const MAX_EXCERPT = 300;
+const MAX_TITLE = 300;
+const MAX_LABEL = 300;
+const MAX_TURN = 10_000;
 const ELEMENT_ID = /^e[0-9]+$/;
+const NODE_ID = /^I?[0-9]+:[0-9]+(;[0-9]+:[0-9]+)*$/;
+const TURN_FIELDS = ['owner', 'turn', 'screen', 'screenshot_b64', 'elements', 'visible_text_excerpt', 'last', 'flags',
+  'flag_details', 'elapsed_s', 'client_ts'];
 const ELEMENT_ROLES = ['button', 'link', 'text', 'card', 'input', 'icon', 'image'];
 const ACTION_TYPES = ['click', 'hover', 'drag', 'press_key', 'scroll', 'wait', 'back', 'type', 'give_up', 'done'];
 const OUTCOMES = [
@@ -198,6 +209,8 @@ const NAMED_KEYS = ['Backspace', 'Tab', 'Enter', 'Return', 'Shift', 'Control', '
 const LETTERS = 'abcdefghijklmnopqrstuvwxyz';
 const KEY_NAMES = new Set([...NAMED_KEYS, ...LETTERS, ...LETTERS.toUpperCase(), ...'0123456789', ...Array.from({ length: 12 }, (_, i) => `F${i + 1}`)]);
 const KEY_MODIFIERS = new Set(['Shift', 'Control', 'Ctrl', 'Alt', 'Option', 'Meta', 'Cmd', 'Command']);
+/** The decider's own abort when it crashes on a turn: backend-only, as finalize_failed is. */
+const DECIDER_ERROR = 'decider_error';
 const PANEL_ABORT_CODES = ['render_failed', 'turn_timeout', 'panel_state_lost', 'file_changed',
   'brain_invalid_action', 'model_unavailable', 'debrief_invalid', 'engine_error'];
 const TERMINAL = new Set(['completed', 'failed', 'abandoned', 'aborted']);
@@ -222,6 +235,11 @@ const isObject = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
 const isNumber = (v) => typeof v === 'number' && Number.isFinite(v);
 const isText = (v) => typeof v === 'string';
 const repr = (v) => JSON.stringify(v) ?? String(v);
+/** A string's length as Python counts it: code points, not UTF-16 units. */
+const chars = (s) => [...s].length;
+/** Python's == on JSON values: the same keys and values, in any order. */
+const stable = (v) => (Array.isArray(v) ? `[${v.map(stable).join(',')}]` : isObject(v) ? `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${stable(v[k])}`).join(',')}}` : JSON.stringify(v));
+const sameJson = (a, b) => stable(a) === stable(b);
 
 function isKeyName(key) {
   if (!isText(key) || !key) return false;
@@ -238,6 +256,19 @@ function cleanScreen(screen) {
   const viewport = screen.viewport;
   if (!(Array.isArray(viewport) && viewport.length === 2 && viewport.every((v) => isNumber(v) && v > 0))) {
     throw badRequest(`screen.viewport is required: [width, height] in pixels (got ${repr(viewport)}).`);
+  }
+  const title = screen.title;
+  if (title !== null && title !== undefined && !(isText(title) && chars(title) <= MAX_TITLE)) {
+    throw badRequest(`screen.title must be a string of at most ${MAX_TITLE} characters, the frame's name.`);
+  }
+  const overlays = screen.overlays;
+  if (overlays !== null && overlays !== undefined && !(Array.isArray(overlays) && overlays.length <= MAX_OVERLAYS && overlays.every((o) => isText(o) && NODE_ID.test(o)))) {
+    throw badRequest(`screen.overlays must be a list of at most ${MAX_OVERLAYS} frame ids like 3:1, the overlays open, bottom first (got ${repr(overlays)}).`);
+  }
+  const scroll = screen.scroll;
+  const scrollKeys = isObject(scroll) ? Object.keys(scroll).sort().join(',') : null;
+  if (scroll !== null && scroll !== undefined && !(scrollKeys === 'maxX,maxY,x,y' && Object.values(scroll).every((v) => isNumber(v) && v >= 0))) {
+    throw badRequest(`screen.scroll must be {x, y, maxX, maxY}, each a number of pixels from 0 (got ${repr(scroll)}).`);
   }
 }
 
@@ -259,7 +290,7 @@ function cleanElements(elements) {
     if (!isText(element.id) || !ELEMENT_ID.test(element.id)) throw badRequest(`${where}.id must look like e4 (got ${repr(element.id)}).`);
     if (seen.has(element.id)) throw badRequest(`${where}.id ${element.id} is listed twice; element ids are unique in a turn.`);
     seen.add(element.id);
-    if (!isText(element.label)) throw badRequest(`${where}.label must be a string.`);
+    if (!isText(element.label) || chars(element.label) > MAX_LABEL) throw badRequest(`${where}.label must be a string of at most ${MAX_LABEL} characters.`);
     if (!ELEMENT_ROLES.includes(element.role)) throw badRequest(`${where}.role must be one of ${ELEMENT_ROLES.join(', ')} (got ${repr(element.role)}).`);
     const box = element.box;
     if (!(Array.isArray(box) && box.length === 4 && box.every(isNumber))) {
@@ -283,7 +314,7 @@ function cleanLast(last, n) {
   const unsupported = last.unsupported;
   if (last.outcome === 'unsupported') {
     if (!isText(unsupported) || !unsupported.trim()) throw badRequest('last.unsupported is required with the unsupported outcome: what did nothing, such as UPDATE_MEDIA_RUNTIME.');
-    if (unsupported.length > MAX_ENGINE_DETAIL) throw badRequest(`last.unsupported is at most ${MAX_ENGINE_DETAIL} characters (got ${unsupported.length}).`);
+    if (chars(unsupported) > MAX_ENGINE_DETAIL) throw badRequest(`last.unsupported is at most ${MAX_ENGINE_DETAIL} characters (got ${chars(unsupported)}).`);
   } else if (unsupported !== null && unsupported !== undefined) {
     throw badRequest('last.unsupported is only allowed with the unsupported outcome.');
   }
@@ -294,7 +325,7 @@ function cleanLast(last, n) {
     const where = `last.timer_effects[${i}]`;
     if (!isObject(effect)) throw badRequest(`${where} must be an object {type, detail}.`);
     if (!TIMER_EFFECTS.includes(effect.type)) throw badRequest(`${where}.type must be one of ${TIMER_EFFECTS.join(', ')} (got ${repr(effect.type)}).`);
-    if (!isText(effect.detail) || !effect.detail.trim() || effect.detail.length > MAX_ENGINE_DETAIL) throw badRequest(`${where}.detail must be 1 to ${MAX_ENGINE_DETAIL} characters.`);
+    if (!isText(effect.detail) || !effect.detail.trim() || chars(effect.detail) > MAX_ENGINE_DETAIL) throw badRequest(`${where}.detail must be 1 to ${MAX_ENGINE_DETAIL} characters.`);
   });
 }
 
@@ -306,7 +337,7 @@ function cleanFlagDetails(details, flags) {
     if (!field) throw badRequest(`flag_details.${flag} is not allowed: only ${Object.keys(FLAG_DETAILS).join(', ')} carry details.`);
     if (!flags.includes(flag)) throw badRequest(`flag_details.${flag} needs the ${flag} flag in flags.`);
     const items = isObject(value) ? value[field] : null;
-    if (!(Array.isArray(items) && items.length > 0 && items.length <= MAX_FLAG_DETAILS && items.every((i) => isText(i) && i.trim() && i.length <= 200))) {
+    if (!(Array.isArray(items) && items.length > 0 && items.length <= MAX_FLAG_DETAILS && items.every((i) => isText(i) && i.trim() && chars(i) <= 200))) {
       throw badRequest(`flag_details.${flag}.${field} must be a list of 1 to ${MAX_FLAG_DETAILS} names.`);
     }
   }
@@ -315,18 +346,23 @@ function cleanFlagDetails(details, flags) {
 /** The backend's _clean_turn: returns {n, owner, observation, shot}, or throws a 400. */
 export function cleanTurn(body) {
   if (!isObject(body)) throw badRequest('The body must be a JSON object {owner, turn, screen, screenshot_b64, elements, last, flags}.');
+  const unknown = Object.keys(body).filter((k) => !TURN_FIELDS.includes(k)).sort();
+  if (unknown.length) throw badRequest(`${unknown[0]} is not a turn field: a turn has ${TURN_FIELDS.join(', ')}.`);
   const n = body.turn;
-  if (!Number.isInteger(n) || n < 1) throw badRequest(`turn must be a whole number from 1 (got ${repr(n)}).`);
+  if (!Number.isInteger(n) || n < 1 || n > MAX_TURN) throw badRequest(`turn must be a whole number from 1 to ${MAX_TURN} (got ${repr(n)}).`);
   if (!isText(body.owner) || !body.owner) throw badRequest('owner is required: the id this panel sent with its claim.');
   cleanScreen(body.screen);
   const shot = cleanScreenshot(body.screenshot_b64);
   cleanElements(body.elements);
   cleanLast(body.last, n);
   const flags = body.flags;
-  if (!Array.isArray(flags) || flags.some((f) => !FLAGS.includes(f))) throw badRequest(`flags must be a list drawn from ${FLAGS.join(', ')} (got ${repr(flags)}).`);
+  if (!Array.isArray(flags) || flags.some((f) => !FLAGS.includes(f)) || new Set(flags).size !== flags.length) {
+    throw badRequest(`flags must be a list drawn from ${FLAGS.join(', ')}, each at most once (got ${repr(flags)}).`);
+  }
   cleanFlagDetails(body.flag_details, flags);
-  if (body.visible_text_excerpt !== null && body.visible_text_excerpt !== undefined && !isText(body.visible_text_excerpt)) {
-    throw badRequest('visible_text_excerpt must be a string.');
+  const excerpt = body.visible_text_excerpt;
+  if (excerpt !== null && excerpt !== undefined && !(isText(excerpt) && chars(excerpt) <= MAX_EXCERPT)) {
+    throw badRequest(`visible_text_excerpt must be a string of at most ${MAX_EXCERPT} characters.`);
   }
   const { owner, turn, screenshot_b64, ...observation } = body;
   return { n, owner, observation, shot };
@@ -423,6 +459,8 @@ function createTraceRuns({ clock, thinkingPolls }) {
 
   function failTurn(run, rec, code, message) {
     const ended = abort(run, code) ? { status: 'aborted', reason: code } : endOf(run);
+    // The run's finalizer ends it, and says how on the turn that ended it: this turn is left as it is.
+    if (ended.status === 'finalizing') return;
     markFailed(rec, code, message, ended);
   }
 
@@ -492,10 +530,18 @@ function createTraceRuns({ clock, thinkingPolls }) {
   function claim(runId, body) {
     if (!isObject(body)) throw badRequest('The body must be a JSON object {browser?, owner?}.');
     if (body.browser !== undefined && body.browser !== null) cleanBrowser(body.browser);
-    if (body.owner !== undefined && body.owner !== null && !(isText(body.owner) && OWNER_RE.test(body.owner))) {
+    const owned = body.owner !== undefined && body.owner !== null;
+    if (owned && !(isText(body.owner) && OWNER_RE.test(body.owner))) {
       throw badRequest('owner must be a string of 1 to 64 characters (letters, digits, _ or -).');
     }
+    if (owned && (body.browser === undefined || body.browser === null || body.browser.engine !== 'figma-trace')) {
+      throw badRequest("owner is only for a Figma panel's claim: browser.engine must be figma-trace.");
+    }
     const run = runOf(runId);
+    // Only a plugin-mode study's runs take turns from a Figma panel.
+    if (owned && studies.get(run.studyId)?.execution !== 'plugin') {
+      throw badRequest(`run ${runId} is not a run of a plugin-mode study: only those are claimed with an owner.`);
+    }
     // A repeat claim from the run's own panel, whose first answer it lost, gets the same briefing again.
     const engineOk = body.browser === undefined || body.browser === null || body.browser.engine === 'figma-trace';
     if (run.status === 'running' && !run.finalizing && run.owner !== null && body.owner === run.owner && engineOk) {
@@ -519,6 +565,13 @@ function createTraceRuns({ clock, thinkingPolls }) {
     if (n !== expected) {
       throw new Refused(409, 'turn_out_of_order', `turn ${n} is out of order: this run takes turn ${expected} next. Read GET /turn/${expected - 1} and continue from there.`, { expected });
     }
+    if (n > 1) {
+      // last reports what the action turn n-1 chose did: the step it completes is that action's.
+      const chosen = run.turns.get(n - 1).result.action;
+      if (!sameJson(observation.last.action, chosen)) {
+        throw badRequest(`last.action must be the action turn ${n - 1} chose, ${repr(chosen)} (got ${repr(observation.last.action)}).`);
+      }
+    }
     const rec = { turn: n, owner, status: 'thinking', observation, screenshot: shot, deadlineAt: clock() + TURN_DEADLINE_S * 1000, polls: 0, result: null, error: null };
     run.turns.set(n, rec);
     return [202, view(rec)];
@@ -526,7 +579,7 @@ function createTraceRuns({ clock, thinkingPolls }) {
 
   function getTurn(runId, n) {
     const run = runOf(runId);
-    const rec = run.turns.get(n);
+    const rec = n <= MAX_TURN ? run.turns.get(n) : undefined;
     if (!rec) throw new Refused(404, 'turn_not_found', `run ${runId} has no turn ${n}.`);
     const overdue = rec.status === 'thinking' && !rec.result?.ended && !run.finalizing && clock() > rec.deadlineAt;
     if (overdue) {
@@ -573,8 +626,9 @@ function createTraceRuns({ clock, thinkingPolls }) {
   }
 
   /** A plugin-mode study with its waves of runs: wave 1 is queued now, the rest come from next-wave. */
-  function addStudy({ studyId, goal = 'Connect a bank account', waves }) {
-    const study = { studyId, goal, waves, wave: 1 };
+  /** A study with its waves of runs; `execution` 'remote' stands for a study no Figma panel runs. */
+  function addStudy({ studyId, goal = 'Connect a bank account', waves, execution = 'plugin' }) {
+    const study = { studyId, goal, waves, wave: 1, execution };
     studies.set(studyId, study);
     for (const spec of waves[0]) addRun(study, 1, spec);
     return study;
@@ -626,7 +680,7 @@ function createTraceRuns({ clock, thinkingPolls }) {
   }
 
   /** The routes of api/routes_plugin.py and routes_studies.py for trace runs; null for any other path. */
-  function handle(method, path, body) {
+  function handle(method, path, body, request) {
     const claimPath = /^\/api\/plugin\/runs\/([^/]+)\/claim$/.exec(path);
     const turnPath = /^\/api\/plugin\/runs\/([^/]+)\/turn$/.exec(path);
     const turnN = /^\/api\/plugin\/runs\/([^/]+)\/turn\/([^/]+)$/.exec(path);
@@ -637,6 +691,11 @@ function createTraceRuns({ clock, thinkingPolls }) {
     try {
       if (claimPath && method === 'POST') return claim(decodeURIComponent(claimPath[1]), body);
       if (turnPath && method === 'POST') {
+        // routes_plugin reads a turn body only up to its limit, as Flask's max_content_length does.
+        if (request.bytes === undefined) throw new Error(`POST ${path} reached the mock without its body's size: serve it through serveMock, or pass { bytes }.`);
+        if (request.bytes > MAX_TURN_BODY_BYTES) {
+          throw new Refused(413, 'payload_too_large', `A turn body is at most ${MAX_TURN_BODY_BYTES / (1024 * 1024)} MB: a screenshot of at most 1.5 MB and what the screen shows.`);
+        }
         const runId = decodeURIComponent(turnPath[1]);
         const answer = postTurn(runId, body);
         posts.push({ runId, turn: body.turn, body: structuredClone(body), status: answer[0] });
@@ -665,17 +724,21 @@ export function serveMock(mock, { port = 0 } = {}) {
   const server = createServer(async (req, res) => {
     const chunks = [];
     for await (const chunk of req) chunks.push(chunk);
-    const raw = Buffer.concat(chunks).toString('utf8');
-    let body = null;
-    try {
-      body = raw ? JSON.parse(raw) : null;
-    } catch {
-      res.writeHead(400, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'bad_request', message: 'The body is not JSON.' }));
-      return;
-    }
+    const buffer = Buffer.concat(chunks);
     const path = new URL(req.url ?? '/', 'http://127.0.0.1').pathname;
-    const out = (await mock.handle(req.method, path, body, req.headers)) ?? [404, { error: 'not_found', message: `${req.method} ${path} is not part of the mock.` }];
+    // A turn body over the limit is refused unread, after the sign in check, as the backend does.
+    const unread = req.method === 'POST' && /\/turn$/.test(path) && buffer.length > MAX_TURN_BODY_BYTES;
+    let body = null;
+    if (!unread) {
+      try {
+        body = buffer.length ? JSON.parse(buffer.toString('utf8')) : null;
+      } catch {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'bad_request', message: 'The body is not JSON.' }));
+        return;
+      }
+    }
+    const out = (await mock.handle(req.method, path, body, req.headers, { bytes: buffer.length })) ?? [404, { error: 'not_found', message: `${req.method} ${path} is not part of the mock.` }];
     res.writeHead(out[0], { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(out[1]));
   });
