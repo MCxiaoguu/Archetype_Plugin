@@ -396,6 +396,39 @@ describe('when things go wrong', () => {
     expect(result).toMatchObject({ stop: 'aborted', ended: { reason: 'render_failed' } });
   });
 
+  it('cuts a frame name longer than the 300 characters a turn takes, saying so with the cut', async () => {
+    const long = `Dashboard ${'with a very long name '.repeat(20)}`;
+    const main = await mainThread((fake) => ((fake.nodes.get('1:2') as FakeNode).name = long));
+    const { posted, aborted } = await play(() => DONE, { main });
+    const title = posted[0]!.screen.title;
+    expect(title.length).toBeLessThanOrEqual(300);
+    expect(title.length).toBeGreaterThan(290);
+    expect(title.endsWith('…')).toBe(true);
+    expect(long.startsWith(title.slice(0, -1).trimEnd())).toBe(true);
+    expect(aborted).toEqual([]);
+  });
+
+  it('aborts with engine_error, posting nothing, when more overlays are open than a turn can carry', async () => {
+    const main = await mainThread();
+    const base = start(main.doc, '2:20');
+    const tooltip = { frameId: '3:3', position: 'CENTER' as const, origin: { x: 0, y: 0 }, closeOnOutsideClick: false };
+    const resume: SavedSession = {
+      owner: 'p_7f3a',
+      runId: 'r1',
+      turn: 4,
+      state: { ...base, overlays: Array.from({ length: 21 }, () => ({ ...tooltip })) },
+      lastOutcome: { action: { type: 'click', element: 'e1' }, outcome: 'opened_overlay', target: 'Help (e1)' },
+      timerEffects: [],
+      loopFrames: [],
+      version: 1,
+    };
+    const { result, aborted, posted, call } = await play(() => DONE, { main, run: () => ({ resume }) });
+    expect(aborted).toEqual([{ owner: 'p_7f3a', code: 'engine_error', detail: 'More than 20 overlays are open, more than a turn can carry.' }]);
+    expect(result).toMatchObject({ stop: 'aborted', ended: { status: 'aborted', reason: 'engine_error' } });
+    expect(posted).toEqual([]);
+    expect(call.mock.calls.filter(([type]) => type === 'trace-render')).toEqual([]);
+  });
+
   it('aborts with turn_timeout after 180 s of thinking', async () => {
     const { aborted, result, time } = await play(() => DONE, { thinking: Infinity });
     expect(aborted).toMatchObject([{ code: 'turn_timeout' }]);

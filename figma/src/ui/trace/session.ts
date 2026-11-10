@@ -34,6 +34,10 @@ export const LATE_TIMER_MS = 10_000;
 export const RETRY_FIRST_MS = 2_000;
 export const RETRY_MAX_MS = 30_000;
 const MAX_TEXT_EXCERPT = 300;
+/** The longest frame name a turn carries (the backend's screen.title); a longer one is cut, ending in an ellipsis. */
+const MAX_TITLE = 300;
+/** The most overlays a turn carries (the backend's screen.overlays). */
+const MAX_OVERLAYS = 20;
 const MAX_DETAIL = 200;
 const MAX_TIMER_EFFECTS = 10;
 const MAX_FLAG_DETAILS = 50;
@@ -153,6 +157,8 @@ const ELEMENT_ACTIONS: ReadonlySet<string> = new Set(['click', 'hover', 'drag', 
 const UNCHANGED: ReadonlySet<TraceOutcome> = new Set<TraceOutcome>(['nothing_happened', 'typed_nothing', 'scroll_at_end', 'back_empty', 'waited']);
 
 const cap = (text: string, limit: number) => (text.length > limit ? text.slice(0, limit) : text);
+/** Text cut to `limit` characters, the cut marked by an ellipsis, as element labels are. */
+const cut = (text: string, limit: number) => (text.length > limit ? `${text.slice(0, limit - 1).trimEnd()}…` : text);
 const messageOf = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
 function engineAbort(err: unknown, what: string): Abort {
@@ -388,7 +394,7 @@ export async function runSession(run: SessionRun, deps: SessionDeps): Promise<Se
       turn,
       screen: {
         url: stepUrl(run.shareKey, doc.pageName, { frameId: state.frameId, overlays }),
-        title: frame.name,
+        title: cut(frame.name, MAX_TITLE),
         frameId: state.frameId,
         overlays,
         viewport: [rendered.viewport.width, rendered.viewport.height],
@@ -490,6 +496,8 @@ export async function runSession(run: SessionRun, deps: SessionDeps): Promise<Se
     addEffects(settled.effects);
     addLoop(settled.looped);
     status();
+    // Leaving overlays out would misstate the screen: a run this deep in overlays can't go on.
+    if (state.overlays.length > MAX_OVERLAYS) throw new Abort('engine_error', `More than ${MAX_OVERLAYS} overlays are open, more than a turn can carry.`);
 
     const rendered = await render();
     let listed: { elements: Element[]; targets: Record<string, ElementTarget> };
