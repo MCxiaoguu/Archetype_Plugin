@@ -5,7 +5,7 @@ import type { ProtoDoc } from '../src/lib/proto/model';
 import type { RunnerStatus } from '../src/lib/runs';
 import { runStudy, type RunnerDeps, type RunnerResult } from '../src/ui/trace/runner';
 import type { SessionResult, SessionStatus } from '../src/ui/trace/session';
-import { hiddenFrameNames, namesIn } from './live-checks';
+import { hiddenFrameNames, namesIn, readsGreetingAsWrongName } from './live-checks';
 import { expectUntouched, fakeFile, openPlugin, scratchOn, snapshot, tick, type Fake, type Plugin } from './trace-plugin';
 import { sceneOf } from './wireframe';
 
@@ -37,8 +37,6 @@ const POST_TURN_TIMEOUT_MS = 180_000;
 const MAX_SCREENSHOT_BYTES = 1.5 * 1024 * 1024;
 /** The trace brain's model, as the report and each run name it. */
 const ACTOR_MODEL = 'google:gemini-3-flash-preview';
-/** A finding that reads the prototype's sample greeting ("Welcome back, Mara") as a wrong user name. */
-const WRONG_NAME = /\bMara\b|\b(wrong|incorrect)\s+(user\s*)?name\b/i;
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 const slug = (text: string) => text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40);
@@ -544,9 +542,10 @@ describe.skipIf(!LIVE.url)('a live trace study against the local backend', () =>
   });
 
   it('never files the prototype\'s sample greeting as a wrong user name', () => {
-    const wrong = testDocs().flatMap((test) =>
-      personaWords(test.test_id as string).filter((w) => w.where.startsWith('finding') && WRONG_NAME.test(w.text)).map((w) => ({ runId: test.test_id, ...w })),
-    );
+    const wrong = testDocs().flatMap((test) => {
+      const feedback = ((test.results as Doc | undefined)?.plugin_feedback ?? {}) as Doc;
+      return ((feedback.findings as Doc[] | undefined) ?? []).filter((f) => readsGreetingAsWrongName(f)).map((f) => ({ runId: test.test_id, description: f.description }));
+    });
     expect(wrong).toEqual([]);
   });
 
