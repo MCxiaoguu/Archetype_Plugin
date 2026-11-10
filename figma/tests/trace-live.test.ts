@@ -1,10 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { liveConfig, openWireframer, saveFile, type Wireframer } from '../harness/live.mjs';
-import { ApiClient, ApiError, type ClaimBody, type NextWave, type StudyRuns, type TurnBody, type TurnView } from '../src/lib/api';
+import { ApiClient, ApiError, type ClaimBody, type NextWave, type RunBriefing, type StudyRuns, type TurnBody, type TurnView } from '../src/lib/api';
 import type { ProtoDoc } from '../src/lib/proto/model';
 import type { RunnerStatus } from '../src/lib/runs';
 import { runStudy, type RunnerDeps, type RunnerResult } from '../src/ui/trace/runner';
 import type { SessionResult, SessionStatus } from '../src/ui/trace/session';
+import { hiddenFrameNames, namesIn } from './live-checks';
 import { expectUntouched, fakeFile, openPlugin, scratchOn, snapshot, tick, type Fake, type Plugin } from './trace-plugin';
 import { sceneOf } from './wireframe';
 
@@ -32,6 +33,8 @@ const UNEXPLAINED_ABORTS = new Set(['engine_error', 'panel_state_lost', 'brain_i
 /** A turn decided inside the request: about 4 s, 10 to 20 s with the debrief; a give-up review asks twice. */
 const POST_TURN_TIMEOUT_MS = 180_000;
 const MAX_SCREENSHOT_BYTES = 1.5 * 1024 * 1024;
+/** A finding that reads the prototype's sample greeting ("Welcome back, Mara") as a wrong user name. */
+const WRONG_NAME = /\bMara\b|\b(wrong|incorrect)\s+(user\s*)?name\b/i;
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 const slug = (text: string) => text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40);
@@ -60,7 +63,8 @@ interface RunLog {
   wave: number | null;
   archetypeName: string;
   personaName: string | null;
-  briefing: { goal: string; targetUrl: string } | null;
+  /** The claim's briefing, as the persona's brain gets it. */
+  briefing: RunBriefing | null;
   claimedAt: string | null;
   /** From the claim to the last answer the run got. */
   wallMs: number | null;
@@ -132,7 +136,7 @@ describe.skipIf(!LIVE.url)('a live trace study against the local backend', () =>
       run.claimedAt = new Date().toISOString();
       const briefing = await client.claimRun(runId, body);
       run.personaName = briefing.persona?.name ?? null;
-      run.briefing = { goal: briefing.instructions.goal, targetUrl: briefing.instructions.targetUrl };
+      run.briefing = briefing;
       return briefing;
     },
     async nextWave(id: string) {
@@ -404,6 +408,49 @@ describe.skipIf(!LIVE.url)('a live trace study against the local backend', () =>
     expect(rows.filter((r) => r.included).map((r) => r.runId).sort()).toEqual([...scored].sort());
     expect(report.runsScored).toBe(scored.length);
     expect(report.runsPending).toBe(0);
+  });
+
+  /** What a persona said in its own words: each step's monologue, and its debrief. */
+  function personaWords(runId: string): Array<{ where: string; text: string }> {
+    const words = stepsOf(runId).map((step) => ({
+      where: `step ${step.seq as number} monologue`,
+      text: String((((step.protocol_v2 as Doc | undefined)?.decide as Doc | undefined)?.monologue as string | undefined) ?? ''),
+    }));
+    const results = (testDocs().find((d) => d.test_id === runId)?.results ?? {}) as Doc;
+    const feedback = (results.plugin_feedback ?? {}) as Doc;
+    words.push({ where: 'personaReaction', text: String(feedback.personaReaction ?? '') });
+    words.push({ where: 'in_their_words', text: String(((results.outcome ?? {}) as Doc).in_their_words ?? '') });
+    for (const [i, finding] of ((feedback.findings as Doc[] | undefined) ?? []).entries()) {
+      words.push({ where: `finding ${i} description`, text: String(finding.description ?? '') });
+      words.push({ where: `finding ${i} quote`, text: String(((finding.evidence ?? {}) as Doc).quote ?? '') });
+    }
+    return words.filter((w) => w.text);
+  }
+
+  it('never has a persona name a frame its screens did not show it', () => {
+    const mentions: Array<{ runId: string; where: string; names: string[]; text: string }> = [];
+    const checked: Record<string, { hidden: string[]; told: string[] }> = {};
+    for (const run of runs.values()) {
+      // Everything the run gave this persona: its briefing, and what its screens said and listed.
+      const told = [JSON.stringify(run.briefing), ...run.turns.flatMap((t) => [t.visibleText, ...t.elements.map((e) => e.label)])].join('\n');
+      const names = hiddenFrameNames(fake, doc, told);
+      checked[run.runId] = names;
+      for (const { where, text } of personaWords(run.runId)) {
+        const found = namesIn(text, names.hidden);
+        if (found.length) mentions.push({ runId: run.runId, where, names: found, text });
+      }
+    }
+    log.frameNames = { checked, mentions };
+    saveFile(folder, 'log.json', JSON.stringify(log, null, 2));
+    expect(Object.keys(checked)).toHaveLength(runs.size);
+    expect(mentions).toEqual([]);
+  });
+
+  it('never files the prototype\'s sample greeting as a wrong user name', () => {
+    const wrong = testDocs().flatMap((test) =>
+      personaWords(test.test_id as string).filter((w) => w.where.startsWith('finding') && WRONG_NAME.test(w.text)).map((w) => ({ runId: test.test_id, ...w })),
+    );
+    expect(wrong).toEqual([]);
   });
 
   it('cites, in each debrief finding, a step URL of that run', () => {
