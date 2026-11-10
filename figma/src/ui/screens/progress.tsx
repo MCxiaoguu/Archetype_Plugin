@@ -136,7 +136,7 @@ export function Progress({ state, fx }: { state: AppState; fx: Effects }) {
                   </button>
                 }
               >
-                {st.runner.notice} Forgetting it runs the test on: each try goes on from what Archetype has of it.
+                {st.runner.notice} Forgetting it lets each try start over where Archetype has nothing yet; tries that had already started are ended.
               </Banner>
             )}
             {notices.map((n) => (

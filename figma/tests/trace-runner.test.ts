@@ -418,12 +418,28 @@ describe('resuming when the panel reopens', () => {
     expect((error as Error).message).toMatch(/r1.*No run r1 for this user\./);
   });
 
-  it('catches a claimed-again run up with the turns the backend already holds', async () => {
-    // Turn 1 was decided (Billing) and turn 2 posted before the panel closed; nothing reached this machine's storage.
-    const { posted, api, result } = await runner(shortWalk, {
+  it('aborts a claimed-again run the backend is ahead of, never replaying turns it has no saved state for', async () => {
+    // Turn 1 was decided (Billing) and turn 2 posted before the panel closed; nothing reached this machine's storage,
+    // so nothing says whether the file changed since: the held actions could name other layers now.
+    const { posted, api, aborted, result } = await runner(shortWalk, {
       runs: [{ runId: 'r1', status: 'running', owner: OWNER }],
       ahead: { r1: { expected: 2, decided: { 1: { action: { type: 'click', element: 'e3' } } } } },
     });
+    expect(aborted).toEqual([{ runId: 'r1', owner: OWNER, code: 'panel_state_lost', detail: "This panel lost its saved progress for this run, so it can't safely continue it." }]);
+    expect(api.getTurn).not.toHaveBeenCalledWith('r1', 1);
+    expect(postsOf(posted, 'r1')).toEqual([]);
+    expect(result).toMatchObject({ sessions: [{ runId: 'r1', stop: 'aborted' }] });
+  });
+
+  it('still catches a resumed run up with the turns the backend holds, from its saved state', async () => {
+    const main = await mainThread();
+    store(main, savedSession(main, 'r1', { turn: 0 }));
+    const { posted, api, aborted, result } = await runner(shortWalk, {
+      main,
+      runs: [{ runId: 'r1', status: 'running', owner: OWNER }],
+      ahead: { r1: { expected: 2, decided: { 1: { action: { type: 'click', element: 'e3' } } } } },
+    });
+    expect(aborted).toEqual([]);
     expect(api.getTurn.mock.calls[0]).toEqual(['r1', 1]);
     // Turn 1 was read, not posted again; turn 2 went out on the screen turn 1 led to.
     expect(postsOf(posted, 'r1').map((b) => [b.turn, b.screen.title])).toEqual([[2, 'Billing settings']]);

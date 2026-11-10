@@ -125,6 +125,9 @@ class Stop extends Error {
   }
 }
 
+/** Why a run the backend is ahead of can't go on when this panel has nothing saved for it. */
+const LOST_PROGRESS = "This panel lost its saved progress for this run, so it can't safely continue it.";
+
 /** The panel is closing: stop where the run is. */
 class Cancel extends Error {
   constructor() {
@@ -429,6 +432,9 @@ export async function runSession(run: SessionRun, deps: SessionDeps): Promise<Se
         // The backend is ahead (a panel before this one posted those turns):
         // read the turns it holds, from this one on, instead of posting them.
         if (err.expected > turn) {
+          // Started without saved state (a run claimed again), nothing says whether the file
+          // changed since those turns, so their actions can't be replayed safely.
+          if (!run.resume) throw new Abort('panel_state_lost', LOST_PROGRESS);
           backendHas = err.expected;
           return held();
         }

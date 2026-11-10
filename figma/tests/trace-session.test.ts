@@ -457,6 +457,14 @@ describe('when things go wrong', () => {
     expect(result).toMatchObject({ stop: 'aborted', ended: { reason: 'file_changed' } });
   });
 
+  it('never replays the turns the backend holds for a run started without saved state', async () => {
+    const ahead = new ApiError(409, 'turn_out_of_order', 'turn 1 is out of order: this run takes turn 3 next.', { expected: 3 });
+    const { aborted, result, api } = await play(() => DONE, { postErrors: [ahead] });
+    expect(aborted).toEqual([{ owner: 'p_7f3a', code: 'panel_state_lost', detail: "This panel lost its saved progress for this run, so it can't safely continue it." }]);
+    expect(api.getTurn).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ stop: 'aborted', ended: { reason: 'panel_state_lost' } });
+  });
+
   it('aborts with panel_state_lost when the backend expects a turn this panel already passed', async () => {
     const r = await play(() => DONE, { postErrors: [new ApiError(409, 'turn_out_of_order', 'out of order', { expected: 0 })] });
     expect(r.aborted).toMatchObject([{ code: 'panel_state_lost' }]);
