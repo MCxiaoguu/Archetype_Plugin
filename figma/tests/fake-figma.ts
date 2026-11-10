@@ -489,6 +489,8 @@ function build(world: FixtureWorld, spec: FixtureNode): FakeNode {
   const node = new FakeNode(id, name, type);
   Object.assign(node, structuredClone(props));
   node.world = world;
+  // Figma's default text size, where the fixture gives none.
+  if (type === 'TEXT' && node.fontSize === undefined) node.fontSize = 16;
   if (type === 'PAGE') {
     node.loadAsync = vi.fn(async () => {});
     node.on = vi.fn((event: string, handler: NodeChangeHandler) => {

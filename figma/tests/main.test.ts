@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import fixtureJson from '../harness/fixtures/farside-proto.json';
-import type { StudyRecord, UiToMain } from '../src/lib/messages';
+import type { FlowRead, StudyRecord, UiToMain } from '../src/lib/messages';
 import { start } from '../src/lib/proto/engine';
 import type { ProtoDoc, RawLayer } from '../src/lib/proto/model';
 import { runPreflight } from '../src/lib/preflight';
@@ -441,6 +441,8 @@ describe('trace requests on the main thread', () => {
     const cases: Array<[Record<string, unknown>, string]> = [
       [{ type: 'trace-read', requestId: 'm1', importLibraryVariants: 'yes' }, 'importLibraryVariants'],
       [{ type: 'trace-render', requestId: 'm2', docHash: null, state }, 'docHash'],
+      [{ type: 'trace-candidates', requestId: 'm19' }, 'docHash'],
+      [{ type: 'trace-candidates', requestId: 'm20', docHash: 'f00' }, 'not read since it opened'],
       [{ type: 'trace-render', requestId: 'm3', docHash: doc.docHash, state: { ...state, frameId: 7 } }, 'state'],
       [{ type: 'trace-render', requestId: 'm4', docHash: doc.docHash, state: { ...state, viewport: null } }, 'state'],
       [{ type: 'trace-save', requestId: 'm5', studyId: 's1', runId: 'r1', session: { owner: 'p', runId: 'r2', turn: 1, state, lastOutcome: null, timerEffects: [], loopFrames: [], version: 1 } }, 'runId'],
@@ -464,6 +466,23 @@ describe('trace requests on the main thread', () => {
       expect(reply.message, String(msg.requestId)).toContain(words);
     }
     expect(t.api.notify).not.toHaveBeenCalled();
+  });
+
+  it("answers trace-candidates with the read prototype's nodes, edges and candidates, reading hidden instance layers too", async () => {
+    const t = traceMain();
+    const doc = (await t.ask({ type: 'trace-read', requestId: 'r', importLibraryVariants: true })).result as ProtoDoc;
+    t.api.skipInvisibleInstanceChildren = true;
+    const reply = await t.ask({ type: 'trace-candidates', requestId: 'c', docHash: doc.docHash });
+    expect(reply).toMatchObject({ type: 'trace-result', requestId: 'c' });
+    const flow = reply.result as FlowRead;
+    expect(flow.docHash).toBe(doc.docHash);
+    expect(flow.nodes.map((n) => n.id)).toEqual(doc.frames.map((f) => f.id));
+    expect(flow.edges.find((e) => e.layerKey === '1:7')).toMatchObject({ from: '1:2', to: '2:10', label: 'Billing' });
+    expect(flow.candidates.find((c) => c.layerKey === '2:27')).toMatchObject({ node: '2:20', label: 'Use routing number instead' });
+    // The hidden spinner inside Continue, which Figma skips unless asked.
+    expect(flow.candidates.find((c) => c.layerKey === 'I2:22;6:4')).toMatchObject({ node: '2:20', role: 'icon' });
+    expect(t.api.skipInvisibleInstanceChildren).toBe(true);
+    expect(t.api.commitUndo).not.toHaveBeenCalled();
   });
 
   it('learns which frame each reaction layer is in from the read, looking no reaction layer up', async () => {

@@ -10,6 +10,7 @@
 import type { MainToUi, SavedSession, ScratchCheckReply, TraceCalls, TraceCallType, TraceRequestMessage } from '../lib/messages';
 import type { ProtoDoc, RawLayer, TraceState } from '../lib/proto/model';
 import { pageOf } from './document';
+import { readFlow } from './flowMap';
 import { readProtoWithKeys } from './protoReader';
 import { createRenderer } from './renderer';
 import { exclusive, heldContainers, isScratch, recordScratchNode, SCRATCH_KEY, SCRATCH_VALUE } from './scratch';
@@ -67,13 +68,14 @@ export function createTraceMain(api: PluginAPI, post: (msg: MainToUi) => void): 
    * plays, so the doc doesn't cross to the main thread with every render.
    * Sessions of an earlier read go on with theirs after a newer one.
    */
-  const docs = new Map<string, ProtoDoc>();
+  const docs = new Map<string, { doc: ProtoDoc; frameOf: ReadonlyMap<string, string> }>();
 
-  function docOf(docHash: unknown): ProtoDoc {
-    if (!isText(docHash) || !docHash) bad('a render without the docHash of the prototype to render');
-    const doc = docs.get(docHash);
-    if (!doc) bad(`a render of prototype ${docHash}, which this plugin has not read since it opened: read the prototype again`);
-    return doc;
+  /** The read of the prototype `docHash` names, for `what` the panel asks of it. */
+  function readOf(docHash: unknown, what: string): { doc: ProtoDoc; frameOf: ReadonlyMap<string, string> } {
+    if (!isText(docHash) || !docHash) bad(`${what} without the docHash of the prototype`);
+    const read = docs.get(docHash);
+    if (!read) bad(`${what} of prototype ${docHash}, which this plugin has not read since it opened: read the prototype again`);
+    return read;
   }
 
   function remember(id: string, frameId: string | null) {
@@ -93,7 +95,7 @@ export function createTraceMain(api: PluginAPI, post: (msg: MainToUi) => void): 
     if (typeof importLibraryVariants !== 'boolean') bad('importLibraryVariants that is not true or false');
     const { doc, frameOf } = await readProtoWithKeys(api, api.currentPage, { importLibraryVariants });
     await learn(doc, frameOf);
-    docs.set(doc.docHash, doc);
+    docs.set(doc.docHash, { doc, frameOf });
     return doc;
   }
 
@@ -163,7 +165,7 @@ export function createTraceMain(api: PluginAPI, post: (msg: MainToUi) => void): 
   const answers: { [K in TraceCallType]: (msg: Extract<TraceRequestMessage, { type: K }>) => Promise<TraceCalls[K]['reply']> } = {
     'trace-read': (msg) => read(msg.importLibraryVariants),
     'trace-render': async (msg) => {
-      const result = await renderer.render(docOf(msg.docHash), checkState(msg.state));
+      const result = await renderer.render(readOf(msg.docHash, 'a render').doc, checkState(msg.state));
       rememberLayers(result.layers);
       return result;
     },
@@ -179,6 +181,11 @@ export function createTraceMain(api: PluginAPI, post: (msg: MainToUi) => void): 
       return null;
     },
     'trace-scratch-check': async () => scratchCheck(),
+    // With every layer inside instances reachable, and never beside a render.
+    'trace-candidates': (msg) => {
+      const { doc, frameOf } = readOf(msg.docHash, 'a read of the flow');
+      return exclusive(api, () => readFlow(api, doc, frameOf));
+    },
     // In the renders' queue, so a render under way (another study's) keeps its container.
     'trace-cleanup': () => exclusive(api, async () => ({ removed: removeLeftovers() })),
   };

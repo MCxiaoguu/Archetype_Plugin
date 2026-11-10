@@ -1,4 +1,5 @@
 import type { RunSize, StudyForm } from './form';
+import type { FlowCandidate, FlowEdge, FlowNode } from './proto/flow';
 import type { ProtoDoc, RawLayer, Size, TraceState } from './proto/model';
 import type { TimerEffect, TurnLast } from './turn';
 import type { DocSnapshot, NodeRef, Pin } from './types';
@@ -79,6 +80,11 @@ export interface InitPayload {
 // trace-result or trace-error carrying the same id, so parallel sessions
 // get their own replies.
 
+/** The flow of a read ProtoDoc, by its hash: nodes, drawn edges and candidates for the flow map (main/flowMap.ts). */
+export interface TraceCandidatesRequest {
+  docHash: string;
+}
+
 export interface TraceReadRequest {
   /** Whether the read may import library variants, which adds them to the designer's file. */
   importLibraryVariants: boolean;
@@ -88,6 +94,14 @@ export interface TraceRenderRequest {
   /** The ProtoDoc to render with, by its hash: one the main thread answered a trace-read with. */
   docHash: string;
   state: TraceState;
+}
+
+/** What the panel commits to the backend for a study's flow map (spec, Commit). */
+export interface FlowRead {
+  docHash: string;
+  nodes: FlowNode[];
+  edges: FlowEdge[];
+  candidates: FlowCandidate[];
 }
 
 /** A font the render could not load: its text was left as designed. */
@@ -163,6 +177,7 @@ export interface TraceCalls {
   'trace-scratch-check': { request: Record<string, never>; reply: ScratchCheckReply };
   'trace-cleanup': { request: Record<string, never>; reply: TraceCleanupReply };
   'trace-forget': { request: TraceForgetRequest; reply: null };
+  'trace-candidates': { request: TraceCandidatesRequest; reply: FlowRead };
 }
 
 export type TraceCallType = keyof TraceCalls;
@@ -178,7 +193,7 @@ export type TraceReplyMessage =
   | { type: 'trace-result'; requestId: string; result: unknown }
   | { type: 'trace-error'; requestId: string; message: string; code?: TraceErrorCode };
 
-export const TRACE_CALLS: readonly TraceCallType[] = ['trace-read', 'trace-render', 'trace-save', 'trace-load', 'trace-scratch-check', 'trace-cleanup', 'trace-forget'];
+export const TRACE_CALLS: readonly TraceCallType[] = ['trace-read', 'trace-render', 'trace-save', 'trace-load', 'trace-scratch-check', 'trace-cleanup', 'trace-forget', 'trace-candidates'];
 
 export function isTraceRequest(msg: { type: string }): msg is TraceRequestMessage {
   return (TRACE_CALLS as readonly string[]).includes(msg.type);
