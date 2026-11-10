@@ -22,6 +22,8 @@ export async function mainThread(edit: (fake: Fake) => void = () => {}, log: str
   edit(fake);
   const doc = await readProto(fake.api, fake.api.currentPage, { importLibraryVariants: true });
   const renderer = createRenderer(fake.api);
+  /** The docs the main thread read, by hash: the launch's read, and every trace-read it answered. */
+  const docs = new Map<string, ProtoDoc>([[doc.docHash, doc]]);
   const saves: Array<SavedSession | null> = [];
   /** What clientStorage holds, by study and run. */
   const stored = new Map<string, Map<string, SavedSession>>();
@@ -41,7 +43,9 @@ export async function mainThread(edit: (fake: Fake) => void = () => {}, log: str
       gate.reads.push(importLibraryVariants);
       const error = gate.readErrors.shift();
       if (error) throw new BridgeError('trace-read', error);
-      return gate.readAs ? gate.readAs(importLibraryVariants) : structuredClone(doc);
+      const read = gate.readAs ? gate.readAs(importLibraryVariants) : structuredClone(doc);
+      docs.set(read.docHash, read);
+      return read;
     }
     if (type === 'trace-render') {
       const error = renders.errors.shift();
@@ -50,8 +54,10 @@ export async function mainThread(edit: (fake: Fake) => void = () => {}, log: str
         renders.failures--;
         throw new BridgeError('trace-render', 'The export of the screen came back empty');
       }
-      // The main thread answers a render that throws with trace-error, which the bridge rejects as a BridgeError.
-      let r = await renderer.render(payload.doc as ProtoDoc, payload.state as TraceState).catch((err: Error) => {
+      // The main thread renders a doc it read, by hash; it answers a render that throws with trace-error, which the bridge rejects as a BridgeError.
+      const known = docs.get(payload.docHash as string);
+      if (!known) throw new BridgeError('trace-render', `The panel sent a render of prototype ${String(payload.docHash)}, which this plugin has not read`);
+      let r = await renderer.render(known, payload.state as TraceState).catch((err: Error) => {
         throw new BridgeError('trace-render', err.message);
       });
       if (renders.notes) r = { ...r, notes: renders.notes };

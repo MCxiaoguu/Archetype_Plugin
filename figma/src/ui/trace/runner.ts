@@ -71,7 +71,11 @@ export async function runStudy(study: StudyTrace, deps: RunnerDeps): Promise<Run
   } catch (err) {
     if (!(err instanceof Cancelled)) throw err;
     // Every session has the same signal and stops at its next step: the runner stops once they have.
-    for (const s of await Promise.allSettled(started.values())) if (s.status === 'fulfilled' && !results.includes(s.value)) results.push(s.value);
+    const settled = await Promise.allSettled(started.values());
+    for (const s of settled) if (s.status === 'fulfilled' && !results.includes(s.value)) results.push(s.value);
+    // A session that broke (a cancel never rejects) stays loud, closing panel or not.
+    const broke = settled.find((s): s is PromiseRejectedResult => s.status === 'rejected');
+    if (broke) throw broke.reason;
     return { stop: 'cancelled', sessions: results };
   }
 }

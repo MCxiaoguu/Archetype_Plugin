@@ -321,14 +321,14 @@ export async function runSession(run: SessionRun, deps: SessionDeps): Promise<Se
   async function render(): Promise<TraceRenderReply> {
     let first: unknown;
     try {
-      return await bridge.call('trace-render', { doc, state });
+      return await bridge.call('trace-render', { docHash: doc.docHash, state });
     } catch (err) {
       // A bridge the closing panel shut: no retry.
       checkCancel();
       first = err;
     }
     try {
-      return await bridge.call('trace-render', { doc, state });
+      return await bridge.call('trace-render', { docHash: doc.docHash, state });
     } catch (second) {
       const [a, b] = [messageOf(first), messageOf(second)];
       throw new Abort('render_failed', a === b ? b : `${b} (the first try: ${a})`);

@@ -149,8 +149,17 @@ export function createTracePanel(deps: TracePanelDeps) {
       store.dispatch({ type: 'launch-failed', message: text });
     };
     (async () => {
-      const doc = launched?.studyId === studyId ? launched.doc : await read(trace.importLibraryVariants);
-      if (launched?.studyId === studyId) launched = null;
+      const fresh = launched?.studyId === studyId;
+      if (!fresh) {
+        // The launch gate checked edit access; a reopened panel checks again before it resumes anything.
+        const check = await bridge().call('trace-scratch-check', {});
+        if (!check.ok) {
+          stop('failed', `${check.reason} (${check.detail})`);
+          return null;
+        }
+      }
+      const doc = fresh && launched ? launched.doc : await read(trace.importLibraryVariants);
+      if (fresh) launched = null;
       // The designer changed page while the read ran.
       if (doc.pageId !== trace.pageId) {
         otherPage();

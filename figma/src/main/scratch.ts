@@ -55,11 +55,14 @@ const queues = new WeakMap<PluginAPI, Promise<unknown>>();
  * `skipInvisibleInstanceChildren` off, so hidden layers inside instances
  * (which a variable or a variant can reveal) are reachable; the flag goes
  * back afterwards, also when `work` throws. The flag is global to the
- * plugin, so reads and renders never overlap.
+ * plugin, so reads and renders never overlap. `hidden: false` runs the
+ * work in the same queue with the flag as the plugin keeps it: the
+ * panel's document read, which lists what the designer sees.
  */
-export function exclusive<T>(api: PluginAPI, work: () => Promise<T>): Promise<T> {
+export function exclusive<T>(api: PluginAPI, work: () => Promise<T>, { hidden = true }: { hidden?: boolean } = {}): Promise<T> {
   const before = queues.get(api) ?? Promise.resolve();
   const next = before.then(async () => {
+    if (!hidden) return work();
     const saved = api.skipInvisibleInstanceChildren;
     api.skipInvisibleInstanceChildren = false;
     try {

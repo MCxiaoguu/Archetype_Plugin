@@ -332,7 +332,7 @@ describe('trace requests on the main thread', () => {
     expect(doc.frames.map((f) => f.id)).toContain('1:2');
     const state = start(doc, '1:2');
 
-    const render = await t.ask({ type: 'trace-render', requestId: 'q2', doc, state });
+    const render = await t.ask({ type: 'trace-render', requestId: 'q2', docHash: doc.docHash, state });
     expect(render).toMatchObject({ type: 'trace-result', requestId: 'q2' });
     const drawn = render.result as { image: Uint8Array; layers: RawLayer[]; viewport: { width: number; height: number }; notes: unknown[] };
     // The bytes cross the plugin boundary as a Uint8Array (structured clone keeps typed arrays).
@@ -364,7 +364,7 @@ describe('trace requests on the main thread', () => {
     const designers = t.api.createFrame() as unknown as FakeNode;
     // Asked while a render is under way, the cleanup waits for it instead of pulling its container away.
     const scratchOnPage = () => page.children.filter((n) => isScratch(n as unknown as BaseNode)).length;
-    const rendering = t.ask({ type: 'trace-render', requestId: 'r1', doc, state: start(doc, '1:2') });
+    const rendering = t.ask({ type: 'trace-render', requestId: 'r1', docHash: doc.docHash, state: start(doc, '1:2') });
     for (let i = 0; i < 100 && scratchOnPage() < 2; i++) await Promise.resolve();
     expect(scratchOnPage()).toBe(2);
     const cleanup = t.ask({ type: 'trace-cleanup', requestId: 'c1' });
@@ -432,9 +432,9 @@ describe('trace requests on the main thread', () => {
     const state = start(doc, '1:2');
     const cases: Array<[Record<string, unknown>, string]> = [
       [{ type: 'trace-read', requestId: 'm1', importLibraryVariants: 'yes' }, 'importLibraryVariants'],
-      [{ type: 'trace-render', requestId: 'm2', doc: null, state }, 'doc'],
-      [{ type: 'trace-render', requestId: 'm3', doc, state: { ...state, frameId: 7 } }, 'state'],
-      [{ type: 'trace-render', requestId: 'm4', doc, state: { ...state, viewport: null } }, 'state'],
+      [{ type: 'trace-render', requestId: 'm2', docHash: null, state }, 'docHash'],
+      [{ type: 'trace-render', requestId: 'm3', docHash: doc.docHash, state: { ...state, frameId: 7 } }, 'state'],
+      [{ type: 'trace-render', requestId: 'm4', docHash: doc.docHash, state: { ...state, viewport: null } }, 'state'],
       [{ type: 'trace-save', requestId: 'm5', studyId: 's1', runId: 'r1', session: { owner: 'p', runId: 'r2', turn: 1, state, lastOutcome: null, timerEffects: [], loopFrames: [], version: 1 } }, 'runId'],
       [{ type: 'trace-save', requestId: 'm6', studyId: 's1', runId: 'r1', session: { owner: '', runId: 'r1', turn: 1, state, lastOutcome: null, timerEffects: [], loopFrames: [], version: 1 } }, 'owner'],
       [{ type: 'trace-save', requestId: 'm7', studyId: 's1', runId: 'r1', session: { owner: 'p', runId: 'r1', turn: -1, state, lastOutcome: null, timerEffects: [], loopFrames: [], version: 1 } }, 'turn'],
@@ -458,11 +458,47 @@ describe('trace requests on the main thread', () => {
     expect(t.api.notify).not.toHaveBeenCalled();
   });
 
+  it('renders only a prototype it read, by its hash, and refuses another', async () => {
+    const t = traceMain();
+    const doc = (await t.ask({ type: 'trace-read', requestId: 'r', importLibraryVariants: false })).result as ProtoDoc;
+    expect((await t.ask({ type: 'trace-render', requestId: 'ok', docHash: doc.docHash, state: start(doc, '1:2') })).type).toBe('trace-result');
+    const unknown = await t.ask({ type: 'trace-render', requestId: 'no', docHash: 'f00d', state: { ...start(doc, '1:2'), docHash: 'f00d' } });
+    expect(unknown).toMatchObject({ type: 'trace-error', requestId: 'no' });
+    expect((unknown as { message: string }).message).toMatch(/f00d.*read the prototype again/);
+    // A doc read earlier still renders after a newer read, for sessions still on it.
+    const page = t.api.currentPage as unknown as FakeNode;
+    (t.nodes.get('1:2') as FakeNode).name = 'Dashboard, renamed';
+    const newer = (await t.ask({ type: 'trace-read', requestId: 'r2', importLibraryVariants: false })).result as ProtoDoc;
+    expect(newer.docHash).not.toBe(doc.docHash);
+    expect((await t.ask({ type: 'trace-render', requestId: 'old', docHash: doc.docHash, state: start(doc, '1:2') })).type).toBe('trace-result');
+    expect(page.children.filter((n) => isScratch(n as unknown as BaseNode))).toEqual([]);
+  });
+
+  it('reads the document for the panel in the queue of renders and reads, with hidden instance children as the plugin keeps them', async () => {
+    const t = traceMain();
+    const doc = (await t.ask({ type: 'trace-read', requestId: 'r', importLibraryVariants: false })).result as ProtoDoc;
+    t.world.exportsLater = true;
+    const order: string[] = [];
+    t.postMessage.mockImplementation((msg: { type: string }) => void order.push(msg.type));
+    const flags: boolean[] = [];
+    const findAll = (t.api.currentPage as unknown as FakeNode).findAll.bind(t.api.currentPage);
+    (t.api.currentPage as unknown as { findAll: typeof findAll }).findAll = (cb) => {
+      flags.push(t.api.skipInvisibleInstanceChildren);
+      return findAll(cb);
+    };
+    const rendering = t.ask({ type: 'trace-render', requestId: 'r1', docHash: doc.docHash, state: start(doc, '1:2') });
+    await Promise.resolve();
+    await t.controller.refreshDoc();
+    await rendering;
+    expect(order).toEqual(['trace-result', 'doc']);
+    expect(flags).toEqual([true]);
+  });
+
   it('answers a render that fails with its reason', async () => {
     const t = traceMain();
     const doc = (await t.ask({ type: 'trace-read', requestId: 'r', importLibraryVariants: false })).result as ProtoDoc;
     t.world.exportFails = 'throw';
-    expect(await t.ask({ type: 'trace-render', requestId: 'x', doc, state: start(doc, '1:2') })).toEqual({ type: 'trace-error', requestId: 'x', message: 'Export failed' });
+    expect(await t.ask({ type: 'trace-render', requestId: 'x', docHash: doc.docHash, state: start(doc, '1:2') })).toEqual({ type: 'trace-error', requestId: 'x', message: 'Export failed' });
   });
 
   it('refuses a trace request it cannot answer, loudly', async () => {
@@ -551,7 +587,7 @@ describe('trace requests on the main thread', () => {
     const t = traceMain();
     const doc = (await t.ask({ type: 'trace-read', requestId: 'r', importLibraryVariants: false })).result as ProtoDoc;
     const scratch = () => [...t.nodes.values()].filter((n) => !n.removed && isScratch(n as unknown as BaseNode));
-    const rendering = t.ask({ type: 'trace-render', requestId: 'r1', doc, state: start(doc, '1:2') });
+    const rendering = t.ask({ type: 'trace-render', requestId: 'r1', docHash: doc.docHash, state: start(doc, '1:2') });
     for (let i = 0; i < 100 && scratch().length === 0; i++) await Promise.resolve();
     const [container] = scratch();
     expect(container).toBeDefined();
@@ -569,7 +605,7 @@ describe('trace requests on the main thread', () => {
     const doc = (await t.ask({ type: 'trace-read', requestId: 'r', importLibraryVariants: false })).result as ProtoDoc;
     const page = t.api.currentPage as unknown as FakeNode;
     const scratch = () => [...t.nodes.values()].filter((n) => !n.removed && isScratch(n as unknown as BaseNode));
-    const rendering = t.ask({ type: 'trace-render', requestId: 'r1', doc, state: start(doc, '1:2') });
+    const rendering = t.ask({ type: 'trace-render', requestId: 'r1', docHash: doc.docHash, state: start(doc, '1:2') });
     for (let i = 0; i < 100 && scratch().length === 0; i++) await Promise.resolve();
     const [held] = scratch();
     expect(held).toBeDefined();
@@ -620,7 +656,7 @@ describe('trace requests on the main thread', () => {
     // Not a ProtoDoc frame: a sticky note on the canvas, a layer removed from somewhere unknown.
     t.fire('0:1', [{ type: 'PROPERTY_CHANGE', node: traceNode(t, '6:9'), properties: ['characters'] }, { type: 'DELETE', node: { id: '99:1', type: 'TEXT', removed: true } }]);
     // A render's own copies, while their container lives and after it is gone.
-    const render = t.controller.handle({ type: 'trace-render', requestId: 'rr', doc, state: start(doc, '1:2') } as unknown as UiToMain);
+    const render = t.controller.handle({ type: 'trace-render', requestId: 'rr', docHash: doc.docHash, state: start(doc, '1:2') } as unknown as UiToMain);
     await render;
     const ids = [...scratchNodeIds()];
     const container = ids[ids.length - 1] as string;
@@ -647,7 +683,7 @@ describe('deleted prototype layers', () => {
     // A layer without reactions is known once a render measured it.
     t.fire('0:1', [deleted('1:5')]);
     expect(changes()).toEqual([]);
-    await t.ask({ type: 'trace-render', requestId: 'p', doc, state: start(doc, '1:2') });
+    await t.ask({ type: 'trace-render', requestId: 'p', docHash: doc.docHash, state: start(doc, '1:2') });
     t.postMessage.mockClear();
     t.fire('0:1', [deleted('1:5')]);
     expect(changes()).toEqual([{ type: 'trace-file-changed', frameIds: ['1:2'] }]);

@@ -85,7 +85,8 @@ export interface TraceReadRequest {
 }
 
 export interface TraceRenderRequest {
-  doc: ProtoDoc;
+  /** The ProtoDoc to render with, by its hash: one the main thread answered a trace-read with. */
+  docHash: string;
   state: TraceState;
 }
 

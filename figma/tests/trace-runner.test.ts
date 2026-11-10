@@ -38,6 +38,7 @@ interface BackendOptions {
   /** Claims that reach the backend only once these settle. */
   claimWaits?: Record<string, Promise<void>>;
   onPost?: (runId: string, turn: number) => void;
+  onAbort?: (runId: string) => void;
   /** Runs whose turns the backend already holds: below `expected` a post is out of order; `decided` are its decisions. */
   ahead?: Record<string, { expected: number; decided: Record<number, Decision> }>;
 }
@@ -103,6 +104,7 @@ function studyBackend(brain: (runId: string, body: TurnBody) => Decision, opts: 
       aborted.push({ runId, ...body });
       row(runId).status = 'aborted';
       log.push(`abort ${runId}`);
+      opts.onAbort?.(runId);
       return { runId, status: 'aborted' as const, abortReason: body.code };
     }),
     nextWave: vi.fn(async (studyId: string) => {
@@ -283,6 +285,24 @@ describe('running a study in the panel', () => {
     expect(log).not.toContain('cleanup');
     expect(log).not.toContain('next');
     expect([...(main.stored.get('s1')?.keys() ?? [])].sort()).toEqual(['r1', 'r2']);
+  });
+
+  it('still fails loudly for a session that broke, when the panel closes as the others stop', async () => {
+    const closing = new AbortController();
+    const bug = new Error('The panel broke on r1');
+    const brain = (runId: string, body: TurnBody): Decision => {
+      if (runId === 'r1') throw bug;
+      return shortWalk(runId, body);
+    };
+    // r1 is aborted for its bug, and the panel closes right then: r2 stops where it is.
+    const { error, aborted } = await runner(brain, {
+      runs: [{ runId: 'r1', status: 'queued' }, { runId: 'r2', status: 'queued' }],
+      signal: closing.signal,
+      onAbort: () => closing.abort(),
+      fails: true,
+    });
+    expect(error).toBe(bug);
+    expect(aborted.map((a) => [a.runId, a.code])).toEqual([['r1', 'engine_error']]);
   });
 
   it("takes only already_claimed for another actor's run; another refusal fails the runner once the rest ran", async () => {

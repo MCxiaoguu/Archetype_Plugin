@@ -155,6 +155,24 @@ describe('render', () => {
       expect(fake.api.skipInvisibleInstanceChildren).toBe(true);
     });
 
+    it("makes its container on the prototype's page, loaded, even with the designer on another page", async () => {
+      const fake = await setup();
+      const [prototype, archive] = fake.pages as FakeNode[];
+      // The designer went to the Archive page while the test ran.
+      fake.world.currentPage = archive;
+      (fake.api as unknown as { currentPage: FakeNode }).currentPage = archive as FakeNode;
+      const before = (archive as FakeNode).children.map((c) => c.id);
+      let parent: string | null = null;
+      fake.world.exportFails = (container) => {
+        parent = container.parent?.id ?? null;
+        return null;
+      };
+      await fake.renderer.render(fake.doc, state(fake.doc, '2:20'));
+      expect(parent).toBe(fake.doc.pageId);
+      expect((prototype as FakeNode).loadAsync).toHaveBeenCalled();
+      expect((archive as FakeNode).children.map((c) => c.id)).toEqual(before);
+    });
+
     it('renders one state at a time', async () => {
       const fake = await setup();
       await Promise.all([fake.renderer.render(fake.doc, state(fake.doc, '2:20')), fake.renderer.render(fake.doc, state(fake.doc, '1:2'))]);

@@ -413,7 +413,7 @@ describe('when things go wrong', () => {
   async function heldTurns(change: Partial<TraceState> = {}) {
     const main = await mainThread();
     const dash = start(main.doc, '1:2');
-    const shown = await main.bridge.call('trace-render', { doc: main.doc, state: dash });
+    const shown = await main.bridge.call('trace-render', { docHash: main.doc.docHash, state: dash });
     const listed = listElements(shown.layers, dash);
     const billing = listed.elements.find((e) => e.label === 'Billing')!;
     const after1 = apply(main.doc, dash, { type: 'click', element: billing.id }, shown.layers, listed.targets).state;

@@ -17,26 +17,15 @@
  */
 
 import { activeMode, type ExprScope, findVariable, readVariable } from '../lib/proto/expr';
+import type { TraceRenderReply } from '../lib/messages';
 import type { Box, ProtoDoc, RawLayer, RoleHint, ScrollOffset, Size, TraceState, VariableLiteral, RGBA } from '../lib/proto/model';
 import { scrollRange } from '../lib/proto/scroll';
 import { reactionsFor } from '../lib/proto/variants';
 import { pageOf } from './document';
 import { exclusive, holdContainer, recordScratchNode, releaseContainer, SCRATCH_KEY, SCRATCH_VALUE } from './scratch';
 
-export interface RenderNote {
-  /** Fonts that aren't available here: text set in them was left as designed. */
-  missing_font: string[];
-}
-
-export interface RenderResult {
-  image: Uint8Array;
-  layers: RawLayer[];
-  viewport: Size;
-  notes: RenderNote[];
-}
-
 export interface Renderer {
-  render(doc: ProtoDoc, state: TraceState): Promise<RenderResult>;
+  render(doc: ProtoDoc, state: TraceState): Promise<TraceRenderReply>;
 }
 
 /** Where the container sits: far off the canvas, so nobody sees it while it lives. */
@@ -78,15 +67,25 @@ export function createRenderer(api: PluginAPI): Renderer {
   return { render: (doc, state) => exclusive(api, () => renderOnce(api, doc, state)) };
 }
 
-async function renderOnce(api: PluginAPI, doc: ProtoDoc, state: TraceState): Promise<RenderResult> {
+/** The prototype's page, loaded: the container goes there, so a crash leaves nothing on a page the designer went to. */
+async function prototypePage(api: PluginAPI, doc: ProtoDoc): Promise<PageNode> {
+  const page = await api.getNodeByIdAsync(doc.pageId);
+  if (!page || page.type !== 'PAGE') throw new Error(`The page ${doc.pageName} of this prototype isn't in the file any more`);
+  await page.loadAsync();
+  return page;
+}
+
+async function renderOnce(api: PluginAPI, doc: ProtoDoc, state: TraceState): Promise<TraceRenderReply> {
   const { width, height } = state.viewport;
   const shown = [state.frameId, ...state.overlays.map((o) => o.frameId)];
   const twice = shown.find((id, i) => shown.indexOf(id) !== i);
   if (twice !== undefined) throw new Error(`The frame ${twice} is open twice on this screen, so its layers would share keys`);
+  const home = await prototypePage(api, doc);
   const container = api.createFrame();
   recordScratchNode(container.id);
   holdContainer(container);
   try {
+    home.appendChild(container);
     container.name = 'Archetype trace (scratch)';
     container.setPluginData(SCRATCH_KEY, SCRATCH_VALUE);
     container.x = CONTAINER_X;

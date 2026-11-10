@@ -7,7 +7,7 @@
  * not an exception that only reaches figma.notify.
  */
 
-import type { MainToUi, SavedSession, ScratchCheckReply, TraceRequestMessage } from '../lib/messages';
+import type { MainToUi, SavedSession, ScratchCheckReply, TraceCalls, TraceCallType, TraceRequestMessage } from '../lib/messages';
 import type { ProtoDoc, RawLayer, TraceState } from '../lib/proto/model';
 import { pageOf, topFrameOf } from './document';
 import { readProto } from './protoReader';
@@ -26,13 +26,6 @@ const messageOf = (err: unknown) => (err instanceof Error ? err.message : String
 /** A payload the main thread can't use: `handle` answers it with trace-error. */
 function bad(what: string): never {
   throw new Error(`The panel sent ${what}.`);
-}
-
-function checkDoc(doc: unknown): ProtoDoc {
-  if (!isObject(doc) || !isText(doc.docHash) || !Array.isArray(doc.frames) || !isObject(doc.reactions)) {
-    bad('a doc that is not a ProtoDoc (it needs docHash, frames and reactions)');
-  }
-  return doc as unknown as ProtoDoc;
 }
 
 function checkState(state: unknown): TraceState {
@@ -69,6 +62,19 @@ export function createTraceMain(api: PluginAPI, post: (msg: MainToUi) => void): 
    */
   let known = new Map<string, string | null>();
   const watchedPages = new Set<string>();
+  /**
+   * Every ProtoDoc this main thread read, by hash: a render names the one it
+   * plays, so the doc doesn't cross to the main thread with every render.
+   * Sessions of an earlier read go on with theirs after a newer one.
+   */
+  const docs = new Map<string, ProtoDoc>();
+
+  function docOf(docHash: unknown): ProtoDoc {
+    if (!isText(docHash) || !docHash) bad('a render without the docHash of the prototype to render');
+    const doc = docs.get(docHash);
+    if (!doc) bad(`a render of prototype ${docHash}, which this plugin has not read since it opened: read the prototype again`);
+    return doc;
+  }
 
   function remember(id: string, frameId: string | null) {
     if (!known.has(id) || known.get(id) === null) known.set(id, frameId);
@@ -88,6 +94,7 @@ export function createTraceMain(api: PluginAPI, post: (msg: MainToUi) => void): 
     const doc = await readProto(api, api.currentPage, { importLibraryVariants });
     // A reaction key can name a hidden layer inside an instance, which Figma gives by id only with invisible instance children reachable.
     await exclusive(api, () => learn(doc));
+    docs.set(doc.docHash, doc);
     return doc;
   }
 
@@ -154,34 +161,34 @@ export function createTraceMain(api: PluginAPI, post: (msg: MainToUi) => void): 
     }
   }
 
-  async function answer(msg: TraceRequestMessage): Promise<unknown> {
-    switch (msg.type) {
-      case 'trace-read':
-        return read(msg.importLibraryVariants);
-      case 'trace-render': {
-        const result = await renderer.render(checkDoc(msg.doc), checkState(msg.state));
-        rememberLayers(result.layers);
-        return result;
-      }
-      case 'trace-save': {
-        const studyId = checkId(msg.studyId, 'study');
-        const runId = checkId(msg.runId, 'run');
-        await store.saveTraceSession(api, studyId, runId, checkSession(msg.session, runId));
-        return null;
-      }
-      case 'trace-load':
-        return { sessions: await store.loadTraceSessions(api, checkId(msg.studyId, 'study')) };
-      case 'trace-forget':
-        await store.forgetTraceSessions(api, checkId(msg.studyId, 'study'));
-        return null;
-      case 'trace-scratch-check':
-        return scratchCheck();
-      case 'trace-cleanup':
-        // In the renders' queue, so a render under way (another study's) keeps its container.
-        return exclusive(api, async () => ({ removed: removeLeftovers() }));
-      default:
-        return bad(`a trace request the plugin does not know (${String((msg as { type?: unknown }).type)})`);
-    }
+  /** Each request's answer, typed by the reply its call promises the panel (lib/messages.ts, TraceCalls). */
+  const answers: { [K in TraceCallType]: (msg: Extract<TraceRequestMessage, { type: K }>) => Promise<TraceCalls[K]['reply']> } = {
+    'trace-read': (msg) => read(msg.importLibraryVariants),
+    'trace-render': async (msg) => {
+      const result = await renderer.render(docOf(msg.docHash), checkState(msg.state));
+      rememberLayers(result.layers);
+      return result;
+    },
+    'trace-save': async (msg) => {
+      const studyId = checkId(msg.studyId, 'study');
+      const runId = checkId(msg.runId, 'run');
+      await store.saveTraceSession(api, studyId, runId, checkSession(msg.session, runId));
+      return null;
+    },
+    'trace-load': async (msg) => ({ sessions: await store.loadTraceSessions(api, checkId(msg.studyId, 'study')) }),
+    'trace-forget': async (msg) => {
+      await store.forgetTraceSessions(api, checkId(msg.studyId, 'study'));
+      return null;
+    },
+    'trace-scratch-check': async () => scratchCheck(),
+    // In the renders' queue, so a render under way (another study's) keeps its container.
+    'trace-cleanup': () => exclusive(api, async () => ({ removed: removeLeftovers() })),
+  };
+
+  function answer(msg: TraceRequestMessage): Promise<unknown> {
+    const respond = (answers as Record<string, ((m: TraceRequestMessage) => Promise<unknown>) | undefined>)[msg.type];
+    if (!respond) bad(`a trace request the plugin does not know (${String((msg as { type?: unknown }).type)})`);
+    return respond(msg);
   }
 
   async function handle(msg: TraceRequestMessage) {

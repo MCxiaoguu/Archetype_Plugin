@@ -487,6 +487,23 @@ describe('panel effects', () => {
     fx.newTest();
   });
 
+  it('checks the file can still be edited before resuming, and resumes nothing when it cannot', async () => {
+    const main = await mainThread();
+    main.gate.scratch = { ok: false, reason: 'Duplicate to your drafts to test', detail: 'Cannot create nodes in a read-only file' };
+    const calls = installFetch((method, path) => {
+      if (path === '/api/studies/s6/status') return [200, { studyId: 's6', status: 'running' }];
+      if (path === '/api/studies/s6/runs') return [200, { studyId: 's6', status: 'running', runs: [] }];
+      return [404, { error: 'x', message: `${method} ${path}` }];
+    });
+    const { store, fx } = initStore('tok', main, { studies: [traceStudy('s6', 'running')], lastStudyId: 's6' });
+    await until(() => store.get().study?.runner?.phase === 'failed');
+    expect(store.get().study?.runner?.notice).toBe('Duplicate to your drafts to test (Cannot create nodes in a read-only file)');
+    expect(traceCalls(main)).toContain('trace-scratch-check');
+    expect(traceCalls(main)).not.toContain('trace-read');
+    expect(calls.filter((c) => c.includes('/api/plugin/'))).toEqual([]);
+    fx.newTest();
+  });
+
   it('does not call the backend when the form is incomplete', async () => {
     const calls = installFetch(() => [500, {}]);
     const { store, fx } = initStore('tok');

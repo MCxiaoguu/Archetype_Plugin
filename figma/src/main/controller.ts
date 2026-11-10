@@ -1,6 +1,7 @@
 import { isSafeWebUrl, isTraceRequest, PIN_PREFIX, type MainToUi, type Settings, type StudyRecord, type UiToMain } from '../lib/messages';
 import { clearPins, pinFindings, showNode } from './canvas';
 import { readDocument, selectedFrame } from './document';
+import { exclusive } from './scratch';
 import * as store from './storage';
 import { createTraceMain } from './trace';
 
@@ -56,8 +57,11 @@ export function createController(api: PluginAPI, pluginVersion: string): MainCon
   const post = (msg: MainToUi) => api.ui.postMessage(msg);
   const trace = createTraceMain(api, post);
 
+  /** The page as the panel lists it, read in the queue of trace reads and renders, never in the middle of one. */
+  const documentNow = () => exclusive(api, () => readDocument(api), { hidden: false });
+
   async function refreshDoc() {
-    post({ type: 'doc', doc: await readDocument(api) });
+    post({ type: 'doc', doc: await documentNow() });
   }
 
   function pushSelection() {
@@ -69,7 +73,7 @@ export function createController(api: PluginAPI, pluginVersion: string): MainCon
     const [settings, token, doc, history, draft] = await Promise.all([
       store.loadSettings(api),
       store.loadToken(api),
-      readDocument(api),
+      documentNow(),
       store.loadStudies(api),
       store.loadDraft(api),
     ]);

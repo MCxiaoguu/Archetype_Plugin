@@ -65,7 +65,7 @@ describe('trace bridge', () => {
   it('rejects on trace-error with the main thread message, as a BridgeError', async () => {
     const main = fakeMain();
     const bridge = createBridge(main.transport);
-    const pending = bridge.call('trace-render', { doc: DOC, state: {} as never });
+    const pending = bridge.call('trace-render', { docHash: DOC.docHash, state: {} as never });
     main.reply({ type: 'trace-error', requestId: main.sent[0]!.requestId, message: 'exportAsync failed: node was removed' });
     const err = await pending.catch((e: unknown) => e);
     expect(err).toBeInstanceOf(BridgeError);
@@ -106,7 +106,7 @@ describe('trace bridge', () => {
     vi.useFakeTimers();
     const main = fakeMain();
     const bridge = createBridge(main.transport);
-    const pending = bridge.call('trace-render', { doc: DOC, state: {} as never }, { timeoutMs: 5_000 }).catch((e: unknown) => e);
+    const pending = bridge.call('trace-render', { docHash: DOC.docHash, state: {} as never }, { timeoutMs: 5_000 }).catch((e: unknown) => e);
     await vi.advanceTimersByTimeAsync(5_000);
     expect(await pending).toMatchObject({ name: 'BridgeTimeout', timeoutMs: 5_000 });
   });
