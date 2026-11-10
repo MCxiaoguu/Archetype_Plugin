@@ -17,7 +17,9 @@ Branch on `$ARGUMENTS`:
 - **Empty `$ARGUMENTS`** → run the **Login wizard** (below) and stop. (The
   canonical onboarding command is `/archetype:setup`; this branch is kept so
   a bare `/archetype:validation` still connects.)
-- **Non-empty `$ARGUMENTS`** → run the **Validation run flow** (below).
+- **`$ARGUMENTS` carries `--run <run_id>`** → run the **Claim a study run**
+  flow (below): the run already exists, so there is no intake.
+- **Other non-empty `$ARGUMENTS`** → run the **Validation run flow** (below).
 
 Never simulate the backend, invent run/persona data, or fabricate steps and
 results. Everything you report must come from what you actually observed in the
@@ -46,6 +48,29 @@ Steps for you (Claude):
 Do not ask the user to paste anything in chat. Do not try to shortcut or
 simulate the device flow. The MCP elicitation modal + browser approval is the
 only authorized path.
+
+---
+
+## Claim a study run
+
+`/archetype:validation --run <run_id> [browser=<name>]` executes one run
+that a study created in advance (`/archetype:study`, or the swarm runner).
+The persona, scenarios, behavior rules and success criterion all come with
+the run when the actor claims it, so there is nothing to parse or confirm.
+
+1. Make sure the session is connected (call `status`; if it reports a
+   missing or expired token, run `login` here). In an unattended session
+   with no way to log in, report that and stop.
+2. Pick the actor from `browser=`: `chrome` → `feature-validator` (with the
+   Chrome preflight of step 2 below); any other value, or none →
+   `feature-validator-headless`. One run, one actor.
+3. Dispatch it with ONLY the run id and the browser name, for example:
+   "Claim and execute Archetype run `<run_id>`. Your browser is
+   `<name>`." Nothing about the product, the study or other runs: the actor
+   learns who it is from `start_run`.
+4. Relay its report (step 3 below, single run). If the actor says the run
+   could not be claimed, say so in one line and stop: another actor owns it
+   or it already ran. Never retry a claim on your own.
 
 ---
 
@@ -163,25 +188,33 @@ For the confirmed run list (one run or many):
    - The computer is unlocked. With the screen locked the extension
      disconnects, and computer use cannot stand in for it: it can watch a
      browser but not drive one.
-   Then offer to retry. One check covers the whole run list.
+   Then offer to retry. One check covers the whole run list. When Chrome
+   is connected, say once, in one line, that the run uses the user's real
+   Chrome profile (their logins, cookies and extensions), so the tester
+   arrives as them rather than as a new visitor; `/archetype:study` runs
+   isolated headless browsers instead.
 
-   **Headless fallback.** Chrome is the default because the user can watch
-   it. When it is not available, or the user asked for a headless or
-   unattended run, check for the Playwright MCP server instead: ToolSearch
-   `select:mcp__playwright__browser_navigate`. If it is there, use the
-   `feature-validator-headless` agent for every run in the list and say so
-   in one line ("Chrome is not connected, running headless on Playwright").
-   If neither browser is available, stop as above and also offer the
-   one-time headless setup:
-   `claude mcp add playwright -- npx -y @playwright/mcp@latest --headless --isolated`
-   (needs Node 18 or newer, then a session restart). Never install it
-   yourself and never switch browsers mid-list.
+   **Headless fallback.** Chrome is the default for ad hoc runs because the
+   user can watch it. When it is not available, or the user asked for a
+   headless or unattended run, use the plugin's own isolated browser
+   instead: ToolSearch
+   `select:mcp__plugin_archetype_archetype-browser-1__browser_navigate`. If it
+   is there, use the `feature-validator-headless` agent for every run in the
+   list, telling each one "Your browser is `archetype-browser-1`", and say so
+   in one line ("Chrome is not connected, running headless on an isolated
+   Playwright browser"). If the plugin browsers are missing (an older plugin
+   build), check for a Playwright server the user registered themselves
+   (`select:mcp__playwright__browser_navigate`) and tell those actors "Your
+   browser is `playwright`". If neither is available, stop as above: the
+   plugin browsers need Node 18 or newer and Google Chrome, or Playwright's bundled Chromium (`npx playwright install chromium`). Never
+   install anything yourself and never switch browsers mid-list.
 3. Dispatch the chosen actor agent (`feature-validator`, or
    `feature-validator-headless` per the preflight) once per run object. The dispatch
    prompt carries ONLY the run's resolved fields — goal, url, `feature_id`,
    `pool_id` plus the pool's display name (for the agent's sanity check
-   against the brief), and `preconditions` verbatim (the agent passes the
-   list unchanged to `start_run`). Deliberately include nothing else: no product
+   against the brief), `preconditions` verbatim (the agent passes the
+   list unchanged to `start_run`), and for a headless actor the one line
+   naming its browser. Deliberately include nothing else: no product
    background, no known issues, no prior run results — a clean actor is the
    point.
 
