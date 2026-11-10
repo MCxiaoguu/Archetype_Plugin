@@ -279,13 +279,14 @@ Listing copy, ready to paste:
 > others gave up and why, in their own words, with findings pinned to the frames they happened on.
 > A free preflight checks the flow first: unreachable goals, dead ends, broken hotspots and layer names like
 > "Rectangle 12" that personas and screen reader users hear as links. Requires a free Archetype account.
-> What you type, the file and page names and the screen names on the path leave the file, and during a test
-> every step sends a screenshot, its visible text and what can be clicked to Archetype and its AI model
-> provider. The share link is optional.
+> What you type, the file and page names and the screen names on the path leave the file. When a test
+> launches, so does the prototype's flow map (every screen's name and text, its connections, and the labels
+> of what has none), and during a test every step sends a screenshot, its visible text and what can be
+> clicked to Archetype and its AI model provider. The share link is optional.
 >
 > **Tags:** usability testing, user research, prototype, synthetic users, personas, accessibility, UX
 >
-> **Network access reasoning:** The panel talks to the Archetype API to sign you in, create a persona study for the selected prototype flow, run it and read its results. It sends the file and page names, the names of the screens on the path, the goal and the user description you type, and the prototype share link if you paste one. During a test, every step sends a screenshot of the screen a persona sees, its visible text and what can be clicked to Archetype and its AI model provider, so the persona can see and act on what you built.
+> **Network access reasoning:** The panel talks to the Archetype API to sign you in, create a persona study for the selected prototype flow, run it and read its results. It sends the file and page names, the names of the screens on the path, the goal and the user description you type, and the prototype share link if you paste one. When a test launches, and before each later round, it sends the prototype's flow map: every screen's name and visible text, its drawn connections, and the labels and nearby text of the elements without a connection, so Archetype and its AI model provider can read where each one leads. During a test, every step sends a screenshot of the screen a persona sees, its visible text and what can be clicked to Archetype and its AI model provider, so the persona can see and act on what you built.
 
 ## License
 
