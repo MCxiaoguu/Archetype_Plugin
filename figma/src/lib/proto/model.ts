@@ -173,12 +173,24 @@ export interface ScrollOffset {
   y: number;
 }
 
-/** Keyed by a top level frame id, or a nested scrollable layer's key. */
-export type TraceScroll = Record<string, ScrollOffset>;
+export interface FrameScroll extends ScrollOffset {
+  /** Offsets of the frame's nested scrollable layers, by layer key. */
+  areas: Record<string, ScrollOffset>;
+}
+
+/**
+ * Per top level frame id: its page offset (used for the base frame only)
+ * and its nested areas. A frame that never scrolled has no entry, which
+ * means zero offsets. Keeping areas under their frame lets a navigation
+ * reset everything under its destination.
+ */
+export type TraceScroll = Record<string, FrameScroll>;
 
 export interface OpenOverlay {
   frameId: string;
   position: OverlayPosition;
+  /** The overlay's top left corner in viewport coordinates, worked out when it opened. */
+  origin: Point;
   closeOnOutsideClick: boolean;
 }
 
@@ -188,25 +200,45 @@ export type TraceVariables = Record<string, Record<string, Record<string, Variab
 export interface TraceTimer {
   /** The layer whose reaction scheduled this timer. */
   layerKey: string;
+  /** The top level frame (base or overlay) that layer was shown in. */
+  frameId: string;
   triggerType: ProtoTrigger['type'];
   dueAtMs: number;
+  /** The reaction's actions, as they were when the timer was set. */
+  actions: ProtoAction[];
+  /** The trigger's unclipped box when the timer was set, for a MANUAL overlay. */
+  triggerBox: Box;
+}
+
+/** The effect of a "while hovering" or "while pressing" reaction, undone when the hover or press ends. */
+export interface HeldEffect {
+  layerKey: string;
+  trigger: 'ON_HOVER' | 'ON_PRESS';
+  /** The top level frame the trigger is in. */
+  frameId: string;
+  /** Frame ids of the overlays it opened, closed again when it's undone. */
+  overlays: string[];
 }
 
 export interface TracePointer {
-  /** The layer currently under the pointer. */
-  over: string | null;
-  /** The layer a MOUSE_DOWN targeted, waiting for its MOUSE_UP. */
+  /** Where the pointer last moved to, in viewport coordinates. */
+  point: Point | null;
+  /** The layers under the pointer: the topmost hit, then its ancestors. */
+  over: string[];
+  /** The layer pressed, from a click's MOUSE_DOWN to its MOUSE_UP; a click is one action, so it's null between actions. */
   pressing: string | null;
+  held: HeldEffect[];
 }
 
 export interface TraceState {
   frameId: string;
+  /** Open overlays, topmost last. */
   overlays: OpenOverlay[];
   /** Frame ids to return to on `back`. */
   history: string[];
   scroll: TraceScroll;
-  /** An override variant id per instance key. */
-  variants: Record<string, string>;
+  /** An override variant id per instance key, grouped by the top level frame the instance is in. */
+  variants: Record<string, Record<string, string>>;
   variables: TraceVariables;
   /** The explicit mode per collection. */
   modes: Record<string, string>;
@@ -214,6 +246,8 @@ export interface TraceState {
   timers: TraceTimer[];
   pointer: TracePointer;
   docHash: string;
+  /** Fixed for the whole run, like a device: see `viewportFor`. */
+  viewport: Size;
 }
 
 // --- The action a persona can take, and what it does ------------------
@@ -278,7 +312,28 @@ export interface Box {
   height: number;
 }
 
-/** A layer as measured off a rendered copy, in z-order. */
+export interface Point {
+  x: number;
+  y: number;
+}
+
+export interface Size {
+  width: number;
+  height: number;
+}
+
+/** How far a scrolling frame's content reaches past the frame's own box, measured at offset zero. */
+export interface ScrollArea {
+  direction: Exclude<OverflowDirection, 'NONE'>;
+  maxX: number;
+  maxY: number;
+}
+
+/**
+ * A layer as measured off a rendered copy. Layers come in paint order: a
+ * later layer draws over an earlier one, and the overlays' layers follow
+ * the base frame's.
+ */
 export interface RawLayer {
   /** The original layer's id, or (inside a swapped instance) its key plus the child's path in the variant. */
   key: string;
@@ -286,12 +341,23 @@ export interface RawLayer {
   type: string;
   name: string;
   text: string | null;
-  /** In viewport coordinates, already clipped to ancestors with `clipsContent`. */
+  /** In viewport coordinates, already clipped to ancestors with `clipsContent`. Hit-testing uses it. */
   box: Box;
+  /** The same box before clipping. Placing a MANUAL overlay and scrolling a node into view use it. */
+  unclippedBox: Box;
+  /** Figma's `visible` on this layer. A transparent hotspot is visible; a hidden layer can't be hit. */
   visible: boolean;
   hasReactions: boolean;
   roleHint: RoleHint | null;
   parentKey: string | null;
+  /** Set on a frame whose `overflowDirection` isn't NONE; the content leaves out its fixed children. */
+  scroll: ScrollArea | null;
+  /**
+   * A fixed child of a scrolling frame ("Fix position when scrolling"): it
+   * stays put while that frame scrolls. Figma keeps fixed children as their
+   * own section of the frame's children (`numberOfFixedChildren`).
+   */
+  fixed: boolean;
 }
 
 export type RoleHint = 'button' | 'link' | 'text' | 'card' | 'input' | 'icon' | 'image';
@@ -309,5 +375,5 @@ export interface Element {
 /** How an element id maps back to the layer and point an action applies to. */
 export interface ElementTarget {
   layerKey: string;
-  point: { x: number; y: number };
+  point: Point;
 }
