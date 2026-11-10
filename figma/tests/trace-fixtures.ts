@@ -97,6 +97,7 @@ export function layer(key: string, parentKey: string | null, rect: Rect, extra: 
     box: box(rect),
     unclippedBox: box(rect),
     visible: true,
+    paints: true,
     hasReactions: false,
     roleHint: null,
     parentKey,

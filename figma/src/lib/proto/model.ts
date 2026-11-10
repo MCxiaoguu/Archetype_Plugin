@@ -376,6 +376,12 @@ export interface RawLayer {
   unclippedBox: Box;
   /** Figma's `visible` on this layer. A transparent hotspot is visible; a hidden layer can't be hit. */
   visible: boolean;
+  /**
+   * Whether the layer draws anything of its own: a visible fill, stroke or
+   * effect, or it is text, a vector or an image. A transparent hotspot draws
+   * nothing.
+   */
+  paints: boolean;
   hasReactions: boolean;
   roleHint: RoleHint | null;
   parentKey: string | null;
