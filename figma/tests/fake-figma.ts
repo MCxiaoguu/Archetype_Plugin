@@ -9,9 +9,15 @@ export interface FakeWorld {
   /** Calls in order, for tests that check what happened when ("remove S:1", "commitUndo"). */
   log?: string[];
   nextId?: () => string;
-  /** Makes `exportAsync` throw, return no bytes, or return more than a turn may carry. */
-  exportFails?: 'throw' | 'empty' | 'huge' | null;
+  /** Makes `exportAsync` throw, return no bytes, or return more than a turn may carry; a function decides per exported node. */
+  exportFails?: ExportFailure | ((node: FakeNode) => ExportFailure) | null;
+  /** `exportAsync` answers in a later task, as Figma's does, so changes made before it reach `nodechange` first. */
+  exportsLater?: boolean;
+  /** Records a node made or removed, for the next `nodechange` of its page (fakeFromFixture's pages). */
+  changed?: (type: 'CREATE' | 'DELETE', node: FakeNode) => void;
 }
+
+type ExportFailure = 'throw' | 'empty' | 'huge' | null;
 
 /** Figma names a layer inside an instance `I<instance>;<path>`: the instance's id, with one `I` in front, and the layer's path in its component. */
 const instancePrefix = (instanceId: string) => `${instanceId.startsWith('I') ? instanceId : `I${instanceId}`};`;
@@ -153,6 +159,7 @@ export class FakeNode {
     const copy = this.copyAs(this.w.nextId?.() ?? `${this.id}-copy`, null, null, true);
     this.w.currentPage?.add(copy);
     this.w.log?.push(`clone ${copy.id}`);
+    this.w.changed?.('CREATE', copy);
     return copy;
   }
 
@@ -180,6 +187,7 @@ export class FakeNode {
     if (this.type !== 'INSTANCE') throw new Error(`${this.id} isn't an instance`);
     const frame = this.copyAs(this.w.nextId?.() as string, null, null, true);
     this.w.log?.push(`detach ${this.id} ${frame.id}`);
+    this.w.changed?.('DELETE', this);
     frame.type = 'FRAME';
     frame.mainComponentId = null;
     frame.kids = [];
@@ -193,6 +201,7 @@ export class FakeNode {
     this.parent = null;
     this.removed = true;
     this.w.nodes.delete(this.id);
+    this.w.changed?.('CREATE', frame);
     return frame;
   }
 
@@ -230,6 +239,7 @@ export class FakeNode {
 
   remove(): void {
     this.w.log?.push(`remove ${this.id}`);
+    this.w.changed?.('DELETE', this);
     if (this.parent) this.parent.kids = this.parent.kids.filter((k) => k !== this);
     this.parent = null;
     const forget = (n: FakeNode) => {
@@ -265,9 +275,11 @@ export class FakeNode {
   /** What the export draws, as JSON bytes, so tests can see what was rendered. */
   async exportAsync(settings: unknown): Promise<Uint8Array> {
     this.w.log?.push(`export ${this.id} ${JSON.stringify(settings)} skipInvisible=${this.w.flags.skipInvisibleInstanceChildren}`);
-    if (this.w.exportFails === 'throw') throw new Error('Export failed');
-    if (this.w.exportFails === 'empty') return new Uint8Array();
-    if (this.w.exportFails === 'huge') return new Uint8Array(Math.round(1.6 * 1024 * 1024));
+    if (this.w.exportsLater) await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    const fails = typeof this.w.exportFails === 'function' ? this.w.exportFails(this) : this.w.exportFails;
+    if (fails === 'throw') throw new Error('Export failed');
+    if (fails === 'empty') return new Uint8Array();
+    if (fails === 'huge') return new Uint8Array(Math.round(1.6 * 1024 * 1024));
     return new TextEncoder().encode(JSON.stringify(this.drawn()));
   }
 
@@ -418,12 +430,67 @@ export interface ProtoFixture {
   }>;
 }
 
-function build(world: FakeWorld, spec: FixtureNode): FakeNode {
+type NodeChangeHandler = (event: { nodeChanges: FakeNodeChange[] }) => void;
+
+/** A `nodechange` change as Figma gives it: a removed node is only its id, type and `removed`. */
+export interface FakeNodeChange {
+  type: 'CREATE' | 'DELETE';
+  id: string;
+  origin: 'LOCAL';
+  node: FakeNode | { id: string; type: string; removed: true };
+}
+
+interface FixtureWorld extends FakeWorld {
+  changeHandlers?: Map<string, NodeChangeHandler[]>;
+}
+
+function pageOfNode(node: FakeNode): FakeNode | null {
+  for (let cur: FakeNode | null = node; cur; cur = cur.parent) if (cur.type === 'PAGE') return cur;
+  return null;
+}
+
+/**
+ * Figma's `nodechange`: the creations and removals on a page since the
+ * last event, batched and delivered after the fact (in a later task), when
+ * a node created meanwhile may be gone already.
+ */
+function watchChanges(world: FixtureWorld) {
+  const handlers = new Map<string, NodeChangeHandler[]>();
+  const pending = new Map<string, Array<{ type: 'CREATE' | 'DELETE'; node: FakeNode }>>();
+  world.changeHandlers = handlers;
+  world.changed = (type, node) => {
+    const page = pageOfNode(node);
+    if (!page || !handlers.get(page.id)?.length) return;
+    if (!pending.size) setTimeout(flush, 0);
+    pending.get(page.id)?.push({ type, node }) ?? pending.set(page.id, [{ type, node }]);
+  };
+  function flush() {
+    const batches = [...pending];
+    pending.clear();
+    for (const [pageId, changes] of batches) {
+      const nodeChanges = changes.map(({ type, node }): FakeNodeChange => ({
+        type,
+        id: node.id,
+        origin: 'LOCAL',
+        node: node.removed ? { id: node.id, type: node.type, removed: true } : node,
+      }));
+      for (const handler of handlers.get(pageId) ?? []) handler({ nodeChanges });
+    }
+  }
+}
+
+function build(world: FixtureWorld, spec: FixtureNode): FakeNode {
   const { id, name, type, children, ...props } = spec;
   const node = new FakeNode(id, name, type);
   Object.assign(node, structuredClone(props));
   node.world = world;
-  if (type === 'PAGE') node.loadAsync = vi.fn(async () => {});
+  if (type === 'PAGE') {
+    node.loadAsync = vi.fn(async () => {});
+    node.on = vi.fn((event: string, handler: NodeChangeHandler) => {
+      if (event !== 'nodechange') throw new Error(`The fake page has no ${event} event`);
+      world.changeHandlers?.get(id)?.push(handler) ?? world.changeHandlers?.set(id, [handler]);
+    });
+  }
   world.nodes.set(id, node);
   for (const child of children ?? []) node.add(build(world, child));
   return node;
@@ -432,13 +499,17 @@ function build(world: FakeWorld, spec: FixtureNode): FakeNode {
 /** A fake file built from a prototype fixture, with the variables API, library imports and the API flags. */
 export function fakeFromFixture(fixture: ProtoFixture) {
   let made = 0;
-  const world: FakeWorld = {
+  const world: FixtureWorld = {
     nodes: new Map(),
     flags: { skipInvisibleInstanceChildren: true },
     log: [],
     nextId: () => `90:${++made}`,
     exportFails: null,
   };
+  watchChanges(world);
+  /** clientStorage: answered in a later task, as Figma's is, and copied both ways. */
+  const storage = new Map<string, unknown>();
+  const later = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
   const root = new FakeNode('0:0', fixture.fileName, 'DOCUMENT');
   root.world = world;
   world.nodes.set(root.id, root);
@@ -461,6 +532,7 @@ export function fakeFromFixture(fixture: ProtoFixture) {
     world.nodes.set(node.id, node);
     world.currentPage?.add(node);
     world.log?.push(`create ${node.id}`);
+    world.changed?.('CREATE', node);
     return node;
   };
   const api = {
@@ -497,11 +569,25 @@ export function fakeFromFixture(fixture: ProtoFixture) {
       const made = build(world, { ...spec, remote: true });
       return made;
     }),
+    clientStorage: {
+      getAsync: vi.fn(async (k: string) => {
+        await later();
+        return structuredClone(storage.get(k));
+      }),
+      setAsync: vi.fn(async (k: string, v: unknown) => {
+        await later();
+        storage.set(k, structuredClone(v));
+      }),
+      deleteAsync: vi.fn(async (k: string) => {
+        await later();
+        storage.delete(k);
+      }),
+    },
     variables: {
       getVariableCollectionByIdAsync: vi.fn(async (id: string) => structuredClone(collections.find((c) => c.id === id) ?? null)),
       getLocalVariableCollectionsAsync: vi.fn(async () => structuredClone(collections)),
       getVariableByIdAsync: vi.fn(async (id: string) => (variables.has(id) ? structuredClone(variables.get(id)) : null)),
     },
   };
-  return { api: api as unknown as PluginAPI & typeof api, world, nodes: world.nodes, pages };
+  return { api: api as unknown as PluginAPI & typeof api, world, nodes: world.nodes, pages, storage };
 }
