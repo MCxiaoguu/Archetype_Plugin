@@ -13,6 +13,8 @@ export interface FakeWorld {
   exportFails?: ExportFailure | ((node: FakeNode) => ExportFailure) | null;
   /** `exportAsync` answers in a later task, as Figma's does, so changes made before it reach `nodechange` first. */
   exportsLater?: boolean;
+  /** Draws what `exportAsync` gives instead of its JSON stand in, such as a real JPEG of the node tree (tests/wireframe.ts). */
+  exportImage?: ((node: FakeNode) => Promise<Uint8Array>) | null;
   /** Records a node made or removed, for the next `nodechange` of its page (fakeFromFixture's pages). */
   changed?: (type: 'CREATE' | 'DELETE', node: FakeNode) => void;
 }
@@ -282,6 +284,7 @@ export class FakeNode {
     if (fails === 'throw') throw new Error('Export failed');
     if (fails === 'empty') return new Uint8Array();
     if (fails === 'huge') return new Uint8Array(Math.round(1.6 * 1024 * 1024));
+    if (this.w.exportImage) return this.w.exportImage(this);
     return new TextEncoder().encode(JSON.stringify(this.drawn()));
   }
 
