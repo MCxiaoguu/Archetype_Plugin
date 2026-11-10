@@ -1,9 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { UiToMain } from '../src/lib/messages';
+import type { InitPayload, StudyRecord, TraceRecord, UiToMain } from '../src/lib/messages';
 import { DEFAULT_SETTINGS } from '../src/lib/messages';
 import { indexFrames } from '../src/lib/frames';
+import { start } from '../src/lib/proto/engine';
+import type { LibraryVariant } from '../src/lib/proto/model';
 import { personaRows } from '../src/lib/runs';
 import { fixtureDoc, fixtureReport, protoAt } from './helpers';
+import { mainThread, type MainThread } from './trace-fakes';
 
 const sent: UiToMain[] = [];
 vi.mock('../src/ui/bridge', () => ({ toMain: (m: UiToMain) => sent.push(m), onMain: () => () => undefined }));
@@ -26,9 +29,10 @@ function installFetch(route: Route) {
   return calls;
 }
 
-function initStore(token: string | null) {
+/** The panel over a main thread that reads and renders the Farside prototype. */
+function initStore(token: string | null, main?: MainThread, over: Partial<InitPayload> = {}) {
   const store = createStore();
-  const fx = createEffects(store);
+  const fx = createEffects(store, main ? { bridge: main.bridge } : {});
   fx.handleMain({
     type: 'init',
     settings: { ...DEFAULT_SETTINGS, apiBase: 'http://backend.test' },
@@ -40,9 +44,34 @@ function initStore(token: string | null) {
     lastStudyId: null,
     draft: null,
     pluginVersion: '9.9.9',
+    ...over,
   });
   return { store, fx };
 }
+
+const KEY = 'AbCdEfGh1234567890XyZ';
+
+function fillForm(store: ReturnType<typeof createStore>, link = `https://www.figma.com/design/${KEY}/Farside`) {
+  store.dispatch({ type: 'pick', role: 'goal', nodeId: '2:50' });
+  store.dispatch({ type: 'field', field: 'goal', value: 'Connect a bank account' });
+  store.dispatch({ type: 'field', field: 'who', value: 'Founders who do their own books' });
+  store.dispatch({ type: 'field', field: 'link', value: link });
+}
+
+const savedStudies = () => sent.filter((m): m is Extract<UiToMain, { type: 'save-study' }> => m.type === 'save-study').map((m) => m.record);
+
+const TURN_STATE = { seq: 1, maxSteps: 22, unproductive: 0, maxUnproductiveSteps: 5, progress: 30, sentimentTrend: 'steady', reviewGiveUp: false, ended: false, endedReason: null };
+const BRIEFING = { sessionId: 'sess', claimedAt: '2026-11-10T10:00:00Z', brief: '', persona: { name: 'Baseline founder' }, instructions: { targetUrl: '', goal: '' } };
+
+/** Fake time that runs the panel's waits (polls, retries) at once, until `cond` holds. */
+async function runUntil(cond: () => boolean, limitMs = 120_000) {
+  for (let t = 0; !cond(); t += 250) {
+    if (t > limitMs) throw new Error('timed out');
+    await vi.advanceTimersByTimeAsync(250);
+  }
+}
+
+const lastOf = <T,>(items: readonly T[]): T => items[items.length - 1] as T;
 
 const until = async (cond: () => boolean, ms = 3000) => {
   const end = Date.now() + ms;
@@ -55,54 +84,184 @@ const until = async (cond: () => boolean, ms = 3000) => {
 beforeEach(() => {
   sent.length = 0;
 });
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+});
 
 describe('panel effects', () => {
-  it('launches a study, walks every step, and lands on the report', async () => {
+  it('launches a plugin-mode study, runs its personas in the panel, and lands on the report', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const main = await mainThread();
     let status = 'draft';
-    let created: unknown = null;
+    let created: Record<string, unknown> | null = null;
+    const run = { runId: 'r1', archetypeId: 'a', archetypeName: 'Baseline founder', role: 'baseline', status: 'queued' };
+    const claims: unknown[] = [];
+    const turns: Array<Record<string, any>> = [];
     const calls = installFetch((method, path, body) => {
       if (method === 'POST' && path === '/api/studies') {
-        created = body;
+        created = body as Record<string, unknown>;
         return [201, { studyId: 's1', title: 'Connect a bank', status: 'draft' }];
       }
-      if (path === '/api/studies/s1/status') return [200, { studyId: 's1', status, runs: { allTerminal: true, byStatus: {}, terminal: 0, total: 0 } }];
+      if (path === '/api/studies/s1/status') return [200, { studyId: 's1', status }];
       if (path === '/api/studies/s1/factors') return (status = 'factors_ready'), [200, {}];
       if (path === '/api/studies/s1/archetypes') return (status = 'archetypes_ready'), [200, {}];
-      if (method === 'POST' && path === '/api/studies/s1/runs') return (status = 'complete'), [201, {}];
-      if (path === '/api/studies/s1/runs') return [200, { studyId: 's1', status, runs: [] }];
+      if (method === 'POST' && path === '/api/studies/s1/runs') return (status = 'running'), [201, {}];
+      if (path === '/api/studies/s1/runs') return [200, { studyId: 's1', status, runs: [run] }];
+      if (path === '/api/plugin/runs/r1/claim') {
+        claims.push(body);
+        run.status = 'running';
+        return [200, { runId: 'r1', ...BRIEFING }];
+      }
+      if (method === 'POST' && path === '/api/plugin/runs/r1/turn') {
+        turns.push(body as Record<string, any>);
+        return [202, { turn: (body as { turn: number }).turn, status: 'thinking' }];
+      }
+      if (path === '/api/plugin/runs/r1/turn/1') {
+        run.status = 'completed';
+        return [200, { turn: 1, status: 'ready', action: { type: 'done', claim: 'I connected my bank.' }, state: TURN_STATE, ended: { status: 'completed', reason: 'done' } }];
+      }
+      if (path === '/api/studies/s1/runs/next') return (status = 'complete'), [200, { studyId: 's1', done: true, reason: 'every wave ran', wave: 1 }];
       if (path === '/api/studies/s1/report') return [200, fixtureReport()];
       return [404, { error: 'x', message: path }];
     });
-    const { store, fx } = initStore('tok');
-    store.dispatch({ type: 'pick', role: 'goal', nodeId: '2:50' });
-    for (const [field, value] of [
-      ['goal', 'Connect a bank account'],
-      ['who', 'Founders who do their own books'],
-      ['link', 'https://www.figma.com/design/AbCdEfGh1234567890XyZ/Farside'],
-    ] as const) store.dispatch({ type: 'field', field, value });
+    const { store, fx } = initStore('tok', main);
+    fillForm(store);
 
     await fx.launch();
-    await until(() => store.get().screen === 'report');
+    await runUntil(() => store.get().screen === 'report');
+    vi.useRealTimers();
 
-    expect(calls).toEqual([
-      'POST /api/studies',
-      'GET /api/studies/s1/status',
-      'POST /api/studies/s1/factors',
-      'GET /api/studies/s1/status',
-      'POST /api/studies/s1/archetypes',
-      'GET /api/studies/s1/status',
-      'POST /api/studies/s1/runs',
-      'GET /api/studies/s1/status',
-      'GET /api/studies/s1/status',
-      'GET /api/studies/s1/runs',
-      'GET /api/studies/s1/report',
-    ]);
-    expect(created).toMatchObject({ source: 'figma', execution: 'remote', figma: { targetNodeId: '2:50', pluginVersion: '9.9.9' } });
+    expect(created).toMatchObject({
+      source: 'figma',
+      execution: 'plugin',
+      task: { url: expect.stringContaining(KEY) },
+      figma: { fileKey: KEY, targetNodeId: '2:50', pluginVersion: '9.9.9', fileName: 'Farside billing', pageName: 'Prototype' },
+    });
+    // The study remembers who runs it here and on what.
+    const record = savedStudies()[0] as StudyRecord;
+    expect(record).toMatchObject({ studyId: 's1', startName: 'Dashboard', goalName: 'Bank connected' });
+    expect(record.trace).toEqual({ owner: expect.stringMatching(/^p_[0-9a-f]{24}$/), docHash: main.doc.docHash, startFrameId: '1:2', shareKey: KEY, importLibraryVariants: false });
+    expect(main.gate.reads).toEqual([false]);
+    // The panel claims the run under that owner and runs it.
+    expect(claims).toEqual([{ owner: record.trace?.owner, browser: { engine: 'figma-trace', version: '9.9.9', viewport: [1280, 800] } }]);
+    expect(turns.map((t) => [t.turn, t.owner, t.screen.title])).toEqual([[1, record.trace?.owner, 'Dashboard']]);
+    expect(turns[0]?.screen.url).toContain(`https://www.figma.com/proto/${KEY}/`);
+    // The Running screen read the persona's screen and step from the session, polling nothing new for it.
+    expect(store.get().study?.live.r1).toMatchObject({ phase: 'ended', frameName: 'Dashboard', turn: 1 });
+    expect(calls.filter((c) => c.startsWith('GET ') && !/\/(status|runs|report|turn\/\d+)$/.test(c))).toEqual([]);
+    expect(main.log).toContain('cleanup');
     expect(sent.map((m) => m.type)).toContain('save-draft');
-    const saved = sent.filter((m): m is Extract<UiToMain, { type: 'save-study' }> => m.type === 'save-study');
-    expect(saved[0]?.record).toMatchObject({ studyId: 's1', startName: 'Dashboard', goalName: 'Bank connected' });
-    expect(saved[saved.length - 1]?.record.outcome).toBe('6 of 15 reached the goal');
+    expect(lastOf(savedStudies()).outcome).toBe('6 of 15 reached the goal');
+  });
+
+  it('keeps one runner per study through a sign in or a retry while it runs', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const main = await mainThread();
+    const trace: TraceRecord = { owner: 'p_0123456789abcdef01234567', docHash: main.doc.docHash, startFrameId: '1:2', shareKey: null, importLibraryVariants: false };
+    const run = { runId: 'r1', archetypeId: 'a', archetypeName: 'Baseline founder', role: 'baseline', status: 'queued' };
+    let decided = false;
+    let status = 'running';
+    const calls = installFetch((method, path, body) => {
+      if (path === '/api/studies/s6/status') return [200, { studyId: 's6', status }];
+      if (path === '/api/studies/s6/runs') return [200, { studyId: 's6', status, runs: [run] }];
+      if (path === '/api/plugin/runs/r1/claim') return (run.status = 'running'), [200, { runId: 'r1', ...BRIEFING }];
+      if (method === 'POST' && path === '/api/plugin/runs/r1/turn') return [202, { turn: (body as { turn: number }).turn, status: 'thinking' }];
+      if (path === '/api/plugin/runs/r1/turn/1') {
+        if (!decided) return [200, { turn: 1, status: 'thinking' }];
+        run.status = 'completed';
+        return [200, { turn: 1, status: 'ready', action: { type: 'done', claim: 'Done.' }, state: TURN_STATE, ended: { status: 'completed', reason: 'done' } }];
+      }
+      if (path === '/api/studies/s6/runs/next') return (status = 'complete'), [200, { studyId: 's6', done: true, reason: 'every wave ran', wave: 1 }];
+      if (path === '/api/studies/s6/report') return [200, fixtureReport()];
+      return [404, { error: 'x', message: path }];
+    });
+    const record: StudyRecord = { studyId: 's6', title: 't', startName: 'Dashboard', goalName: 'Bank connected', size: 'quick', launchedAt: 0, status: 'running', trace };
+    const { store, fx } = initStore('tok', main, { studies: [record], lastStudyId: 's6' });
+    await runUntil(() => calls.includes('POST /api/plugin/runs/r1/turn'));
+    fx.acceptToken('fresh');
+    await fx.retry();
+    await vi.advanceTimersByTimeAsync(10_000);
+    decided = true;
+    await runUntil(() => store.get().screen === 'report');
+    vi.useRealTimers();
+    expect(calls.filter((c) => c === 'POST /api/plugin/runs/r1/claim')).toHaveLength(1);
+    expect(calls.filter((c) => c === 'POST /api/plugin/runs/r1/turn')).toHaveLength(1);
+    expect(main.call.mock.calls.filter(([type]) => type === 'trace-load')).toHaveLength(1);
+  });
+
+  it('blocks the launch where the file cannot be edited', async () => {
+    const main = await mainThread();
+    main.gate.scratch = { ok: false, reason: 'Duplicate to your drafts to test' };
+    const calls = installFetch(() => [500, {}]);
+    const { store, fx } = initStore('tok', main);
+    fillForm(store);
+    await fx.launch();
+    expect(store.get()).toMatchObject({ screen: 'new', study: null, gate: { kind: 'blocked', reason: 'Duplicate to your drafts to test' } });
+    expect(calls).toEqual([]);
+    expect(main.gate.reads).toEqual([]);
+  });
+
+  it('asks before testing adds library components to the file, and launches only once the designer confirms', async () => {
+    const main = await mainThread();
+    const variant = (name: string, status: LibraryVariant['status']): LibraryVariant => ({ variantId: `5:${name.length}`, key: `k-${name}`, name, status, error: null });
+    main.gate.readAs = (imported) => ({
+      ...structuredClone(main.doc),
+      libraryVariants: imported ? [variant('State=Open', 'imported'), variant('State=Closed', 'imported')] : [variant('State=Open', 'needs_import'), variant('State=Closed', 'needs_import')],
+    });
+    const calls = installFetch((method, path) => (method === 'POST' && path === '/api/studies' ? [201, { studyId: 's9', status: 'draft' }] : [404, { error: 'study_not_found', message: path }]));
+    const { store, fx } = initStore('tok', main);
+    fillForm(store, '');
+
+    await fx.launch();
+    expect(store.get().gate).toEqual({ kind: 'confirm-import', components: ['State=Open', 'State=Closed'] });
+    expect(calls).toEqual([]);
+    fx.cancelImport();
+    expect(store.get().gate).toBeNull();
+
+    await fx.launch();
+    expect(store.get().gate?.kind).toBe('confirm-import');
+    await fx.confirmImport();
+    // Only the confirmed read may import.
+    expect(main.gate.reads).toEqual([false, false, true]);
+    expect(calls[0]).toBe('POST /api/studies');
+    expect(savedStudies()[0]?.trace).toMatchObject({ shareKey: null, importLibraryVariants: true });
+    fx.newTest();
+  });
+
+  it('resumes the runs it owns when the panel reopens on a plugin-mode study', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const main = await mainThread();
+    const trace: TraceRecord = { owner: 'p_0123456789abcdef01234567', docHash: main.doc.docHash, startFrameId: '1:2', shareKey: null, importLibraryVariants: false };
+    const saved = { owner: trace.owner, runId: 'r1', turn: 2, state: start(main.doc, '1:2'), lastOutcome: null };
+    main.stored.set('s5', new Map([['r1', saved]]));
+    const run = { runId: 'r1', archetypeId: 'a', archetypeName: 'Baseline founder', role: 'baseline', status: 'running' };
+    let status = 'running';
+    const turns: Array<Record<string, any>> = [];
+    const calls = installFetch((method, path, body) => {
+      if (path === '/api/studies/s5/status') return [200, { studyId: 's5', status }];
+      if (path === '/api/studies/s5/runs') return [200, { studyId: 's5', status, runs: [run] }];
+      if (method === 'POST' && path === '/api/plugin/runs/r1/turn') {
+        turns.push(body as Record<string, any>);
+        return [202, { turn: (body as { turn: number }).turn, status: 'thinking' }];
+      }
+      if (path === '/api/plugin/runs/r1/turn/3') {
+        run.status = 'completed';
+        return [200, { turn: 3, status: 'ready', action: { type: 'done', claim: 'Done.' }, state: TURN_STATE, ended: { status: 'completed', reason: 'done' } }];
+      }
+      if (path === '/api/studies/s5/runs/next') return (status = 'complete'), [200, { studyId: 's5', done: true, reason: 'every wave ran', wave: 1 }];
+      if (path === '/api/studies/s5/report') return [200, fixtureReport()];
+      return [404, { error: 'x', message: path }];
+    });
+    const record: StudyRecord = { studyId: 's5', title: 't', startName: 'Dashboard', goalName: 'Bank connected', size: 'quick', launchedAt: 0, status: 'running', trace };
+    const { store, fx } = initStore('tok', main, { studies: [record], lastStudyId: 's5' });
+    await runUntil(() => store.get().screen === 'report');
+    vi.useRealTimers();
+    expect(turns.map((t) => [t.turn, t.owner])).toEqual([[3, trace.owner]]);
+    expect(calls).not.toContain('POST /api/plugin/runs/r1/claim');
+    expect(main.gate.reads).toEqual([false]);
+    expect(main.stored.get('s5')?.size).toBe(0);
+    fx.newTest();
   });
 
   it('does not call the backend when the form is incomplete', async () => {
@@ -128,7 +287,7 @@ describe('panel effects', () => {
       if (path === '/api/studies/s2/runs') return [200, { runs: [{ runId: 'r', archetypeId: 'a', archetypeName: 'A', status: 'queued' }] }];
       return [404, {}];
     });
-    const { store, fx } = initStore('tok');
+    const { store, fx } = initStore('tok', await mainThread());
     store.dispatch({ type: 'pick', role: 'goal', nodeId: '2:50' });
     store.dispatch({ type: 'field', field: 'goal', value: 'Pay' });
     store.dispatch({ type: 'field', field: 'who', value: 'Founders' });
@@ -148,7 +307,7 @@ describe('panel effects', () => {
       if (method === 'POST' && path === '/api/studies') return [201, { title: 'Pay', status: 'draft' }];
       return [404, {}];
     });
-    const { store, fx } = initStore('tok');
+    const { store, fx } = initStore('tok', await mainThread());
     store.dispatch({ type: 'pick', role: 'goal', nodeId: '2:50' });
     store.dispatch({ type: 'field', field: 'goal', value: 'Pay' });
     store.dispatch({ type: 'field', field: 'who', value: 'Founders' });
@@ -251,7 +410,7 @@ describe('panel effects', () => {
 
   it('returns to the form after a sign in that interrupted creating the study', async () => {
     installFetch(() => [401, { error: 'Invalid token', message: 'Token validation failed' }]);
-    const { store, fx } = initStore('expired');
+    const { store, fx } = initStore('expired', await mainThread());
     store.dispatch({ type: 'pick', role: 'goal', nodeId: '2:50' });
     store.dispatch({ type: 'field', field: 'goal', value: 'Pay' });
     store.dispatch({ type: 'field', field: 'who', value: 'Founders' });

@@ -28,8 +28,9 @@ export const POLL_MAX_MS = 3_000;
 export const THINKING_LIMIT_MS = 180_000;
 /** A timer that fires this late means the browser throttles the panel's tab. */
 export const LATE_TIMER_MS = 10_000;
-const RETRY_FIRST_MS = 2_000;
-const RETRY_MAX_MS = 30_000;
+/** Retries through network loss and sign in trouble back off from 2 s to 30 s. */
+export const RETRY_FIRST_MS = 2_000;
+export const RETRY_MAX_MS = 30_000;
 const MAX_TEXT_EXCERPT = 300;
 const MAX_DETAIL = 200;
 const MAX_TIMER_EFFECTS = 10;
@@ -39,7 +40,7 @@ export const NOTICE = {
   offline: 'Lost touch with Archetype. Retrying.',
   signIn: 'Sign in to Archetype again to continue this test.',
   hiddenTab: 'Keep this tab visible, or use the desktop app.',
-  fileChanged: 'This file changed while the test ran: later steps use the flow as it is now.',
+  fileChanged: 'This file changed while the test ran, so its later steps may not match the flow it started with.',
   notSaved: 'Could not save this test\'s progress on this machine, so it can\'t resume if the plugin closes.',
 } as const;
 
@@ -135,8 +136,12 @@ function engineAbort(err: unknown, what: string): Abort {
   return new Abort('engine_error', `${what}: ${err instanceof Error ? err.message : String(err)}`);
 }
 
-/** Network loss, a throttled sign in service, a signed out panel or a backend error: wait, then try again. */
-function pauseFor(err: unknown): string | null {
+/**
+ * Network loss, a throttled sign in service, a signed out panel or a backend
+ * error: wait, then try again. Returns the notice to show, or null for an
+ * error that waiting can't fix.
+ */
+export function pauseFor(err: unknown): string | null {
   if (!(err instanceof ApiError)) return null;
   if (err.code === 'network' || err.code === 'timeout') return NOTICE.offline;
   if (err.code === 'auth_unavailable') return err.message;

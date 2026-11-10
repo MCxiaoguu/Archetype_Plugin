@@ -1,8 +1,8 @@
 /**
  * The main thread's half of the trace runner: it answers the panel's trace
  * requests (read the prototype, render a state, keep a session, check edit
- * access), watches the ProtoDoc's frames for edits, and removes scratch
- * containers left behind. Every request is answered with its requestId,
+ * access, clean up), watches the ProtoDoc's frames for edits, and removes
+ * scratch containers left behind. Every request is answered with its requestId,
  * `trace-result` or `trace-error`: a bad payload is the panel's to handle,
  * not an exception that only reaches figma.notify.
  */
@@ -12,7 +12,7 @@ import type { ProtoDoc, RawLayer, TraceState } from '../lib/proto/model';
 import { pageOf, topFrameOf } from './document';
 import { readProto } from './protoReader';
 import { createRenderer } from './renderer';
-import { isScratch, recordScratchNode, SCRATCH_KEY, SCRATCH_VALUE } from './scratch';
+import { exclusive, isScratch, recordScratchNode, SCRATCH_KEY, SCRATCH_VALUE } from './scratch';
 import * as store from './storage';
 import { changedProtoFrames } from './watch';
 
@@ -171,6 +171,9 @@ export function createTraceMain(api: PluginAPI, post: (msg: MainToUi) => void): 
         return { sessions: await store.loadTraceSessions(api, checkId(msg.studyId, 'study')) };
       case 'trace-scratch-check':
         return scratchCheck();
+      case 'trace-cleanup':
+        // In the renders' queue, so a render under way (another study's) keeps its container.
+        return exclusive(api, async () => ({ removed: removeLeftovers() }));
       default:
         return bad(`a trace request the plugin does not know (${String((msg as { type?: unknown }).type)})`);
     }
