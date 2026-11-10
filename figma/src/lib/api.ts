@@ -3,6 +3,8 @@
  * place with network access) and knows nothing about Figma.
  */
 
+import type { AbortBody, AbortResult, ClaimBody, RunBriefing, TurnBody, TurnView } from './turn';
+
 /**
  * The error bodies the panel meets: the studies and plugin routes answer
  * `{error, message}` (error is a slug); framework errors are RFC 9457
@@ -18,6 +20,8 @@ export interface ApiErrorBody {
   error_description?: string;
   request_id?: string;
   fields?: Record<string, string>;
+  /** On 409 turn_out_of_order: the turn the run takes next. */
+  expected?: number;
 }
 
 function errorCode(body: ApiErrorBody | null): string | null {
@@ -37,14 +41,22 @@ export class ApiError extends Error {
   readonly code: string;
   readonly requestId: string | null;
   readonly fields: Record<string, string> | null;
+  /** Set on 409 turn_out_of_order: the turn the run takes next. */
+  readonly expected: number | null;
 
-  constructor(status: number, code: string, message: string, extra: { requestId?: string | null; fields?: Record<string, string> | null } = {}) {
+  constructor(
+    status: number,
+    code: string,
+    message: string,
+    extra: { requestId?: string | null; fields?: Record<string, string> | null; expected?: number | null } = {},
+  ) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
     this.code = code;
     this.requestId = extra.requestId ?? null;
     this.fields = extra.fields ?? null;
+    this.expected = extra.expected ?? null;
   }
 }
 
@@ -87,6 +99,12 @@ const TRANSIENT_STATUS = new Set([502, 503, 504]);
 export const DEFAULT_TIMEOUT_MS = 30_000;
 /** Building personas can take about 90 s on the backend. */
 export const ARCHETYPE_TIMEOUT_MS = 180_000;
+/**
+ * A turn post answers at once behind a Celery worker, but a backend that
+ * decides the turn inside the request (the local live server) takes the
+ * model call: about 4 s, 10 to 20 s on a final turn with its debrief.
+ */
+export const TURN_TIMEOUT_MS = 60_000;
 
 export function normaliseBase(url: string): string {
   return url.trim().replace(/\/+$/, '').replace(/\/api$/, '');
@@ -180,6 +198,7 @@ export class ApiClient {
       throw new ApiError(res.status, errorCode(errBody) ?? `http_${res.status}`, friendlyMessage(res.status, errBody, `Request failed (${res.status}).`), {
         requestId: errBody?.request_id ?? null,
         fields: errBody?.fields ?? null,
+        expected: typeof errBody?.expected === 'number' ? errBody.expected : null,
       });
     }
     return data as T;
@@ -217,6 +236,38 @@ export class ApiClient {
 
   getReport<T = unknown>(id: string): Promise<T> {
     return this.request<T>('GET', `/api/studies/${encodeURIComponent(id)}/report`, undefined, { timeoutMs: 90_000 });
+  }
+
+  /** The next wave of runs, or done. 409 wave_in_progress while runs are still open or finalizing. */
+  nextWave(id: string): Promise<NextWave> {
+    return this.request<NextWave>('POST', `/api/studies/${encodeURIComponent(id)}/runs/next`, {}, { timeoutMs: 60_000 });
+  }
+
+  // Trace runs: the panel runs a plugin-mode study's personas itself
+
+  /** 409 already_claimed when another actor has the run. */
+  claimRun(runId: string, body: ClaimBody): Promise<RunBriefing> {
+    return this.request<RunBriefing>('POST', `/api/plugin/runs/${encodeURIComponent(runId)}/claim`, body);
+  }
+
+  /**
+   * Always 202: `{turn, status: "thinking"}` for a new turn, or the stored
+   * record of a re-posted one. 409 turn_out_of_order (with `expected`),
+   * not_owner or run_ended.
+   */
+  postTurn(runId: string, body: TurnBody, options: { timeoutMs?: number } = {}): Promise<TurnView> {
+    return this.request<TurnView>('POST', `/api/plugin/runs/${encodeURIComponent(runId)}/turn`, body, {
+      timeoutMs: options.timeoutMs ?? TURN_TIMEOUT_MS,
+    });
+  }
+
+  getTurn(runId: string, turn: number): Promise<TurnView> {
+    return this.request<TurnView>('GET', `/api/plugin/runs/${encodeURIComponent(runId)}/turn/${turn}`);
+  }
+
+  /** A failure the panel detected. 409 run_ended when the run is over or finalizing. */
+  abortRun(runId: string, body: AbortBody): Promise<AbortResult> {
+    return this.request<AbortResult>('POST', `/api/plugin/runs/${encodeURIComponent(runId)}/abort`, body);
   }
 
   // Device flow (no bearer token)
@@ -324,3 +375,18 @@ export interface StudyRuns {
   currentWave?: number;
   runs: RunRowApi[];
 }
+
+export interface WaveRun {
+  runId: string;
+  archetypeId: string;
+  archetypeName: string;
+  repeatIndex: number;
+}
+
+/** 200 with `done` when the study needs no more runs, 201 with the new wave's runs. */
+export type NextWave =
+  | { studyId: string; done: true; reason: string; wave: number }
+  | { studyId: string; done?: undefined; wave: number; created: boolean; runs: WaveRun[] };
+
+// The trace turn contract, for the panel's imports from here.
+export type { TraceBrowser, ClaimBody, RunBriefing, TurnFlag, TimerEffect, TurnLast, TurnScreen, TurnBody, TurnState, TurnEnded, TurnView, AbortCode, AbortBody, AbortResult } from './turn';

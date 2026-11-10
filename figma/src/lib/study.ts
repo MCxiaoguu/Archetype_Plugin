@@ -1,18 +1,9 @@
 import { buildProtoUrl, checkShareLink, LINK_PROBLEM_TEXT } from './links';
 import { BLOCKER_TEXT, type Preflight } from './preflight';
+import type { RunSize, StudyForm } from './form';
 import type { DocSnapshot } from './types';
 
-export type RunSize = 'quick' | 'thorough';
-
-export interface StudyForm {
-  startId: string | null;
-  goalId: string | null;
-  goal: string;
-  who: string;
-  product: string;
-  link: string;
-  size: RunSize;
-}
+export type { RunSize, StudyForm } from './form';
 
 export const EMPTY_FORM: StudyForm = {
   startId: null,
@@ -59,8 +50,11 @@ export function validateForm(form: StudyForm, preflight: Preflight | null, known
   if (!form.who.trim()) errors.who = 'Describe who your user is, in a sentence or two.';
   else if (form.who.trim().length > 2000) errors.who = 'Keep this under 2000 characters.';
   if (form.product.trim().length > 3000) errors.product = 'Keep this under 3000 characters.';
-  const link = checkShareLink(form.link, knownFileKey);
-  if (!link.ok) errors.link = LINK_PROBLEM_TEXT[link.reason];
+  // Optional: the panel runs the personas itself, and a link only gives step URLs the real prototype form.
+  if (form.link.trim()) {
+    const link = checkShareLink(form.link, knownFileKey);
+    if (!link.ok) errors.link = LINK_PROBLEM_TEXT[link.reason];
+  }
   if (preflight?.blocker === 'start_not_a_screen') errors.start = BLOCKER_TEXT.start_not_a_screen;
   else if (preflight?.blocker === 'goal_not_a_screen') errors.goal = BLOCKER_TEXT.goal_not_a_screen;
   else if (preflight && !preflight.ok && form.startId && form.goalId) {
@@ -79,7 +73,8 @@ export interface StudyContext {
 export interface CreateStudyBody {
   title: string;
   icp: { label: string; description: string };
-  task: { goal: string; url: string; preconditions: string[] };
+  /** `url` only with a share link. */
+  task: { goal: string; url?: string; preconditions: string[] };
   success: {
     criterion: string;
     checks: { type: 'frame_reached'; value: string; required: true; rationale: string }[];
@@ -87,13 +82,18 @@ export interface CreateStudyBody {
   context: { productDescription: string; keyFeatures: string[] };
   design: { mode: 'ofat_stress'; archetypeBudget: number; repeatPolicy: 'explore' | 'confirm' };
   source: 'figma';
-  execution: 'remote';
+  /** The panel runs the personas itself (spec, Data flow 2). */
+  execution: 'plugin';
   figma: {
-    fileKey: string;
+    /** Only with a share link. */
+    fileKey?: string;
     startNodeId: string;
     targetNodeId: string;
     flowName: string | null;
     pluginVersion: string;
+    /** Name the prototype for the briefing and the figma-trace:// step URLs when there is no link. */
+    fileName: string;
+    pageName: string;
   };
 }
 
@@ -108,10 +108,17 @@ export function productDescription(productLine: string): string {
   return line ? `${clip(line, 3000)}.` : '';
 }
 
+/** The share link's file key, or null when the designer gave none. Throws on a link that isn't valid. */
+export function shareKeyOf(form: StudyForm, knownFileKey: string | null): string | null {
+  if (!form.link.trim()) return null;
+  const link = checkShareLink(form.link, knownFileKey);
+  if (!link.ok) throw new Error(LINK_PROBLEM_TEXT[link.reason]);
+  return link.link.fileKey;
+}
+
 /** The POST /api/studies body for a Figma prototype study. Call validateForm first. */
 export function buildStudyRequest(form: StudyForm, ctx: StudyContext): CreateStudyBody {
-  const link = checkShareLink(form.link, ctx.knownFileKey);
-  if (!link.ok) throw new Error(LINK_PROBLEM_TEXT[link.reason]);
+  const fileKey = shareKeyOf(form, ctx.knownFileKey);
   if (!form.startId || !form.goalId) throw new Error('Pick a start and a goal screen.');
   const frames = new Map(ctx.doc.frames.map((f) => [f.id, f.name]));
   const goalName = frames.get(form.goalId) ?? 'goal';
@@ -124,7 +131,7 @@ export function buildStudyRequest(form: StudyForm, ctx: StudyContext): CreateStu
     icp: { label: icpLabel(who) || clip(who, 60), description: clip(who, 2000) },
     task: {
       goal: clip(goal, 1000),
-      url: buildProtoUrl(link.link.fileKey, form.startId, ctx.doc.fileName),
+      ...(fileKey ? { url: buildProtoUrl(fileKey, form.startId, ctx.doc.fileName) } : {}),
       preconditions: [],
     },
     success: {
@@ -147,13 +154,15 @@ export function buildStudyRequest(form: StudyForm, ctx: StudyContext): CreateStu
     },
     design: { mode: size.mode, archetypeBudget: size.archetypeBudget, repeatPolicy: size.repeatPolicy },
     source: 'figma',
-    execution: 'remote',
+    execution: 'plugin',
     figma: {
-      fileKey: link.link.fileKey,
+      ...(fileKey ? { fileKey } : {}),
       startNodeId: form.startId,
       targetNodeId: form.goalId,
       flowName: flow ? clip(flow.name, 120) : null,
       pluginVersion: ctx.pluginVersion.slice(0, 20),
+      fileName: clip(ctx.doc.fileName, 120),
+      pageName: clip(ctx.doc.pageName, 120),
     },
   };
 }

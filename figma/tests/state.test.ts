@@ -185,6 +185,30 @@ describe('panel state machine', () => {
     expect(reducer(init(), { type: 'signed-out', expired: false }).notice).toBeNull();
   });
 
+  it('keeps what each session and the runner in this panel say, for their own study only', () => {
+    let s = run([{ type: 'launch-started', now: 1 }, { type: 'study-created', record }], init());
+    const status = { runId: 'r1', phase: 'thinking' as const, frameName: 'Connect bank', turn: 3, notices: [] };
+    s = reducer(s, { type: 'session', studyId: 's1', status });
+    expect(s.study?.live).toEqual({ r1: status });
+    s = reducer(s, { type: 'session', studyId: 's1', status: { ...status, phase: 'acting', turn: 4 } });
+    expect(s.study?.live.r1).toMatchObject({ phase: 'acting', turn: 4 });
+    s = reducer(s, { type: 'runner', studyId: 's1', status: { phase: 'paused', notice: 'Lost touch with Archetype. Retrying.' } });
+    expect(s.study?.runner).toEqual({ phase: 'paused', notice: 'Lost touch with Archetype. Retrying.' });
+    // A runner still going for a study the designer left.
+    expect(reducer(s, { type: 'session', studyId: 's0', status })).toBe(s);
+    expect(reducer(s, { type: 'runner', studyId: 's0', status: { phase: 'done', notice: null } })).toBe(s);
+    expect(reducer(s, { type: 'open-study', record, now: 9 }).study).toMatchObject({ live: {}, runner: null });
+  });
+
+  it('holds the launch gate until the next launch', () => {
+    let s = reducer(init(), { type: 'gate', gate: { kind: 'blocked', reason: 'Duplicate to your drafts to test', detail: 'Cannot create nodes' } });
+    expect(s.gate).toEqual({ kind: 'blocked', reason: 'Duplicate to your drafts to test', detail: 'Cannot create nodes' });
+    s = reducer(s, { type: 'gate', gate: { kind: 'confirm-import', components: ['State=Open'] } });
+    expect(s.gate).toEqual({ kind: 'confirm-import', components: ['State=Open'] });
+    expect(reducer(s, { type: 'launch-started', now: 1 }).gate).toBeNull();
+    expect(reducer(s, { type: 'new-test' }).gate).toBeNull();
+  });
+
   it('ignores study events when no study is active', () => {
     const s = init();
     expect(reducer(s, { type: 'poll', status: 'running', runs: [], now: 1 })).toBe(s);

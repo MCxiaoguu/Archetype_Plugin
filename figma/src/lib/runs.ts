@@ -1,8 +1,28 @@
 import type { RunRowApi } from './api';
 import { frameForUrl, type FrameIndex } from './frames';
-import { isTerminalRun } from './poll';
+import { isTerminalRun, type RunnerState } from './poll';
 
 export type PersonaPhase = 'waiting' | 'running' | 'done';
+
+/** What the panel's own session says about a run it is running (ui/trace/session.ts). */
+export interface LiveRun {
+  runId: string;
+  phase: 'acting' | 'thinking' | 'paused' | 'ended';
+  frameName: string;
+  turn: number;
+  notices: string[];
+}
+
+/**
+ * Where the panel's runner is with a study (ui/trace/runner.ts). The last
+ * four are where it stopped: the next wave didn't come (stuck), it failed,
+ * it waits for the designer to open the test's page, or the study's saved
+ * progress can't be read and the designer can forget it.
+ */
+export interface RunnerStatus {
+  phase: 'running' | 'next_wave' | 'paused' | 'done' | 'stuck' | 'failed' | 'other_page' | 'progress_unreadable';
+  notice: string | null;
+}
 
 export interface PersonaRow {
   archetypeId: string;
@@ -17,6 +37,8 @@ export interface PersonaRow {
   statusText: string;
   screen: string | null;
   steps: number | null;
+  /** A session in this panel runs it now. */
+  here: boolean;
 }
 
 /**
@@ -36,8 +58,18 @@ export function rowUrl(row: RunRowApi): string | null {
 
 const ROLE_ORDER: Record<string, number> = { baseline: 0, variant: 1, stress: 2 };
 
-/** One row per persona (archetype), in the order the study runs them. */
-export function personaRows(runs: RunRowApi[], frames: FrameIndex): PersonaRow[] {
+/**
+ * One row per persona (archetype), in the order the study runs them. A run
+ * this panel's own session is on shows that session's screen and step: the
+ * runs list lags behind it by a poll. In plugin mode (`inPanel`), a run
+ * the backend shows running that no session here runs is not clicking
+ * through: another panel has it, or this panel's runner stopped.
+ */
+export function personaRows(
+  runs: RunRowApi[],
+  frames: FrameIndex,
+  { live = {}, inPanel = false }: { live?: Readonly<Record<string, LiveRun>>; inPanel?: boolean } = {},
+): PersonaRow[] {
   const groups = new Map<string, RunRowApi[]>();
   for (const r of runs) {
     const list = groups.get(r.archetypeId) ?? [];
@@ -50,13 +82,18 @@ export function personaRows(runs: RunRowApi[], frames: FrameIndex): PersonaRow[]
     const finished = list.filter((r) => isTerminalRun(r.status)).length;
     const completed = list.filter((r) => personaOutcome(r) === true).length;
     const gaveUp = list.filter((r) => personaOutcome(r) === false).length;
-    const live = list.find((r) => r.status === 'running');
-    const phase: PersonaPhase = live ? 'running' : finished === list.length ? 'done' : 'waiting';
-    const focus = live ?? [...list].reverse().find((r) => isTerminalRun(r.status)) ?? first;
+    const session = list.map((r) => live[r.runId]).find((s) => s && s.phase !== 'ended');
+    const running = list.find((r) => r.status === 'running');
+    const elsewhere = inPanel && !session && !!running;
+    const phase: PersonaPhase = session || (running && !elsewhere) ? 'running' : finished === list.length ? 'done' : 'waiting';
+    const focus = running ?? [...list].reverse().find((r) => isTerminalRun(r.status)) ?? first;
     const frame = frameForUrl(rowUrl(focus), frames);
-    const steps = focus.metrics?.steps ?? focus.lastStep?.seq ?? null;
+    const screen = session ? session.frameName : frame?.name ?? null;
+    const steps = session ? session.turn : focus.metrics?.steps ?? focus.lastStep?.seq ?? null;
     let statusText: string;
-    if (phase === 'running') statusText = frame ? `On ${frame.name}` : 'Clicking through';
+    if (session) statusText = `${session.phase === 'paused' ? 'Paused on' : 'On'} ${session.frameName}`;
+    else if (elsewhere) statusText = 'Not running in this panel';
+    else if (phase === 'running') statusText = frame ? `On ${frame.name}` : 'Clicking through';
     else if (phase === 'waiting') statusText = finished > 0 ? `${finished} of ${list.length} tries done` : 'Waiting to start';
     else if (list.length === 1) statusText = completed === 1 ? 'Reached the goal' : gaveUp === 1 ? 'Gave up' : 'Stopped before the end';
     else statusText = `Reached the goal ${completed} of ${list.length} times`;
@@ -70,9 +107,32 @@ export function personaRows(runs: RunRowApi[], frames: FrameIndex): PersonaRow[]
       completed,
       gaveUp,
       statusText,
-      screen: frame?.name ?? null,
+      screen,
       steps: typeof steps === 'number' ? steps : null,
+      here: !!session,
     });
   }
   return rows.sort((a, b) => (ROLE_ORDER[a.role] ?? 1) - (ROLE_ORDER[b.role] ?? 1));
+}
+
+/**
+ * What the Running screen tells the designer about this panel's sessions and
+ * runner, each once. A session drops a notice once it no longer holds (it
+ * reached Archetype again); the runner's shows while it is paused.
+ */
+export function panelNotices(live: Readonly<Record<string, LiveRun>>, runner: RunnerStatus | null): string[] {
+  const shown = new Set(Object.values(live).flatMap((s) => s.notices));
+  // Where it stopped has its own banner, with what to do.
+  if (runner?.notice && (runner.phase === 'paused' || runner.phase === 'running')) shown.add(runner.notice);
+  return [...shown];
+}
+
+/** The line under the persona list in plugin mode: what this panel's runner and sessions are doing. */
+export function panelRunText(rows: readonly PersonaRow[], runner: RunnerStatus | null, state: RunnerState): string {
+  if (runner && (runner.phase === 'stuck' || runner.phase === 'failed' || runner.phase === 'other_page' || runner.phase === 'progress_unreadable')) return '';
+  if (rows.some((r) => r.here)) return 'Personas are clicking through your prototype here in the panel.';
+  if (runner?.phase === 'next_wave') return 'Starting the next round of tries.';
+  if (runner?.phase === 'done' || state === 'finishing') return 'All tries are in. Putting the results together.';
+  if (state === 'queued' || state === 'waiting_for_runner') return 'Starting the personas.';
+  return '';
 }

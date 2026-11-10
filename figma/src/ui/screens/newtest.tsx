@@ -1,4 +1,5 @@
 import { useMemo } from 'preact/hooks';
+import { importFailedText, importText } from '../../lib/launch';
 import { BLOCKER_TEXT, isFlowBlocker, runPreflight, type Preflight } from '../../lib/preflight';
 import type { AppState } from '../../lib/state';
 import { RUN_SIZES, validateForm, type RunSize } from '../../lib/study';
@@ -256,11 +257,11 @@ export function NewTest({ state, store, fx }: { state: AppState; store: Store; f
           </Field>
           <Field
             id="link"
-            label="Share link of this file"
+            label="Share link of this file (optional)"
             error={errors.link}
             hint={
               <>
-                Share, then <strong>Anyone with the link can view</strong>, then Copy link. Personas open the prototype from it.
+                Personas run here in the panel. With a link, the report opens each step in the prototype: Share, then <strong>Anyone with the link can view</strong>, then Copy link.
               </>
             }
           >
@@ -289,6 +290,51 @@ export function NewTest({ state, store, fx }: { state: AppState; store: Store; f
           </fieldset>
         </Section>
       </div>
+      {state.gate?.kind === 'blocked' && (
+        <div class="gate">
+          <Banner kind="error">
+            {state.gate.reason}. <span class="muted">Figma said: {state.gate.detail}</span>
+          </Banner>
+        </div>
+      )}
+      {state.gate?.kind === 'confirm-import' && (
+        <div class="gate">
+          <Banner
+            kind="info"
+            action={
+              <span class="banner-actions">
+                <button type="button" class="btn btn-small btn-secondary" onClick={() => fx.cancelImport()}>
+                  Cancel
+                </button>
+                <button type="button" class="btn btn-small btn-primary" onClick={() => void fx.confirmImport()}>
+                  Add and launch
+                </button>
+              </span>
+            }
+          >
+            {importText(state.gate.components)}
+          </Banner>
+        </div>
+      )}
+      {state.gate?.kind === 'import-failed' && (
+        <div class="gate">
+          <Banner
+            kind="warn"
+            action={
+              <span class="banner-actions">
+                <button type="button" class="btn btn-small btn-secondary" onClick={() => fx.cancelImport()}>
+                  Cancel
+                </button>
+                <button type="button" class="btn btn-small btn-primary" onClick={() => void fx.launchAnyway()}>
+                  Launch
+                </button>
+              </span>
+            }
+          >
+            {importFailedText(state.gate.failures)}
+          </Banner>
+        </div>
+      )}
       <footer class="actionbar">
         {state.notice && state.notice.kind === 'error' && Object.keys(errors).length > 0 ? (
           <p class="actionbar-note error" role="alert">
@@ -301,8 +347,8 @@ export function NewTest({ state, store, fx }: { state: AppState; store: Store; f
         ) : (
           <p class="actionbar-note">{form.size === 'quick' ? 'Takes about 5 to 10 minutes' : 'Takes about 15 to 30 minutes'}</p>
         )}
-        <button type="submit" class="btn btn-primary" disabled={isFlowBlocker(pf?.blocker ?? null)}>
-          Launch test
+        <button type="submit" class="btn btn-primary" disabled={isFlowBlocker(pf?.blocker ?? null) || state.gate?.kind === 'checking' || state.gate?.kind === 'confirm-import' || state.gate?.kind === 'import-failed'}>
+          {state.gate?.kind === 'checking' ? 'Checking the file' : 'Launch test'}
         </button>
       </footer>
     </form>

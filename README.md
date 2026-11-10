@@ -79,8 +79,10 @@ narrated but never did is flagged.
 Designers can launch the same persona studies from inside Figma. The plugin in
 [`figma/`](figma/README.md) reads a prototype's connections, checks the flow
 before launch (unreachable goals, dead ends, broken hotspots, unclear layer
-names), creates a study against the prototype share link, and brings results
-back as a report and as annotations on the frames. See
+names), creates a study, and runs its personas inside the Figma panel itself,
+walking the prototype turn by turn while the backend's model decides each
+step (no browser, and a share link only if you want step URLs that open the
+prototype). Results come back as a report and as annotations on the frames. See
 [figma/README.md](figma/README.md) to import it in the Figma desktop app.
 
 ## Architecture

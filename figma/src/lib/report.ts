@@ -1,5 +1,5 @@
 import { frameForUrl, type FrameIndex } from './frames';
-import type { NodeRef } from './types';
+import type { NodeRef, Pin } from './types';
 
 // The parts of GET /api/studies/<id>/report the panel reads.
 
@@ -84,12 +84,6 @@ export interface DropOffRow {
   label: string;
   count: number;
   personas: string[];
-}
-
-export interface Pin {
-  frameId: string;
-  frameName: string;
-  label: string;
 }
 
 export interface ReportView {

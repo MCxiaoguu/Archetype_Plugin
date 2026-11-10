@@ -225,7 +225,7 @@ The renderer never creates a page: Starter-plan files are limited in pages, and 
 4. **Measure.** Walks the copies in z-order. For each layer it records a `RawLayer`: logical key, type, name, text, box in viewport coordinates, whether it is visible, whether it has reactions, its role hints, and its parent key.
    - The **logical key** is the original layer id, matched by walking the original and the copy in parallel.
    - Inside a swapped instance, the key is the instance's key plus the child's path in the variant.
-5. **Export.** Exports the viewport as JPEG at quality 80 and 1x. JPEG keeps photo-heavy screens under `ingest_step`'s 1 MB screenshot limit.
+5. **Export.** Exports the viewport as JPEG at 1x; Figma's export has no quality setting, so it uses Figma's own. A screenshot over the turn's 1.5 MB cap fails the render with its size. For the replay, `ingest_step` keeps at most six screenshots of 1 MB per run, as for every plugin run.
 6. **Delete** the copies.
 
 ### Element list (`elements.ts`)
@@ -248,8 +248,8 @@ In both, node ids use `-` instead of `:`, as Figma does, and the page name is pe
 ## Data flow
 
 1. **Launch gate.** The panel runs the scratch container check. If it fails, launch is blocked with "Duplicate to your drafts to test".
-2. **Create.** As today, with `source: "figma"` and `execution: "plugin"`, then factors → archetypes → first wave. The panel stores the `ProtoDoc` hash with the study in `clientStorage`.
-3. **Claim.** For every queued run: `POST /runs/<id>/claim` with `{browser: {engine: "figma-trace", version, viewport}, owner}`. `owner` is a random id kept by this panel. The briefing is the same one actors get today.
+2. **Create.** As today, with `source: "figma"` and `execution: "plugin"`, then factors → archetypes → first wave. The panel stores the owner, the start frame, the page id and the library-import choice with the study in `clientStorage`; each run's saved state carries its own `ProtoDoc` hash.
+3. **Claim.** For every queued run: `POST /runs/<id>/claim` with `{browser: {engine: "figma-trace", version, viewport}, owner}`. `owner` is a random id kept by this panel. The briefing is the same one actors get today. A repeated claim by the run's own owner returns the same briefing, so a claim retried after a lost response isn't refused as `already_claimed`. Right after each claim the panel saves `{owner, runId, turn: 0, state: <start state>, lastOutcome: null}` and starts that run's session without waiting for the other claims.
 4. **Turn n.** The panel settles, renders, lists the elements and posts:
 
 ```jsonc
@@ -325,8 +325,8 @@ A turn that ends the run is marked decided with `ended.status: "finalizing"` bef
 
    - The payload is validated with `_validate_ingest_payload` before it's stored. A malformed debrief is asked for once more. If it's still malformed, the run is aborted with `debrief_invalid`.
    - Results are stored through `ingest_results`, including its post-session analytics. Only then does `GET /turn` show the final `ended.status`. The panel never posts results.
-9. **Next wave.** When every session of the wave has ended, the panel calls `POST /api/studies/<id>/runs/next` and claims the new runs. This repeats until the backend answers `done`.
-10. **Resume.** When the panel reopens, it continues only runs it owns: the saved owner matches, and the backend still shows the run `running`. Runs with no saved state are left alone, because another panel may own them; the 20-minute watchdog covers truly orphaned ones. Before resuming, the panel re-reads the `ProtoDoc` and compares its hash. If the file changed, every resumed run gets the `file_changed` flag. A run whose saved frame or overlay no longer exists is aborted with `file_changed`.
+9. **Next wave.** When every session of the wave has ended, the panel calls `POST /api/studies/<id>/runs/next` and claims the new runs. This repeats until the backend answers `done`. On `wave_in_progress` the panel reads the study's runs, claims any queued ones (a next wave that committed but whose answer was lost), and names the open runs it isn't running; after 5 minutes it shows Try again.
+10. **Resume.** When the panel reopens on a running study, it continues only runs it owns: the saved owner matches, and the backend still shows the run `running`. A finished study starts no runner. If the designer is on another page than the study's, the panel asks to go to that page first. Runs with no saved state are left alone, because another panel may own them; the 20-minute watchdog covers truly orphaned ones. Before resuming, the panel re-reads the `ProtoDoc` and compares its hash with each run's saved state. If the file changed, every resumed run gets the `file_changed` flag, and a run that must catch up on turns the backend already decided is aborted with `file_changed`, because its stored actions may name different layers now. A run whose saved frame or overlay no longer exists is aborted with `file_changed`.
 
 ## Error handling
 

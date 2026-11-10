@@ -41,8 +41,8 @@ rest, while still queued, are aborted with a budget reason. The exit code
 is 1 when anything went wrong (a worker failed, timed out or stalled, a
 run was aborted or left queued, the next wave never came), else 0.
 
-Watch mode (--watch) serves studies other clients started, such as the
-Figma plugin: it polls GET /api/studies?execution=remote&status=running,
+Watch mode (--watch) serves studies other clients started for a remote
+runner: it polls GET /api/studies?execution=remote&status=running,
 runs every queued run of each study (oldest first) with the same workers,
 waves and orphan handling, then polls again. --once makes one pass and
 exits (for cron or CI; 1 when the pass had a problem). A file named `stop`

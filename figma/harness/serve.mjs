@@ -72,7 +72,7 @@ export function startServer(opts = {}) {
         } catch {
           return send(res, 400, { error: 'bad_json', message: 'Body is not JSON.' });
         }
-        const out = await mock.handle(req.method, path.slice('/mock'.length), body, req.headers);
+        const out = await mock.handle(req.method, path.slice('/mock'.length), body, req.headers, { bytes: raw.length });
         log(`${req.method} ${path.slice(5)} -> ${out ? out[0] : 404}`);
         return out ? send(res, out[0], out[1]) : send(res, 404, { error: 'not_found', message: 'Unknown route.' });
       }

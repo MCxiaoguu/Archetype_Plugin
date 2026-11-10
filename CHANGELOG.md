@@ -15,8 +15,20 @@ All notable changes to the Archetype plugin. Versions follow
   findings, layer names are labels, the viewer's own controls are off
   limits).
 - `study_runner.py --watch` serves studies created with `execution:
-  "remote"` (the Figma plugin's): it polls the backend, runs every queued
-  run of each study, then polls again. `--once` makes a single pass.
+  "remote"`: it polls the backend, runs every queued run of each study, then
+  polls again. `--once` makes a single pass. It never claims a Figma
+  plugin-mode study's runs (`execution: "plugin"`), which only the Figma
+  panel runs.
+- The Figma plugin runs its studies inside the panel (`execution:
+  "plugin"`). It reads the prototype (reactions, overlays, variants,
+  variables, timers) and plays it the way the prototype viewer does. Each
+  step, it draws the screen a persona sees on temporary copies and posts
+  the screenshot, the visible text and what can be clicked as a turn. The
+  backend's model then decides the persona's next action. All of a wave's
+  personas run side by side in the panel, which asks for the next wave
+  itself and resumes the runs it owns when it reopens. A file edited while a
+  test runs flags the steps after the edit. `dispatch_study` refuses these
+  studies: only the panel can run them.
 
 ### Fixed
 

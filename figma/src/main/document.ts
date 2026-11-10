@@ -1,4 +1,5 @@
 import { genericNameReason } from '../lib/names';
+import { isScratch } from './scratch';
 import type { DestinationInfo, DocSnapshot, FrameInfo, HotspotAction, HotspotInfo, NavigationKind, NodeRef } from '../lib/types';
 
 /** More interactive layers than this on one page are cut off (and flagged). */
@@ -24,7 +25,8 @@ export function topLevelFrames(page: PageNode): SceneNode[] {
   const walk = (parent: Container) => {
     for (const child of parent.children as readonly SceneNode[]) {
       if (child.type === 'SECTION') walk(child);
-      else if (isScreenNode(child)) out.push(child);
+      // The trace renderer's scratch container is no screen.
+      else if (isScreenNode(child) && !isScratch(child)) out.push(child);
     }
   };
   walk(page);

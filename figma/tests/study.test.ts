@@ -41,9 +41,37 @@ describe('study request', () => {
       },
       design: { mode: 'ofat_stress', archetypeBudget: 5, repeatPolicy: 'explore' },
       source: 'figma',
-      execution: 'remote',
-      figma: { fileKey: KEY, startNodeId: '1:2', targetNodeId: '2:50', flowName: 'Connect a bank', pluginVersion: '0.1.0' },
+      execution: 'plugin',
+      figma: {
+        fileKey: KEY,
+        startNodeId: '1:2',
+        targetNodeId: '2:50',
+        flowName: 'Connect a bank',
+        pluginVersion: '0.1.0',
+        fileName: 'Farside billing',
+        pageName: 'Prototype',
+      },
     });
+  });
+
+  it('runs in the panel without a share link: no file key and no task URL, named by the file and page', () => {
+    const body = buildStudyRequest({ ...form, link: '  ' }, { doc, preflight, pluginVersion: '0.1.0', knownFileKey: null });
+    expect(body.execution).toBe('plugin');
+    expect(body.task).toEqual({ goal: form.goal, preconditions: [] });
+    expect(body.figma).toEqual({
+      startNodeId: '1:2',
+      targetNodeId: '2:50',
+      flowName: 'Connect a bank',
+      pluginVersion: '0.1.0',
+      fileName: 'Farside billing',
+      pageName: 'Prototype',
+    });
+  });
+
+  it('clips the file and page names to the backend limit', () => {
+    const d = { ...fixtureDoc(), fileName: 'F'.repeat(130), pageName: 'P'.repeat(130) };
+    const body = buildStudyRequest({ ...form, link: '' }, { doc: d, preflight, pluginVersion: '0', knownFileKey: null });
+    expect([body.figma.fileName.length, body.figma.pageName.length]).toEqual([120, 120]);
   });
 
   it('uses the thorough design and a null flow name off a flow start', () => {
@@ -61,7 +89,7 @@ describe('study request', () => {
     expect(body.task.goal).toBe(long);
   });
 
-  it('refuses to build without a valid link or frames', () => {
+  it('refuses to build with a link that is not valid, or without frames', () => {
     expect(() => buildStudyRequest({ ...form, link: 'nope' }, { doc, preflight, pluginVersion: '0', knownFileKey: null })).toThrow();
     expect(() => buildStudyRequest({ ...form, goalId: null }, { doc, preflight, pluginVersion: '0', knownFileKey: null })).toThrow();
   });
@@ -88,9 +116,14 @@ describe('form validation', () => {
     expect(validateForm(form, runPreflight(doc, '1:2', '2:50'), null)).toEqual({});
   });
 
-  it('names every missing piece', () => {
+  it('names every missing piece, and the share link is not one of them', () => {
     const errs = validateForm(EMPTY_FORM, runPreflight(doc, null, null), null);
-    expect(Object.keys(errs).sort()).toEqual(['goal', 'goalText', 'link', 'start', 'who']);
+    expect(Object.keys(errs).sort()).toEqual(['goal', 'goalText', 'start', 'who']);
+    expect(validateForm({ ...form, link: '' }, runPreflight(doc, '1:2', '2:50'), null)).toEqual({});
+  });
+
+  it('still checks a share link that is given', () => {
+    expect(validateForm({ ...form, link: 'nope' }, runPreflight(doc, '1:2', '2:50'), null).link).toMatch(/figma\.com link/);
   });
 
   it('flags an unreachable goal and a link to another file', () => {

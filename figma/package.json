@@ -8,7 +8,7 @@
   "scripts": {
     "build": "node build.mjs",
     "watch": "node build.mjs --watch",
-    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.main.json",
     "test": "vitest run",
     "check:manifest": "node scripts/check-manifest.mjs",
     "harness": "node harness/serve.mjs",

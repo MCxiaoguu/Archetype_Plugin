@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ApiError, type StudyStatusValue } from '../src/lib/api';
-import { continueLaunch, stageForStatus, type LaunchApi } from '../src/lib/launch';
+import { componentsToImport, continueLaunch, failedImports, importFailedText, importText, stageForStatus, type LaunchApi } from '../src/lib/launch';
+import type { LibraryVariant } from '../src/lib/proto/model';
 
 function fakeApi(start: StudyStatusValue, opts: { busyOnce?: boolean; failAt?: 'factors' | 'archetypes' | 'runs' } = {}) {
   let status: StudyStatusValue = start;
@@ -46,7 +47,8 @@ describe('launch steps', () => {
     const { api, calls } = fakeApi('draft');
     const stages: string[] = [];
     const r = await continueLaunch(api, 's', { onStage: (s) => stages.push(s), sleep: async () => undefined });
-    expect(r).toBe('watching');
+    // The status it reached: the panel runs a study's personas only while it is running.
+    expect(r).toBe('running');
     expect(calls).toEqual(['factors', 'archetypes', 'runs']);
     expect(stages).toEqual(['factors', 'archetypes', 'runs', 'watching']);
   });
@@ -106,7 +108,7 @@ describe('launch steps', () => {
         throw new ApiError(409, 'not_editable', 'This study is running; wave 1 can only start from archetypes_ready.');
       },
     };
-    expect(await continueLaunch(api, 's', { onStage: () => undefined, sleep: async () => undefined })).toBe('watching');
+    expect(await continueLaunch(api, 's', { onStage: () => undefined, sleep: async () => undefined })).toBe('running');
   });
 
   it('gives up when someone else keeps the study busy', async () => {
@@ -121,5 +123,42 @@ describe('launch steps', () => {
     };
     await expect(continueLaunch(api, 's', { onStage: () => undefined, sleep })).rejects.toThrow(/did not move forward/);
     expect(sleep).toHaveBeenCalledWith(5000);
+  });
+});
+
+describe('the library components a launch would add', () => {
+  const variant = (name: string, status: LibraryVariant['status']): LibraryVariant => ({ variantId: `5:${name.length}`, key: `k-${name}`, name, status, error: null });
+
+  it('names each component the read was not allowed to import, once', () => {
+    const doc = { libraryVariants: [variant('State=Open', 'needs_import'), variant('State=Open', 'needs_import'), variant('Size=Large', 'needs_import'), variant('State=Done', 'imported'), variant('State=Gone', 'failed')] };
+    expect(componentsToImport(doc)).toEqual(['State=Open', 'Size=Large']);
+    expect(componentsToImport({ libraryVariants: [] })).toEqual([]);
+  });
+
+  it('tells the designer what testing adds to the file', () => {
+    expect(importText(['State=Open'])).toBe('Testing this flow adds State=Open to this file, as using it in Figma would.');
+    expect(importText(['A', 'B', 'C'])).toBe('Testing this flow adds A, B and C to this file, as using it in Figma would.');
+  });
+});
+
+describe('library components that could not be added', () => {
+  it('names each with what Figma said, and what that means for the steps', () => {
+    const doc = {
+      libraryVariants: [
+        { variantId: '5:1', key: 'a', name: 'State=Open', status: 'imported' as const, error: null },
+        { variantId: '5:2', key: 'b', name: 'State=Closed', status: 'failed' as const, error: 'The library is not enabled for this file' },
+      ],
+    };
+    expect(failedImports(doc)).toEqual([{ component: 'State=Closed', error: 'The library is not enabled for this file' }]);
+    expect(importFailedText(failedImports(doc))).toBe("Couldn't add State=Closed: The library is not enabled for this file. Steps that need it will be reported as unsupported.");
+    expect(importFailedText([{ component: 'A', error: 'x' }, { component: 'B', error: 'y' }])).toBe("Couldn't add A: x. Couldn't add B: y. Steps that need them will be reported as unsupported.");
+  });
+});
+
+describe('a study already past its runs', () => {
+  it('reports the status it found, so a finished study is only shown', async () => {
+    const { api, calls } = fakeApi('complete');
+    expect(await continueLaunch(api, 's', { onStage: () => undefined, sleep: async () => undefined })).toBe('complete');
+    expect(calls).toEqual([]);
   });
 });
