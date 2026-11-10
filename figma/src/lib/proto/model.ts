@@ -61,8 +61,11 @@ export type ProtoTrigger =
   | { type: 'AFTER_TIMEOUT'; delayMs: number }
   | { type: 'MOUSE_UP' | 'MOUSE_DOWN' | 'MOUSE_ENTER' | 'MOUSE_LEAVE'; delayMs: number }
   | { type: 'ON_KEY_DOWN'; device: KeyDevice; keyCodes: number[] }
-  | { type: 'ON_MEDIA_HIT'; delayMs: number }
-  | { type: 'ON_MEDIA_END' };
+  /** Figma doesn't document `mediaHitTime`'s unit; the engine plays no media, so it is kept as read. */
+  | { type: 'ON_MEDIA_HIT'; mediaHitTime: number }
+  | { type: 'ON_MEDIA_END' }
+  /** A trigger type the reader doesn't model, kept instead of dropped; nothing fires it. */
+  | { type: 'UNKNOWN'; rawType: string };
 
 /** An expression tree: a literal, a reference to another variable, or an operator over operands. */
 export type VariableExprOperator =
@@ -87,7 +90,9 @@ export type VariableLiteral = boolean | string | number | RGBA;
 export type VariableExpr =
   | { kind: 'literal'; value: VariableLiteral }
   | { kind: 'alias'; variableId: string }
-  | { kind: 'op'; operator: VariableExprOperator; operands: VariableExpr[] };
+  | { kind: 'op'; operator: VariableExprOperator; operands: VariableExpr[] }
+  /** Something the reader couldn't turn into an expression (an unknown function, an easing value); evaluating it is an ExprError. */
+  | { kind: 'unsupported'; detail: string };
 
 export interface ConditionalBlock {
   /** Null marks the else block, run when every earlier condition is false. */
@@ -132,8 +137,23 @@ export interface ProtoVariant {
    * inside the variant (see `RawLayer.key`); '' is the variant itself.
    */
   reactions: Record<string, ProtoReaction[]>;
+  /**
+   * The component the renderer swaps the instance to: the variant itself,
+   * or the copy imported from its library. Null when it is unavailable.
+   */
+  componentId: string | null;
   /** Set when a library variant couldn't be imported; CHANGE_TO to it is `unsupported`. */
   unavailable?: boolean;
+}
+
+/** A variant from a library that a CHANGE_TO in the flow can show. */
+export interface LibraryVariant {
+  /** Its id in this file, as a CHANGE_TO names it. */
+  variantId: string;
+  key: string;
+  name: string;
+  /** `needs_import`: the read wasn't allowed to import it. `failed`: `importComponentByKeyAsync` refused. */
+  status: 'needs_import' | 'imported' | 'failed';
 }
 
 /**
@@ -178,6 +198,8 @@ export interface ProtoDoc {
   reactions: Record<string, ProtoReaction[]>;
   variantSets: Record<string, VariantSet>;
   variableCollections: Record<string, VariableCollection>;
+  /** Importing one adds it to the designer's file, as using it in Figma would, so the panel asks first. */
+  libraryVariants: LibraryVariant[];
 }
 
 // --- TraceState: what the engine carries between actions --------------

@@ -5,6 +5,7 @@
  * nothing.
  */
 
+import { stableJson } from './hash';
 import type { TraceOutcome, TraceScroll, TraceState } from './model';
 
 /**
@@ -17,16 +18,7 @@ export type EngineEffect =
   | { type: 'unsupported'; action: string }
   | { type: 'expr_error'; action: string; message: string };
 
-/** Plain data as JSON with sorted keys, so two values compare by content. */
-function stable(value: unknown): string {
-  return JSON.stringify(value, (_key, v: unknown) =>
-    v && typeof v === 'object' && !Array.isArray(v)
-      ? Object.fromEntries(Object.entries(v).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
-      : v,
-  );
-}
-
-const same = (a: unknown, b: unknown) => stable(a) === stable(b);
+const same = (a: unknown, b: unknown) => stableJson(a) === stableJson(b);
 
 /** The offsets that move something: a frame with no entry and one at zero show the same. */
 function movedScroll(scroll: TraceScroll): Record<string, unknown> {

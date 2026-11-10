@@ -99,6 +99,8 @@ export function evaluate(expr: VariableExpr, scope: ExprScope): VariableLiteral 
       return readVariable(scope, expr.variableId, null);
     case 'op':
       return operate(expr.operator, expr.operands, scope);
+    case 'unsupported':
+      throw new ExprError(`The expression can't be evaluated: ${expr.detail}`);
   }
 }
 

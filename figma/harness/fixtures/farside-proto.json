@@ -1,0 +1,3467 @@
+{
+ "fileName": "Farside billing",
+ "pages": [
+  {
+   "id": "0:1",
+   "name": "Prototype",
+   "type": "PAGE",
+   "explicitVariableModes": {
+    "VariableCollectionId:10:0": "10:0"
+   },
+   "flowStartingPoints": [
+    {
+     "nodeId": "1:2",
+     "name": "Connect a bank"
+    }
+   ],
+   "children": [
+    {
+     "id": "1:2",
+     "name": "Dashboard",
+     "type": "FRAME",
+     "x": 0,
+     "y": 0,
+     "width": 1280,
+     "height": 800,
+     "fills": [
+      {
+       "type": "SOLID",
+       "color": {
+        "r": 1,
+        "g": 1,
+        "b": 1
+       },
+       "opacity": 1,
+       "visible": true
+      }
+     ],
+     "clipsContent": true,
+     "overflowDirection": "NONE",
+     "numberOfFixedChildren": 0,
+     "overlayPositionType": "CENTER",
+     "overlayBackground": {
+      "type": "NONE"
+     },
+     "overlayBackgroundInteraction": "NONE",
+     "explicitVariableModes": {},
+     "children": [
+      {
+       "id": "1:3",
+       "name": "Sidebar",
+       "type": "FRAME",
+       "x": 0,
+       "y": 0,
+       "width": 240,
+       "height": 800,
+       "fills": [
+        {
+         "type": "SOLID",
+         "color": {
+          "r": 0.96,
+          "g": 0.96,
+          "b": 0.97
+         },
+         "opacity": 1,
+         "visible": true
+        }
+       ],
+       "clipsContent": true,
+       "overflowDirection": "NONE",
+       "numberOfFixedChildren": 0,
+       "overlayPositionType": "CENTER",
+       "overlayBackground": {
+        "type": "NONE"
+       },
+       "overlayBackgroundInteraction": "NONE",
+       "explicitVariableModes": {},
+       "children": [
+        {
+         "id": "1:9",
+         "name": "Nav",
+         "type": "GROUP",
+         "x": 16,
+         "y": 96,
+         "width": 208,
+         "height": 120,
+         "children": [
+          {
+           "id": "1:7",
+           "name": "Billing",
+           "type": "TEXT",
+           "x": 0,
+           "y": 0,
+           "width": 208,
+           "height": 24,
+           "characters": "Billing",
+           "fontName": {
+            "family": "Inter",
+            "style": "Regular"
+           },
+           "fills": [
+            {
+             "type": "SOLID",
+             "color": {
+              "r": 0.1,
+              "g": 0.1,
+              "b": 0.12
+             },
+             "opacity": 1,
+             "visible": true
+            }
+           ],
+           "reactions": [
+            {
+             "trigger": {
+              "type": "ON_CLICK"
+             },
+             "actions": [
+              {
+               "type": "NODE",
+               "destinationId": "2:10",
+               "navigation": "NAVIGATE",
+               "transition": null
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "1:8",
+           "name": "Rectangle 12",
+           "type": "RECTANGLE",
+           "x": 0,
+           "y": 40,
+           "width": 208,
+           "height": 40,
+           "fills": [],
+           "reactions": [
+            {
+             "trigger": {
+              "type": "ON_CLICK"
+             },
+             "actions": [
+              {
+               "type": "NODE",
+               "destinationId": "3:5",
+               "navigation": "NAVIGATE",
+               "transition": null
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "1:10",
+           "name": "What's new",
+           "type": "TEXT",
+           "x": 0,
+           "y": 96,
+           "width": 208,
+           "height": 24,
+           "characters": "What's new",
+           "fontName": {
+            "family": "Inter",
+            "style": "Regular"
+           },
+           "fills": [
+            {
+             "type": "SOLID",
+             "color": {
+              "r": 0.1,
+              "g": 0.1,
+              "b": 0.12
+             },
+             "opacity": 1,
+             "visible": true
+            }
+           ],
+           "reactions": [
+            {
+             "trigger": {
+              "type": "ON_CLICK"
+             },
+             "actions": [
+              {
+               "type": "NODE",
+               "destinationId": "7:1",
+               "navigation": "NAVIGATE",
+               "transition": null
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "id": "1:5",
+       "name": "Greeting",
+       "type": "TEXT",
+       "x": 280,
+       "y": 40,
+       "width": 600,
+       "height": 40,
+       "characters": "Welcome back, Mara",
+       "fontName": {
+        "family": "Inter",
+        "style": "Regular"
+       },
+       "fills": [
+        {
+         "type": "SOLID",
+         "color": {
+          "r": 0.1,
+          "g": 0.1,
+          "b": 0.12
+         },
+         "opacity": 1,
+         "visible": true
+        }
+       ],
+       "boundVariables": {
+        "characters": {
+         "type": "VARIABLE_ALIAS",
+         "id": "VariableID:10:4"
+        }
+       }
+      },
+      {
+       "id": "1:11",
+       "name": "Dark mode",
+       "type": "TEXT",
+       "x": 1100,
+       "y": 40,
+       "width": 140,
+       "height": 24,
+       "characters": "Dark mode",
+       "fontName": {
+        "family": "Inter",
+        "style": "Regular"
+       },
+       "fills": [
+        {
+         "type": "SOLID",
+         "color": {
+          "r": 0.1,
+          "g": 0.1,
+          "b": 0.12
+         },
+         "opacity": 1,
+         "visible": true
+        }
+       ],
+       "reactions": [
+        {
+         "trigger": {
+          "type": "ON_CLICK"
+         },
+         "actions": [
+          {
+           "type": "SET_VARIABLE_MODE",
+           "variableCollectionId": "VariableCollectionId:10:0",
+           "variableModeId": "10:1"
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "id": "5:1",
+     "name": "Billing flow",
+     "type": "SECTION",
+     "x": 1400,
+     "y": 0,
+     "width": 5600,
+     "height": 2000,
+     "children": [
+      {
+       "id": "2:10",
+       "name": "Billing settings",
+       "type": "FRAME",
+       "x": 0,
+       "y": 0,
+       "width": 1280,
+       "height": 800,
+       "fills": [
+        {
+         "type": "SOLID",
+         "color": {
+          "r": 1,
+          "g": 1,
+          "b": 1
+         },
+         "opacity": 1,
+         "visible": true
+        }
+       ],
+       "clipsContent": true,
+       "overflowDirection": "NONE",
+       "numberOfFixedChildren": 0,
+       "overlayPositionType": "CENTER",
+       "overlayBackground": {
+        "type": "NONE"
+       },
+       "overlayBackgroundInteraction": "NONE",
+       "explicitVariableModes": {},
+       "children": [
+        {
+         "id": "2:11",
+         "name": "Connect a bank",
+         "type": "INSTANCE",
+         "x": 40,
+         "y": 200,
+         "width": 240,
+         "height": 48,
+         "mainComponentId": "6:2",
+         "fills": [
+          {
+           "type": "SOLID",
+           "color": {
+            "r": 0.15,
+            "g": 0.35,
+            "b": 0.9
+           },
+           "opacity": 1,
+           "visible": true
+          }
+         ],
+         "reactions": [
+          {
+           "trigger": {
+            "type": "ON_CLICK"
+           },
+           "actions": [
+            {
+             "type": "CONDITIONAL",
+             "conditionalBlocks": [
+              {
+               "condition": {
+                "type": "EXPRESSION",
+                "value": {
+                 "expressionFunction": "EQUALS",
+                 "expressionArguments": [
+                  {
+                   "type": "VARIABLE_ALIAS",
+                   "value": {
+                    "type": "VARIABLE_ALIAS",
+                    "id": "VariableID:10:1"
+                   }
+                  },
+                  {
+                   "type": "BOOLEAN",
+                   "value": true
+                  }
+                 ]
+                }
+               },
+               "actions": [
+                {
+                 "type": "NODE",
+                 "destinationId": "2:50",
+                 "navigation": "NAVIGATE",
+                 "transition": null
+                }
+               ]
+              },
+              {
+               "actions": [
+                {
+                 "type": "NODE",
+                 "destinationId": "2:20",
+                 "navigation": "NAVIGATE",
+                 "transition": null
+                }
+               ]
+              }
+             ]
+            }
+           ]
+          }
+         ],
+         "children": [
+          {
+           "id": "I2:11;6:3",
+           "name": "Label",
+           "type": "TEXT",
+           "x": 16,
+           "y": 12,
+           "width": 208,
+           "height": 24,
+           "characters": "Connect a bank",
+           "fontName": {
+            "family": "Inter",
+            "style": "Regular"
+           },
+           "fills": [
+            {
+             "type": "SOLID",
+             "color": {
+              "r": 0.1,
+              "g": 0.1,
+              "b": 0.12
+             },
+             "opacity": 1,
+             "visible": true
+            }
+           ]
+          },
+          {
+           "id": "I2:11;6:4",
+           "name": "Spinner",
+           "type": "FRAME",
+           "x": 212,
+           "y": 12,
+           "width": 16,
+           "height": 16,
+           "visible": false
+          }
+         ]
+        },
+        {
+         "id": "2:12",
+         "name": "icons8-help-32 1",
+         "type": "FRAME",
+         "x": 300,
+         "y": 208,
+         "width": 32,
+         "height": 32,
+         "fills": [],
+         "clipsContent": true,
+         "overflowDirection": "NONE",
+         "numberOfFixedChildren": 0,
+         "overlayPositionType": "CENTER",
+         "overlayBackground": {
+          "type": "NONE"
+         },
+         "overlayBackgroundInteraction": "NONE",
+         "explicitVariableModes": {},
+         "reactions": [
+          {
+           "trigger": {
+            "type": "ON_CLICK"
+           },
+           "actions": [
+            {
+             "type": "NODE",
+             "destinationId": "2:40",
+             "navigation": "NAVIGATE",
+             "transition": null
+            }
+           ]
+          },
+          {
+           "trigger": {
+            "type": "MOUSE_ENTER",
+            "delay": 500,
+            "deprecatedVersion": false
+           },
+           "actions": [
+            {
+             "type": "NODE",
+             "destinationId": "3:3",
+             "navigation": "OVERLAY",
+             "transition": null,
+             "overlayRelativePosition": {
+              "x": 0,
+              "y": 36
+             }
+            }
+           ]
+          }
+         ]
+        },
+        {
+         "id": "2:13",
+         "name": "Back",
+         "type": "INSTANCE",
+         "x": 40,
+         "y": 40,
+         "width": 80,
+         "height": 32,
+         "mainComponentId": "6:2",
+         "fills": [
+          {
+           "type": "SOLID",
+           "color": {
+            "r": 0.15,
+            "g": 0.35,
+            "b": 0.9
+           },
+           "opacity": 1,
+           "visible": true
+          }
+         ],
+         "reactions": [
+          {
+           "trigger": {
+            "type": "ON_CLICK"
+           },
+           "actions": [
+            {
+             "type": "BACK"
+            }
+           ]
+          }
+         ],
+         "children": [
+          {
+           "id": "I2:13;6:3",
+           "name": "Label",
+           "type": "TEXT",
+           "x": 16,
+           "y": 12,
+           "width": 48,
+           "height": 24,
+           "characters": "Back",
+           "fontName": {
+            "family": "Inter",
+            "style": "Regular"
+           },
+           "fills": [
+            {
+             "type": "SOLID",
+             "color": {
+              "r": 0.1,
+              "g": 0.1,
+              "b": 0.12
+             },
+             "opacity": 1,
+             "visible": true
+            }
+           ]
+          },
+          {
+           "id": "I2:13;6:4",
+           "name": "Spinner",
+           "type": "FRAME",
+           "x": 52,
+           "y": 12,
+           "width": 16,
+           "height": 16,
+           "visible": false
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "id": "2:20",
+       "name": "Connect bank",
+       "type": "FRAME",
+       "x": 1400,
+       "y": 0,
+       "width": 1280,
+       "height": 1600,
+       "fills": [
+        {
+         "type": "SOLID",
+         "color": {
+          "r": 1,
+          "g": 1,
+          "b": 1
+         },
+         "opacity": 1,
+         "visible": true
+        }
+       ],
+       "clipsContent": true,
+       "overflowDirection": "VERTICAL",
+       "numberOfFixedChildren": 1,
+       "overlayPositionType": "CENTER",
+       "overlayBackground": {
+        "type": "NONE"
+       },
+       "overlayBackgroundInteraction": "NONE",
+       "explicitVariableModes": {},
+       "children": [
+        {
+         "id": "2:25",
+         "name": "Bank list",
+         "type": "FRAME",
+         "x": 40,
+         "y": 160,
+         "width": 600,
+         "height": 400,
+         "fills": [
+          {
+           "type": "SOLID",
+           "color": {
+            "r": 1,
+            "g": 1,
+            "b": 1
+           },
+           "opacity": 1,
+           "visible": true
+          }
+         ],
+         "clipsContent": true,
+         "overflowDirection": "VERTICAL",
+         "numberOfFixedChildren": 0,
+         "overlayPositionType": "CENTER",
+         "overlayBackground": {
+          "type": "NONE"
+         },
+         "overlayBackgroundInteraction": "NONE",
+         "explicitVariableModes": {},
+         "children": [
+          {
+           "id": "2:60",
+           "name": "Chase",
+           "type": "FRAME",
+           "x": 0,
+           "y": 0,
+           "width": 600,
+           "height": 80,
+           "fills": [
+            {
+             "type": "SOLID",
+             "color": {
+              "r": 1,
+              "g": 1,
+              "b": 1
+             },
+             "opacity": 1,
+             "visible": true
+            }
+           ],
+           "clipsContent": false,
+           "overflowDirection": "NONE",
+           "numberOfFixedChildren": 0,
+           "overlayPositionType": "CENTER",
+           "overlayBackground": {
+            "type": "NONE"
+           },
+           "overlayBackgroundInteraction": "NONE",
+           "explicitVariableModes": {},
+           "children": [
+            {
+             "id": "2:70",
+             "name": "Chase",
+             "type": "TEXT",
+             "x": 24,
+             "y": 28,
+             "width": 400,
+             "height": 24,
+             "characters": "Chase",
+             "fontName": {
+              "family": "Inter",
+              "style": "Regular"
+             },
+             "fills": [
+              {
+               "type": "SOLID",
+               "color": {
+                "r": 0.1,
+                "g": 0.1,
+                "b": 0.12
+               },
+               "opacity": 1,
+               "visible": true
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "2:61",
+           "name": "Bank of America",
+           "type": "FRAME",
+           "x": 0,
+           "y": 80,
+           "width": 600,
+           "height": 80,
+           "fills": [
+            {
+             "type": "SOLID",
+             "color": {
+              "r": 1,
+              "g": 1,
+              "b": 1
+             },
+             "opacity": 1,
+             "visible": true
+            }
+           ],
+           "clipsContent": false,
+           "overflowDirection": "NONE",
+           "numberOfFixedChildren": 0,
+           "overlayPositionType": "CENTER",
+           "overlayBackground": {
+            "type": "NONE"
+           },
+           "overlayBackgroundInteraction": "NONE",
+           "explicitVariableModes": {},
+           "children": [
+            {
+             "id": "2:71",
+             "name": "Bank of America",
+             "type": "TEXT",
+             "x": 24,
+             "y": 28,
+             "width": 400,
+             "height": 24,
+             "characters": "Bank of America",
+             "fontName": {
+              "family": "Inter",
+              "style": "Regular"
+             },
+             "fills": [
+              {
+               "type": "SOLID",
+               "color": {
+                "r": 0.1,
+                "g": 0.1,
+                "b": 0.12
+               },
+               "opacity": 1,
+               "visible": true
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "2:62",
+           "name": "Wells Fargo",
+           "type": "FRAME",
+           "x": 0,
+           "y": 160,
+           "width": 600,
+           "height": 80,
+           "fills": [
+            {
+             "type": "SOLID",
+             "color": {
+              "r": 1,
+              "g": 1,
+              "b": 1
+             },
+             "opacity": 1,
+             "visible": true
+            }
+           ],
+           "clipsContent": false,
+           "overflowDirection": "NONE",
+           "numberOfFixedChildren": 0,
+           "overlayPositionType": "CENTER",
+           "overlayBackground": {
+            "type": "NONE"
+           },
+           "overlayBackgroundInteraction": "NONE",
+           "explicitVariableModes": {},
+           "children": [
+            {
+             "id": "2:72",
+             "name": "Wells Fargo",
+             "type": "TEXT",
+             "x": 24,
+             "y": 28,
+             "width": 400,
+             "height": 24,
+             "characters": "Wells Fargo",
+             "fontName": {
+              "family": "Inter",
+              "style": "Regular"
+             },
+             "fills": [
+              {
+               "type": "SOLID",
+               "color": {
+                "r": 0.1,
+                "g": 0.1,
+                "b": 0.12
+               },
+               "opacity": 1,
+               "visible": true
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "2:63",
+           "name": "Citi",
+           "type": "FRAME",
+           "x": 0,
+           "y": 240,
+           "width": 600,
+           "height": 80,
+           "fills": [
+            {
+             "type": "SOLID",
+             "color": {
+              "r": 1,
+              "g": 1,
+              "b": 1
+             },
+             "opacity": 1,
+             "visible": true
+            }
+           ],
+           "clipsContent": false,
+           "overflowDirection": "NONE",
+           "numberOfFixedChildren": 0,
+           "overlayPositionType": "CENTER",
+           "overlayBackground": {
+            "type": "NONE"
+           },
+           "overlayBackgroundInteraction": "NONE",
+           "explicitVariableModes": {},
+           "children": [
+            {
+             "id": "2:73",
+             "name": "Citi",
+             "type": "TEXT",
+             "x": 24,
+             "y": 28,
+             "width": 400,
+             "height": 24,
+             "characters": "Citi",
+             "fontName": {
+              "family": "Inter",
+              "style": "Regular"
+             },
+             "fills": [
+              {
+               "type": "SOLID",
+               "color": {
+                "r": 0.1,
+                "g": 0.1,
+                "b": 0.12
+               },
+               "opacity": 1,
+               "visible": true
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "2:64",
+           "name": "Capital One",
+           "type": "FRAME",
+           "x": 0,
+           "y": 320,
+           "width": 600,
+           "height": 80,
+           "fills": [
+            {
+             "type": "SOLID",
+             "color": {
+              "r": 1,
+              "g": 1,
+              "b": 1
+             },
+             "opacity": 1,
+             "visible": true
+            }
+           ],
+           "clipsContent": false,
+           "overflowDirection": "NONE",
+           "numberOfFixedChildren": 0,
+           "overlayPositionType": "CENTER",
+           "overlayBackground": {
+            "type": "NONE"
+           },
+           "overlayBackgroundInteraction": "NONE",
+           "explicitVariableModes": {},
+           "children": [
+            {
+             "id": "2:74",
+             "name": "Capital One",
+             "type": "TEXT",
+             "x": 24,
+             "y": 28,
+             "width": 400,
+             "height": 24,
+             "characters": "Capital One",
+             "fontName": {
+              "family": "Inter",
+              "style": "Regular"
+             },
+             "fills": [
+              {
+               "type": "SOLID",
+               "color": {
+                "r": 0.1,
+                "g": 0.1,
+                "b": 0.12
+               },
+               "opacity": 1,
+               "visible": true
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "2:65",
+           "name": "US Bank",
+           "type": "FRAME",
+           "x": 0,
+           "y": 400,
+           "width": 600,
+           "height": 80,
+           "fills": [
+            {
+             "type": "SOLID",
+             "color": {
+              "r": 1,
+              "g": 1,
+              "b": 1
+             },
+             "opacity": 1,
+             "visible": true
+            }
+           ],
+           "clipsContent": false,
+           "overflowDirection": "NONE",
+           "numberOfFixedChildren": 0,
+           "overlayPositionType": "CENTER",
+           "overlayBackground": {
+            "type": "NONE"
+           },
+           "overlayBackgroundInteraction": "NONE",
+           "explicitVariableModes": {},
+           "children": [
+            {
+             "id": "2:75",
+             "name": "US Bank",
+             "type": "TEXT",
+             "x": 24,
+             "y": 28,
+             "width": 400,
+             "height": 24,
+             "characters": "US Bank",
+             "fontName": {
+              "family": "Inter",
+              "style": "Regular"
+             },
+             "fills": [
+              {
+               "type": "SOLID",
+               "color": {
+                "r": 0.1,
+                "g": 0.1,
+                "b": 0.12
+               },
+               "opacity": 1,
+               "visible": true
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "2:66",
+           "name": "PNC",
+           "type": "FRAME",
+           "x": 0,
+           "y": 480,
+           "width": 600,
+           "height": 80,
+           "fills": [
+            {
+             "type": "SOLID",
+             "color": {
+              "r": 1,
+              "g": 1,
+              "b": 1
+             },
+             "opacity": 1,
+             "visible": true
+            }
+           ],
+           "clipsContent": false,
+           "overflowDirection": "NONE",
+           "numberOfFixedChildren": 0,
+           "overlayPositionType": "CENTER",
+           "overlayBackground": {
+            "type": "NONE"
+           },
+           "overlayBackgroundInteraction": "NONE",
+           "explicitVariableModes": {},
+           "children": [
+            {
+             "id": "2:76",
+             "name": "PNC",
+             "type": "TEXT",
+             "x": 24,
+             "y": 28,
+             "width": 400,
+             "height": 24,
+             "characters": "PNC",
+             "fontName": {
+              "family": "Inter",
+              "style": "Regular"
+             },
+             "fills": [
+              {
+               "type": "SOLID",
+               "color": {
+                "r": 0.1,
+                "g": 0.1,
+                "b": 0.12
+               },
+               "opacity": 1,
+               "visible": true
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "2:67",
+           "name": "Truist",
+           "type": "FRAME",
+           "x": 0,
+           "y": 560,
+           "width": 600,
+           "height": 80,
+           "fills": [
+            {
+             "type": "SOLID",
+             "color": {
+              "r": 1,
+              "g": 1,
+              "b": 1
+             },
+             "opacity": 1,
+             "visible": true
+            }
+           ],
+           "clipsContent": false,
+           "overflowDirection": "NONE",
+           "numberOfFixedChildren": 0,
+           "overlayPositionType": "CENTER",
+           "overlayBackground": {
+            "type": "NONE"
+           },
+           "overlayBackgroundInteraction": "NONE",
+           "explicitVariableModes": {},
+           "children": [
+            {
+             "id": "2:77",
+             "name": "Truist",
+             "type": "TEXT",
+             "x": 24,
+             "y": 28,
+             "width": 400,
+             "height": 24,
+             "characters": "Truist",
+             "fontName": {
+              "family": "Inter",
+              "style": "Regular"
+             },
+             "fills": [
+              {
+               "type": "SOLID",
+               "color": {
+                "r": 0.1,
+                "g": 0.1,
+                "b": 0.12
+               },
+               "opacity": 1,
+               "visible": true
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "2:68",
+           "name": "TD Bank",
+           "type": "FRAME",
+           "x": 0,
+           "y": 640,
+           "width": 600,
+           "height": 80,
+           "fills": [
+            {
+             "type": "SOLID",
+             "color": {
+              "r": 1,
+              "g": 1,
+              "b": 1
+             },
+             "opacity": 1,
+             "visible": true
+            }
+           ],
+           "clipsContent": false,
+           "overflowDirection": "NONE",
+           "numberOfFixedChildren": 0,
+           "overlayPositionType": "CENTER",
+           "overlayBackground": {
+            "type": "NONE"
+           },
+           "overlayBackgroundInteraction": "NONE",
+           "explicitVariableModes": {},
+           "children": [
+            {
+             "id": "2:78",
+             "name": "TD Bank",
+             "type": "TEXT",
+             "x": 24,
+             "y": 28,
+             "width": 400,
+             "height": 24,
+             "characters": "TD Bank",
+             "fontName": {
+              "family": "Inter",
+              "style": "Regular"
+             },
+             "fills": [
+              {
+               "type": "SOLID",
+               "color": {
+                "r": 0.1,
+                "g": 0.1,
+                "b": 0.12
+               },
+               "opacity": 1,
+               "visible": true
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "2:69",
+           "name": "Ally",
+           "type": "FRAME",
+           "x": 0,
+           "y": 720,
+           "width": 600,
+           "height": 80,
+           "fills": [
+            {
+             "type": "SOLID",
+             "color": {
+              "r": 1,
+              "g": 1,
+              "b": 1
+             },
+             "opacity": 1,
+             "visible": true
+            }
+           ],
+           "clipsContent": false,
+           "overflowDirection": "NONE",
+           "numberOfFixedChildren": 0,
+           "overlayPositionType": "CENTER",
+           "overlayBackground": {
+            "type": "NONE"
+           },
+           "overlayBackgroundInteraction": "NONE",
+           "explicitVariableModes": {},
+           "children": [
+            {
+             "id": "2:79",
+             "name": "Ally",
+             "type": "TEXT",
+             "x": 24,
+             "y": 28,
+             "width": 400,
+             "height": 24,
+             "characters": "Ally",
+             "fontName": {
+              "family": "Inter",
+              "style": "Regular"
+             },
+             "fills": [
+              {
+               "type": "SOLID",
+               "color": {
+                "r": 0.1,
+                "g": 0.1,
+                "b": 0.12
+               },
+               "opacity": 1,
+               "visible": true
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        },
+        {
+         "id": "2:21",
+         "name": "Sign in with your bank",
+         "type": "INSTANCE",
+         "x": 40,
+         "y": 600,
+         "width": 320,
+         "height": 48,
+         "mainComponentId": "6:2",
+         "fills": [
+          {
+           "type": "SOLID",
+           "color": {
+            "r": 0.15,
+            "g": 0.35,
+            "b": 0.9
+           },
+           "opacity": 1,
+           "visible": true
+          }
+         ],
+         "reactions": [
+          {
+           "trigger": {
+            "type": "ON_CLICK"
+           },
+           "action": {
+            "type": "NODE",
+            "destinationId": "3:1",
+            "navigation": "OVERLAY",
+            "transition": null
+           }
+          }
+         ],
+         "children": [
+          {
+           "id": "I2:21;6:3",
+           "name": "Label",
+           "type": "TEXT",
+           "x": 16,
+           "y": 12,
+           "width": 288,
+           "height": 24,
+           "characters": "Sign in with your bank",
+           "fontName": {
+            "family": "Inter",
+            "style": "Regular"
+           },
+           "fills": [
+            {
+             "type": "SOLID",
+             "color": {
+              "r": 0.1,
+              "g": 0.1,
+              "b": 0.12
+             },
+             "opacity": 1,
+             "visible": true
+            }
+           ]
+          },
+          {
+           "id": "I2:21;6:4",
+           "name": "Spinner",
+           "type": "FRAME",
+           "x": 292,
+           "y": 12,
+           "width": 16,
+           "height": 16,
+           "visible": false,
+           "reactions": [
+            {
+             "trigger": {
+              "type": "ON_CLICK"
+             },
+             "actions": [
+              {
+               "type": "URL",
+               "url": "https://status.example.com"
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        },
+        {
+         "id": "2:23",
+         "name": "Frame 48",
+         "type": "FRAME",
+         "x": 40,
+         "y": 680,
+         "width": 320,
+         "height": 24,
+         "fills": [],
+         "clipsContent": false,
+         "overflowDirection": "NONE",
+         "numberOfFixedChildren": 0,
+         "overlayPositionType": "CENTER",
+         "overlayBackground": {
+          "type": "NONE"
+         },
+         "overlayBackgroundInteraction": "NONE",
+         "explicitVariableModes": {},
+         "reactions": [
+          {
+           "trigger": {
+            "type": "ON_CLICK"
+           },
+           "actions": [
+            {
+             "type": "NODE",
+             "destinationId": null,
+             "navigation": "NAVIGATE",
+             "transition": null
+            }
+           ]
+          }
+         ],
+         "children": [
+          {
+           "id": "2:27",
+           "name": "Use routing number instead",
+           "type": "TEXT",
+           "x": 0,
+           "y": 0,
+           "width": 320,
+           "height": 24,
+           "characters": "Use routing number instead",
+           "fontName": {
+            "family": "Inter",
+            "style": "Regular"
+           },
+           "fills": [
+            {
+             "type": "SOLID",
+             "color": {
+              "r": 0.1,
+              "g": 0.1,
+              "b": 0.12
+             },
+             "opacity": 1,
+             "visible": true
+            }
+           ]
+          }
+         ]
+        },
+        {
+         "id": "2:22",
+         "name": "Continue",
+         "type": "INSTANCE",
+         "x": 40,
+         "y": 1400,
+         "width": 240,
+         "height": 48,
+         "mainComponentId": "6:2",
+         "fills": [
+          {
+           "type": "SOLID",
+           "color": {
+            "r": 0.15,
+            "g": 0.35,
+            "b": 0.9
+           },
+           "opacity": 1,
+           "visible": true
+          }
+         ],
+         "reactions": [
+          {
+           "trigger": {
+            "type": "ON_CLICK"
+           },
+           "actions": [
+            {
+             "type": "NODE",
+             "destinationId": "2:30",
+             "navigation": "NAVIGATE",
+             "transition": null,
+             "resetScrollPosition": true
+            }
+           ]
+          }
+         ],
+         "boundVariables": {
+          "fills": [
+           {
+            "type": "VARIABLE_ALIAS",
+            "id": "VariableID:10:3"
+           }
+          ]
+         },
+         "children": [
+          {
+           "id": "I2:22;6:3",
+           "name": "Label",
+           "type": "TEXT",
+           "x": 16,
+           "y": 12,
+           "width": 208,
+           "height": 24,
+           "characters": "Continue",
+           "fontName": {
+            "family": "Inter",
+            "style": "Regular"
+           },
+           "fills": [
+            {
+             "type": "SOLID",
+             "color": {
+              "r": 0.1,
+              "g": 0.1,
+              "b": 0.12
+             },
+             "opacity": 1,
+             "visible": true
+            }
+           ]
+          },
+          {
+           "id": "I2:22;6:4",
+           "name": "Spinner",
+           "type": "FRAME",
+           "x": 212,
+           "y": 12,
+           "width": 16,
+           "height": 16,
+           "visible": false
+          }
+         ]
+        },
+        {
+         "id": "2:28",
+         "name": "Header",
+         "type": "FRAME",
+         "x": 0,
+         "y": 0,
+         "width": 1280,
+         "height": 96,
+         "fills": [
+          {
+           "type": "SOLID",
+           "color": {
+            "r": 1,
+            "g": 1,
+            "b": 1
+           },
+           "opacity": 1,
+           "visible": true
+          }
+         ],
+         "clipsContent": true,
+         "overflowDirection": "NONE",
+         "numberOfFixedChildren": 0,
+         "overlayPositionType": "CENTER",
+         "overlayBackground": {
+          "type": "NONE"
+         },
+         "overlayBackgroundInteraction": "NONE",
+         "explicitVariableModes": {},
+         "children": [
+          {
+           "id": "2:29",
+           "name": "Connect your bank",
+           "type": "TEXT",
+           "x": 40,
+           "y": 32,
+           "width": 600,
+           "height": 32,
+           "characters": "Connect your bank",
+           "fontName": {
+            "family": "Inter",
+            "style": "Regular"
+           },
+           "fills": [
+            {
+             "type": "SOLID",
+             "color": {
+              "r": 0.1,
+              "g": 0.1,
+              "b": 0.12
+             },
+             "opacity": 1,
+             "visible": true
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "id": "2:30",
+       "name": "Verify phone",
+       "type": "FRAME",
+       "x": 2800,
+       "y": 0,
+       "width": 1280,
+       "height": 800,
+       "fills": [
+        {
+         "type": "SOLID",
+         "color": {
+          "r": 1,
+          "g": 1,
+          "b": 1
+         },
+         "opacity": 1,
+         "visible": true
+        }
+       ],
+       "clipsContent": true,
+       "overflowDirection": "NONE",
+       "numberOfFixedChildren": 0,
+       "overlayPositionType": "CENTER",
+       "overlayBackground": {
+        "type": "NONE"
+       },
+       "overlayBackgroundInteraction": "NONE",
+       "explicitVariableModes": {},
+       "reactions": [
+        {
+         "trigger": {
+          "type": "ON_KEY_DOWN",
+          "device": "KEYBOARD",
+          "keyCodes": [
+           13
+          ]
+         },
+         "actions": [
+          {
+           "type": "NODE",
+           "destinationId": "2:50",
+           "navigation": "NAVIGATE",
+           "transition": null
+          }
+         ]
+        }
+       ],
+       "children": [
+        {
+         "id": "2:35",
+         "name": "Code field",
+         "type": "FRAME",
+         "x": 40,
+         "y": 200,
+         "width": 320,
+         "height": 48,
+         "fills": [
+          {
+           "type": "SOLID",
+           "color": {
+            "r": 0.96,
+            "g": 0.96,
+            "b": 0.97
+           },
+           "opacity": 1,
+           "visible": true
+          }
+         ],
+         "clipsContent": true,
+         "overflowDirection": "NONE",
+         "numberOfFixedChildren": 0,
+         "overlayPositionType": "CENTER",
+         "overlayBackground": {
+          "type": "NONE"
+         },
+         "overlayBackgroundInteraction": "NONE",
+         "explicitVariableModes": {},
+         "children": [
+          {
+           "id": "2:36",
+           "name": "Enter the 6 digit code",
+           "type": "TEXT",
+           "x": 12,
+           "y": 12,
+           "width": 296,
+           "height": 24,
+           "characters": "Enter the 6 digit code",
+           "fontName": {
+            "family": "Inter",
+            "style": "Regular"
+           },
+           "fills": [
+            {
+             "type": "SOLID",
+             "color": {
+              "r": 0.1,
+              "g": 0.1,
+              "b": 0.12
+             },
+             "opacity": 1,
+             "visible": true
+            }
+           ]
+          }
+         ]
+        },
+        {
+         "id": "2:31",
+         "name": "Send code",
+         "type": "INSTANCE",
+         "x": 40,
+         "y": 280,
+         "width": 240,
+         "height": 48,
+         "mainComponentId": "6:2",
+         "fills": [
+          {
+           "type": "SOLID",
+           "color": {
+            "r": 0.15,
+            "g": 0.35,
+            "b": 0.9
+           },
+           "opacity": 1,
+           "visible": true
+          }
+         ],
+         "reactions": [
+          {
+           "trigger": {
+            "type": "ON_CLICK"
+           },
+           "actions": [
+            {
+             "type": "SET_VARIABLE",
+             "variableId": "VariableID:10:1",
+             "variableValue": {
+              "type": "BOOLEAN",
+              "resolvedType": "BOOLEAN",
+              "value": true
+             }
+            },
+            {
+             "type": "NODE",
+             "destinationId": "2:50",
+             "navigation": "NAVIGATE",
+             "transition": null
+            }
+           ]
+          }
+         ],
+         "children": [
+          {
+           "id": "I2:31;6:3",
+           "name": "Label",
+           "type": "TEXT",
+           "x": 16,
+           "y": 12,
+           "width": 208,
+           "height": 24,
+           "characters": "Send code",
+           "fontName": {
+            "family": "Inter",
+            "style": "Regular"
+           },
+           "fills": [
+            {
+             "type": "SOLID",
+             "color": {
+              "r": 0.1,
+              "g": 0.1,
+              "b": 0.12
+             },
+             "opacity": 1,
+             "visible": true
+            }
+           ]
+          },
+          {
+           "id": "I2:31;6:4",
+           "name": "Spinner",
+           "type": "FRAME",
+           "x": 212,
+           "y": 12,
+           "width": 16,
+           "height": 16,
+           "visible": false
+          }
+         ]
+        },
+        {
+         "id": "2:34",
+         "name": "Resend code",
+         "type": "TEXT",
+         "x": 40,
+         "y": 344,
+         "width": 200,
+         "height": 24,
+         "characters": "Resend code",
+         "fontName": {
+          "family": "Inter",
+          "style": "Regular"
+         },
+         "fills": [
+          {
+           "type": "SOLID",
+           "color": {
+            "r": 0.1,
+            "g": 0.1,
+            "b": 0.12
+           },
+           "opacity": 1,
+           "visible": true
+          }
+         ],
+         "reactions": [
+          {
+           "trigger": {
+            "type": "ON_CLICK"
+           },
+           "actions": [
+            {
+             "type": "SET_VARIABLE",
+             "variableId": "VariableID:10:2",
+             "variableValue": {
+              "type": "EXPRESSION",
+              "value": {
+               "expressionFunction": "ADDITION",
+               "expressionArguments": [
+                {
+                 "type": "VARIABLE_ALIAS",
+                 "value": {
+                  "type": "VARIABLE_ALIAS",
+                  "id": "VariableID:10:2"
+                 }
+                },
+                {
+                 "type": "FLOAT",
+                 "value": 1
+                }
+               ]
+              }
+             }
+            },
+            {
+             "type": "CONDITIONAL",
+             "conditionalBlocks": [
+              {
+               "condition": {
+                "type": "EXPRESSION",
+                "value": {
+                 "expressionFunction": "GREATER_THAN",
+                 "expressionArguments": [
+                  {
+                   "type": "VARIABLE_ALIAS",
+                   "value": {
+                    "type": "VARIABLE_ALIAS",
+                    "id": "VariableID:10:2"
+                   }
+                  },
+                  {
+                   "type": "FLOAT",
+                   "value": 2
+                  }
+                 ]
+                }
+               },
+               "actions": [
+                {
+                 "type": "NODE",
+                 "destinationId": "3:1",
+                 "navigation": "OVERLAY",
+                 "transition": null
+                }
+               ]
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        },
+        {
+         "id": "2:32",
+         "name": "Back",
+         "type": "INSTANCE",
+         "x": 40,
+         "y": 40,
+         "width": 80,
+         "height": 32,
+         "mainComponentId": "6:2",
+         "fills": [
+          {
+           "type": "SOLID",
+           "color": {
+            "r": 0.15,
+            "g": 0.35,
+            "b": 0.9
+           },
+           "opacity": 1,
+           "visible": true
+          }
+         ],
+         "reactions": [
+          {
+           "trigger": {
+            "type": "ON_CLICK"
+           },
+           "actions": [
+            {
+             "type": "BACK"
+            }
+           ]
+          }
+         ],
+         "children": [
+          {
+           "id": "I2:32;6:3",
+           "name": "Label",
+           "type": "TEXT",
+           "x": 16,
+           "y": 12,
+           "width": 48,
+           "height": 24,
+           "characters": "Back",
+           "fontName": {
+            "family": "Inter",
+            "style": "Regular"
+           },
+           "fills": [
+            {
+             "type": "SOLID",
+             "color": {
+              "r": 0.1,
+              "g": 0.1,
+              "b": 0.12
+             },
+             "opacity": 1,
+             "visible": true
+            }
+           ]
+          },
+          {
+           "id": "I2:32;6:4",
+           "name": "Spinner",
+           "type": "FRAME",
+           "x": 52,
+           "y": 12,
+           "width": 16,
+           "height": 16,
+           "visible": false
+          }
+         ]
+        },
+        {
+         "id": "2:33",
+         "name": "Remember this device",
+         "type": "INSTANCE",
+         "x": 40,
+         "y": 400,
+         "width": 48,
+         "height": 24,
+         "mainComponentId": "8:2",
+         "fills": [
+          {
+           "type": "SOLID",
+           "color": {
+            "r": 0.96,
+            "g": 0.96,
+            "b": 0.97
+           },
+           "opacity": 1,
+           "visible": true
+          }
+         ],
+         "reactions": [
+          {
+           "trigger": {
+            "type": "ON_CLICK"
+           },
+           "actions": [
+            {
+             "type": "NODE",
+             "destinationId": "8:4",
+             "navigation": "CHANGE_TO",
+             "transition": null
+            }
+           ]
+          }
+         ],
+         "children": [
+          {
+           "id": "I2:33;8:3",
+           "name": "Knob",
+           "type": "ELLIPSE",
+           "x": 2,
+           "y": 2,
+           "width": 20,
+           "height": 20,
+           "fills": [
+            {
+             "type": "SOLID",
+             "color": {
+              "r": 1,
+              "g": 1,
+              "b": 1
+             },
+             "opacity": 1,
+             "visible": true
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "id": "2:40",
+       "name": "Help: What is ACH",
+       "type": "FRAME",
+       "x": 4200,
+       "y": 0,
+       "width": 640,
+       "height": 480,
+       "fills": [
+        {
+         "type": "SOLID",
+         "color": {
+          "r": 1,
+          "g": 1,
+          "b": 1
+         },
+         "opacity": 1,
+         "visible": true
+        }
+       ],
+       "clipsContent": true,
+       "overflowDirection": "NONE",
+       "numberOfFixedChildren": 0,
+       "overlayPositionType": "CENTER",
+       "overlayBackground": {
+        "type": "NONE"
+       },
+       "overlayBackgroundInteraction": "NONE",
+       "explicitVariableModes": {},
+       "children": [
+        {
+         "id": "2:41",
+         "name": "Close",
+         "type": "INSTANCE",
+         "x": 560,
+         "y": 24,
+         "width": 56,
+         "height": 32,
+         "mainComponentId": "6:2",
+         "fills": [
+          {
+           "type": "SOLID",
+           "color": {
+            "r": 0.15,
+            "g": 0.35,
+            "b": 0.9
+           },
+           "opacity": 1,
+           "visible": true
+          }
+         ],
+         "reactions": [
+          {
+           "trigger": {
+            "type": "ON_CLICK"
+           },
+           "actions": [
+            {
+             "type": "BACK"
+            }
+           ]
+          }
+         ],
+         "children": [
+          {
+           "id": "I2:41;6:3",
+           "name": "Label",
+           "type": "TEXT",
+           "x": 16,
+           "y": 12,
+           "width": 24,
+           "height": 24,
+           "characters": "Close",
+           "fontName": {
+            "family": "Inter",
+            "style": "Regular"
+           },
+           "fills": [
+            {
+             "type": "SOLID",
+             "color": {
+              "r": 0.1,
+              "g": 0.1,
+              "b": 0.12
+             },
+             "opacity": 1,
+             "visible": true
+            }
+           ]
+          },
+          {
+           "id": "I2:41;6:4",
+           "name": "Spinner",
+           "type": "FRAME",
+           "x": 28,
+           "y": 12,
+           "width": 16,
+           "height": 16,
+           "visible": false
+          }
+         ]
+        },
+        {
+         "id": "2:42",
+         "name": "Learn more",
+         "type": "TEXT",
+         "x": 40,
+         "y": 400,
+         "width": 200,
+         "height": 24,
+         "characters": "Learn more",
+         "fontName": {
+          "family": "Inter",
+          "style": "Regular"
+         },
+         "fills": [
+          {
+           "type": "SOLID",
+           "color": {
+            "r": 0.1,
+            "g": 0.1,
+            "b": 0.12
+           },
+           "opacity": 1,
+           "visible": true
+          }
+         ],
+         "reactions": [
+          {
+           "trigger": {
+            "type": "ON_CLICK"
+           },
+           "actions": [
+            {
+             "type": "URL",
+             "url": "https://www.nacha.org/content/what-is-ach",
+             "openInNewTab": true
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "id": "2:50",
+       "name": "Bank connected",
+       "type": "FRAME",
+       "x": 0,
+       "y": 1000,
+       "width": 1280,
+       "height": 800,
+       "fills": [
+        {
+         "type": "SOLID",
+         "color": {
+          "r": 1,
+          "g": 1,
+          "b": 1
+         },
+         "opacity": 1,
+         "visible": true
+        }
+       ],
+       "clipsContent": true,
+       "overflowDirection": "NONE",
+       "numberOfFixedChildren": 0,
+       "overlayPositionType": "CENTER",
+       "overlayBackground": {
+        "type": "NONE"
+       },
+       "overlayBackgroundInteraction": "NONE",
+       "explicitVariableModes": {},
+       "children": [
+        {
+         "id": "2:51",
+         "name": "Done",
+         "type": "INSTANCE",
+         "x": 40,
+         "y": 600,
+         "width": 160,
+         "height": 48,
+         "mainComponentId": "6:2",
+         "fills": [
+          {
+           "type": "SOLID",
+           "color": {
+            "r": 0.15,
+            "g": 0.35,
+            "b": 0.9
+           },
+           "opacity": 1,
+           "visible": true
+          }
+         ],
+         "reactions": [
+          {
+           "trigger": {
+            "type": "ON_CLICK"
+           },
+           "actions": [
+            {
+             "type": "NODE",
+             "destinationId": "1:2",
+             "navigation": "NAVIGATE",
+             "transition": null,
+             "preserveScrollPosition": false,
+             "resetInteractiveComponents": true
+            }
+           ]
+          }
+         ],
+         "children": [
+          {
+           "id": "I2:51;6:3",
+           "name": "Label",
+           "type": "TEXT",
+           "x": 16,
+           "y": 12,
+           "width": 128,
+           "height": 24,
+           "characters": "Done",
+           "fontName": {
+            "family": "Inter",
+            "style": "Regular"
+           },
+           "fills": [
+            {
+             "type": "SOLID",
+             "color": {
+              "r": 0.1,
+              "g": 0.1,
+              "b": 0.12
+             },
+             "opacity": 1,
+             "visible": true
+            }
+           ]
+          },
+          {
+           "id": "I2:51;6:4",
+           "name": "Spinner",
+           "type": "FRAME",
+           "x": 132,
+           "y": 12,
+           "width": 16,
+           "height": 16,
+           "visible": false
+          }
+         ]
+        },
+        {
+         "id": "2:52",
+         "name": "Linked badge",
+         "type": "FRAME",
+         "x": 40,
+         "y": 200,
+         "width": 200,
+         "height": 40,
+         "fills": [
+          {
+           "type": "SOLID",
+           "color": {
+            "r": 0.96,
+            "g": 0.96,
+            "b": 0.97
+           },
+           "opacity": 1,
+           "visible": true
+          }
+         ],
+         "clipsContent": true,
+         "overflowDirection": "NONE",
+         "numberOfFixedChildren": 0,
+         "overlayPositionType": "CENTER",
+         "overlayBackground": {
+          "type": "NONE"
+         },
+         "overlayBackgroundInteraction": "NONE",
+         "explicitVariableModes": {},
+         "boundVariables": {
+          "visible": {
+           "type": "VARIABLE_ALIAS",
+           "id": "VariableID:10:1"
+          }
+         },
+         "children": [
+          {
+           "id": "2:53",
+           "name": "Bank linked",
+           "type": "TEXT",
+           "x": 12,
+           "y": 8,
+           "width": 176,
+           "height": 24,
+           "characters": "Bank linked",
+           "fontName": {
+            "family": "Inter",
+            "style": "Regular"
+           },
+           "fills": [
+            {
+             "type": "SOLID",
+             "color": {
+              "r": 0.1,
+              "g": 0.1,
+              "b": 0.12
+             },
+             "opacity": 1,
+             "visible": true
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "id": "3:1",
+     "name": "Bank sign in error",
+     "type": "FRAME",
+     "x": 0,
+     "y": 2000,
+     "width": 480,
+     "height": 240,
+     "fills": [
+      {
+       "type": "SOLID",
+       "color": {
+        "r": 1,
+        "g": 1,
+        "b": 1
+       },
+       "opacity": 1,
+       "visible": true
+      }
+     ],
+     "clipsContent": true,
+     "overflowDirection": "NONE",
+     "numberOfFixedChildren": 0,
+     "overlayPositionType": "CENTER",
+     "overlayBackground": {
+      "type": "SOLID_COLOR",
+      "color": {
+       "r": 0,
+       "g": 0,
+       "b": 0,
+       "a": 0.4
+      }
+     },
+     "overlayBackgroundInteraction": "CLOSE_ON_CLICK_OUTSIDE",
+     "explicitVariableModes": {},
+     "reactions": [
+      {
+       "trigger": {
+        "type": "AFTER_TIMEOUT",
+        "timeout": 4000
+       },
+       "actions": [
+        {
+         "type": "CLOSE"
+        }
+       ]
+      }
+     ],
+     "children": [
+      {
+       "id": "3:4",
+       "name": "We couldn't reach your bank",
+       "type": "TEXT",
+       "x": 24,
+       "y": 24,
+       "width": 432,
+       "height": 32,
+       "characters": "We couldn't reach your bank",
+       "fontName": {
+        "family": "Inter",
+        "style": "Regular"
+       },
+       "fills": [
+        {
+         "type": "SOLID",
+         "color": {
+          "r": 0.1,
+          "g": 0.1,
+          "b": 0.12
+         },
+         "opacity": 1,
+         "visible": true
+        }
+       ]
+      },
+      {
+       "id": "3:2",
+       "name": "Try again",
+       "type": "INSTANCE",
+       "x": 24,
+       "y": 168,
+       "width": 160,
+       "height": 48,
+       "mainComponentId": "6:2",
+       "fills": [
+        {
+         "type": "SOLID",
+         "color": {
+          "r": 0.15,
+          "g": 0.35,
+          "b": 0.9
+         },
+         "opacity": 1,
+         "visible": true
+        }
+       ],
+       "reactions": [
+        {
+         "trigger": {
+          "type": "ON_CLICK"
+         },
+         "actions": [
+          {
+           "type": "CLOSE"
+          }
+         ]
+        }
+       ],
+       "children": [
+        {
+         "id": "I3:2;6:3",
+         "name": "Label",
+         "type": "TEXT",
+         "x": 16,
+         "y": 12,
+         "width": 128,
+         "height": 24,
+         "characters": "Try again",
+         "fontName": {
+          "family": "Inter",
+          "style": "Regular"
+         },
+         "fills": [
+          {
+           "type": "SOLID",
+           "color": {
+            "r": 0.1,
+            "g": 0.1,
+            "b": 0.12
+           },
+           "opacity": 1,
+           "visible": true
+          }
+         ]
+        },
+        {
+         "id": "I3:2;6:4",
+         "name": "Spinner",
+         "type": "FRAME",
+         "x": 132,
+         "y": 12,
+         "width": 16,
+         "height": 16,
+         "visible": false
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "id": "3:3",
+     "name": "ACH tooltip",
+     "type": "FRAME",
+     "x": 600,
+     "y": 2000,
+     "width": 240,
+     "height": 80,
+     "fills": [
+      {
+       "type": "SOLID",
+       "color": {
+        "r": 1,
+        "g": 1,
+        "b": 1
+       },
+       "opacity": 1,
+       "visible": true
+      }
+     ],
+     "clipsContent": true,
+     "overflowDirection": "NONE",
+     "numberOfFixedChildren": 0,
+     "overlayPositionType": "MANUAL",
+     "overlayBackground": {
+      "type": "NONE"
+     },
+     "overlayBackgroundInteraction": "NONE",
+     "explicitVariableModes": {},
+     "children": [
+      {
+       "id": "3:7",
+       "name": "Bank to bank transfers",
+       "type": "TEXT",
+       "x": 12,
+       "y": 12,
+       "width": 216,
+       "height": 48,
+       "characters": "Bank to bank transfers",
+       "fontName": {
+        "family": "Inter",
+        "style": "Regular"
+       },
+       "fills": [
+        {
+         "type": "SOLID",
+         "color": {
+          "r": 0.1,
+          "g": 0.1,
+          "b": 0.12
+         },
+         "opacity": 1,
+         "visible": true
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "id": "3:5",
+     "name": "Plans",
+     "type": "COMPONENT",
+     "x": 0,
+     "y": 2400,
+     "width": 1280,
+     "height": 800,
+     "fills": [
+      {
+       "type": "SOLID",
+       "color": {
+        "r": 1,
+        "g": 1,
+        "b": 1
+       },
+       "opacity": 1,
+       "visible": true
+      }
+     ],
+     "clipsContent": true,
+     "overflowDirection": "NONE",
+     "numberOfFixedChildren": 0,
+     "overlayPositionType": "CENTER",
+     "overlayBackground": {
+      "type": "NONE"
+     },
+     "overlayBackgroundInteraction": "NONE",
+     "explicitVariableModes": {
+      "VariableCollectionId:10:0": "10:1"
+     },
+     "children": [
+      {
+       "id": "3:6",
+       "name": "Plan chip",
+       "type": "INSTANCE",
+       "x": 40,
+       "y": 200,
+       "width": 160,
+       "height": 40,
+       "mainComponentId": "9:2",
+       "reactions": [
+        {
+         "trigger": {
+          "type": "ON_CLICK"
+         },
+         "actions": [
+          {
+           "type": "NODE",
+           "destinationId": "9:3",
+           "navigation": "CHANGE_TO",
+           "transition": null
+          }
+         ]
+        }
+       ],
+       "children": [
+        {
+         "id": "I3:6;L:3",
+         "name": "Label",
+         "type": "TEXT",
+         "x": 12,
+         "y": 8,
+         "width": 136,
+         "height": 24,
+         "characters": "Basic",
+         "fontName": {
+          "family": "Inter",
+          "style": "Regular"
+         },
+         "fills": [
+          {
+           "type": "SOLID",
+           "color": {
+            "r": 0.1,
+            "g": 0.1,
+            "b": 0.12
+           },
+           "opacity": 1,
+           "visible": true
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "id": "4:1",
+     "name": "Old onboarding",
+     "type": "FRAME",
+     "x": 0,
+     "y": 3400,
+     "width": 1280,
+     "height": 800,
+     "fills": [
+      {
+       "type": "SOLID",
+       "color": {
+        "r": 1,
+        "g": 1,
+        "b": 1
+       },
+       "opacity": 1,
+       "visible": true
+      }
+     ],
+     "clipsContent": true,
+     "overflowDirection": "NONE",
+     "numberOfFixedChildren": 0,
+     "overlayPositionType": "CENTER",
+     "overlayBackground": {
+      "type": "NONE"
+     },
+     "overlayBackgroundInteraction": "NONE",
+     "explicitVariableModes": {},
+     "children": [
+      {
+       "id": "4:2",
+       "name": "Start",
+       "type": "INSTANCE",
+       "x": 40,
+       "y": 600,
+       "width": 160,
+       "height": 48,
+       "mainComponentId": "6:2",
+       "fills": [
+        {
+         "type": "SOLID",
+         "color": {
+          "r": 0.15,
+          "g": 0.35,
+          "b": 0.9
+         },
+         "opacity": 1,
+         "visible": true
+        }
+       ],
+       "reactions": [
+        {
+         "trigger": {
+          "type": "ON_CLICK"
+         },
+         "actions": [
+          {
+           "type": "NODE",
+           "destinationId": "1:2",
+           "navigation": "NAVIGATE",
+           "transition": null
+          }
+         ]
+        }
+       ],
+       "children": [
+        {
+         "id": "I4:2;6:3",
+         "name": "Label",
+         "type": "TEXT",
+         "x": 16,
+         "y": 12,
+         "width": 128,
+         "height": 24,
+         "characters": "Start",
+         "fontName": {
+          "family": "Inter",
+          "style": "Regular"
+         },
+         "fills": [
+          {
+           "type": "SOLID",
+           "color": {
+            "r": 0.1,
+            "g": 0.1,
+            "b": 0.12
+           },
+           "opacity": 1,
+           "visible": true
+          }
+         ]
+        },
+        {
+         "id": "I4:2;6:4",
+         "name": "Spinner",
+         "type": "FRAME",
+         "x": 132,
+         "y": 12,
+         "width": 16,
+         "height": 16,
+         "visible": false
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "id": "6:9",
+     "name": "Sticky note",
+     "type": "TEXT",
+     "x": 2000,
+     "y": 2400,
+     "width": 200,
+     "height": 100,
+     "characters": "Remember to fix the help icon name",
+     "fontName": {
+      "family": "Inter",
+      "style": "Regular"
+     },
+     "fills": [
+      {
+       "type": "SOLID",
+       "color": {
+        "r": 0.1,
+        "g": 0.1,
+        "b": 0.12
+       },
+       "opacity": 1,
+       "visible": true
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "0:2",
+   "name": "Archive",
+   "type": "PAGE",
+   "children": [
+    {
+     "id": "7:1",
+     "name": "Release notes",
+     "type": "FRAME",
+     "x": 0,
+     "y": 0,
+     "width": 1280,
+     "height": 800,
+     "fills": [
+      {
+       "type": "SOLID",
+       "color": {
+        "r": 1,
+        "g": 1,
+        "b": 1
+       },
+       "opacity": 1,
+       "visible": true
+      }
+     ],
+     "clipsContent": true,
+     "overflowDirection": "NONE",
+     "numberOfFixedChildren": 0,
+     "overlayPositionType": "CENTER",
+     "overlayBackground": {
+      "type": "NONE"
+     },
+     "overlayBackgroundInteraction": "NONE",
+     "explicitVariableModes": {},
+     "children": [
+      {
+       "id": "7:2",
+       "name": "Back",
+       "type": "INSTANCE",
+       "x": 40,
+       "y": 40,
+       "width": 80,
+       "height": 32,
+       "mainComponentId": "6:2",
+       "fills": [
+        {
+         "type": "SOLID",
+         "color": {
+          "r": 0.15,
+          "g": 0.35,
+          "b": 0.9
+         },
+         "opacity": 1,
+         "visible": true
+        }
+       ],
+       "reactions": [
+        {
+         "trigger": {
+          "type": "ON_CLICK"
+         },
+         "actions": [
+          {
+           "type": "BACK"
+          }
+         ]
+        }
+       ],
+       "children": [
+        {
+         "id": "I7:2;6:3",
+         "name": "Label",
+         "type": "TEXT",
+         "x": 16,
+         "y": 12,
+         "width": 48,
+         "height": 24,
+         "characters": "Back",
+         "fontName": {
+          "family": "Inter",
+          "style": "Regular"
+         },
+         "fills": [
+          {
+           "type": "SOLID",
+           "color": {
+            "r": 0.1,
+            "g": 0.1,
+            "b": 0.12
+           },
+           "opacity": 1,
+           "visible": true
+          }
+         ]
+        },
+        {
+         "id": "I7:2;6:4",
+         "name": "Spinner",
+         "type": "FRAME",
+         "x": 52,
+         "y": 12,
+         "width": 16,
+         "height": 16,
+         "visible": false
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "id": "7:5",
+     "name": "Saved items",
+     "type": "FRAME",
+     "x": 1400,
+     "y": 0,
+     "width": 1280,
+     "height": 800,
+     "fills": [
+      {
+       "type": "SOLID",
+       "color": {
+        "r": 1,
+        "g": 1,
+        "b": 1
+       },
+       "opacity": 1,
+       "visible": true
+      }
+     ],
+     "clipsContent": true,
+     "overflowDirection": "NONE",
+     "numberOfFixedChildren": 0,
+     "overlayPositionType": "CENTER",
+     "overlayBackground": {
+      "type": "NONE"
+     },
+     "overlayBackgroundInteraction": "NONE",
+     "explicitVariableModes": {}
+    }
+   ]
+  },
+  {
+   "id": "0:3",
+   "name": "Components",
+   "type": "PAGE",
+   "children": [
+    {
+     "id": "6:2",
+     "name": "Button",
+     "type": "COMPONENT",
+     "x": 0,
+     "y": 0,
+     "width": 240,
+     "height": 48,
+     "fills": [
+      {
+       "type": "SOLID",
+       "color": {
+        "r": 0.15,
+        "g": 0.35,
+        "b": 0.9
+       },
+       "opacity": 1,
+       "visible": true
+      }
+     ],
+     "key": "local-button",
+     "children": [
+      {
+       "id": "6:3",
+       "name": "Label",
+       "type": "TEXT",
+       "x": 16,
+       "y": 12,
+       "width": 208,
+       "height": 24,
+       "characters": "Button",
+       "fontName": {
+        "family": "Inter",
+        "style": "Regular"
+       },
+       "fills": [
+        {
+         "type": "SOLID",
+         "color": {
+          "r": 0.1,
+          "g": 0.1,
+          "b": 0.12
+         },
+         "opacity": 1,
+         "visible": true
+        }
+       ]
+      },
+      {
+       "id": "6:4",
+       "name": "Spinner",
+       "type": "FRAME",
+       "x": 212,
+       "y": 12,
+       "width": 16,
+       "height": 16,
+       "visible": false
+      }
+     ]
+    },
+    {
+     "id": "8:1",
+     "name": "Toggle",
+     "type": "COMPONENT_SET",
+     "x": 400,
+     "y": 0,
+     "width": 200,
+     "height": 100,
+     "children": [
+      {
+       "id": "8:2",
+       "name": "State=Off",
+       "type": "COMPONENT",
+       "x": 20,
+       "y": 20,
+       "width": 48,
+       "height": 24,
+       "fills": [
+        {
+         "type": "SOLID",
+         "color": {
+          "r": 0.96,
+          "g": 0.96,
+          "b": 0.97
+         },
+         "opacity": 1,
+         "visible": true
+        }
+       ],
+       "reactions": [
+        {
+         "trigger": {
+          "type": "ON_CLICK"
+         },
+         "actions": [
+          {
+           "type": "NODE",
+           "destinationId": "8:4",
+           "navigation": "CHANGE_TO",
+           "transition": null
+          }
+         ]
+        }
+       ],
+       "children": [
+        {
+         "id": "8:3",
+         "name": "Knob",
+         "type": "ELLIPSE",
+         "x": 2,
+         "y": 2,
+         "width": 20,
+         "height": 20,
+         "fills": [
+          {
+           "type": "SOLID",
+           "color": {
+            "r": 1,
+            "g": 1,
+            "b": 1
+           },
+           "opacity": 1,
+           "visible": true
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "id": "8:4",
+       "name": "State=On",
+       "type": "COMPONENT",
+       "x": 20,
+       "y": 60,
+       "width": 48,
+       "height": 24,
+       "fills": [
+        {
+         "type": "SOLID",
+         "color": {
+          "r": 0.15,
+          "g": 0.35,
+          "b": 0.9
+         },
+         "opacity": 1,
+         "visible": true
+        }
+       ],
+       "reactions": [
+        {
+         "trigger": {
+          "type": "ON_CLICK"
+         },
+         "actions": [
+          {
+           "type": "NODE",
+           "destinationId": "8:2",
+           "navigation": "CHANGE_TO",
+           "transition": null
+          }
+         ]
+        }
+       ],
+       "children": [
+        {
+         "id": "8:5",
+         "name": "Knob",
+         "type": "ELLIPSE",
+         "x": 26,
+         "y": 2,
+         "width": 20,
+         "height": 20,
+         "fills": [
+          {
+           "type": "SOLID",
+           "color": {
+            "r": 1,
+            "g": 1,
+            "b": 1
+           },
+           "opacity": 1,
+           "visible": true
+          }
+         ],
+         "reactions": [
+          {
+           "trigger": {
+            "type": "ON_HOVER"
+           },
+           "actions": [
+            {
+             "type": "NODE",
+             "destinationId": "3:3",
+             "navigation": "OVERLAY",
+             "transition": null,
+             "overlayRelativePosition": {
+              "x": 0,
+              "y": 28
+             }
+            }
+           ]
+          }
+         ]
+        },
+        {
+         "id": "8:6",
+         "name": "Badge",
+         "type": "INSTANCE",
+         "x": 52,
+         "y": 2,
+         "width": 60,
+         "height": 20,
+         "mainComponentId": "6:11",
+         "fills": [
+          {
+           "type": "SOLID",
+           "color": {
+            "r": 0.96,
+            "g": 0.96,
+            "b": 0.97
+           },
+           "opacity": 1,
+           "visible": true
+          }
+         ],
+         "reactions": [
+          {
+           "trigger": {
+            "type": "ON_CLICK"
+           },
+           "actions": [
+            {
+             "type": "NODE",
+             "destinationId": "6:13",
+             "navigation": "CHANGE_TO",
+             "transition": null
+            }
+           ]
+          }
+         ],
+         "children": [
+          {
+           "id": "I8:6;6:12",
+           "name": "Text",
+           "type": "TEXT",
+           "x": 4,
+           "y": 2,
+           "width": 52,
+           "height": 16,
+           "characters": "Saved",
+           "fontName": {
+            "family": "Inter",
+            "style": "Regular"
+           },
+           "fills": [
+            {
+             "type": "SOLID",
+             "color": {
+              "r": 0.1,
+              "g": 0.1,
+              "b": 0.12
+             },
+             "opacity": 1,
+             "visible": true
+            }
+           ],
+           "reactions": [
+            {
+             "trigger": {
+              "type": "ON_HOVER"
+             },
+             "actions": [
+              {
+               "type": "URL",
+               "url": "https://help.example.com/saved"
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "id": "6:10",
+     "name": "Badge",
+     "type": "COMPONENT_SET",
+     "x": 700,
+     "y": 0,
+     "width": 200,
+     "height": 100,
+     "children": [
+      {
+       "id": "6:11",
+       "name": "Tone=Muted",
+       "type": "COMPONENT",
+       "x": 20,
+       "y": 20,
+       "width": 60,
+       "height": 20,
+       "fills": [
+        {
+         "type": "SOLID",
+         "color": {
+          "r": 0.96,
+          "g": 0.96,
+          "b": 0.97
+         },
+         "opacity": 1,
+         "visible": true
+        }
+       ],
+       "children": [
+        {
+         "id": "6:12",
+         "name": "Text",
+         "type": "TEXT",
+         "x": 4,
+         "y": 2,
+         "width": 52,
+         "height": 16,
+         "characters": "Saved",
+         "fontName": {
+          "family": "Inter",
+          "style": "Regular"
+         },
+         "fills": [
+          {
+           "type": "SOLID",
+           "color": {
+            "r": 0.1,
+            "g": 0.1,
+            "b": 0.12
+           },
+           "opacity": 1,
+           "visible": true
+          }
+         ]
+        }
+       ],
+       "reactions": [
+        {
+         "trigger": {
+          "type": "ON_CLICK"
+         },
+         "actions": [
+          {
+           "type": "NODE",
+           "destinationId": "6:13",
+           "navigation": "CHANGE_TO",
+           "transition": null
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "id": "6:13",
+       "name": "Tone=Bright",
+       "type": "COMPONENT",
+       "x": 20,
+       "y": 60,
+       "width": 60,
+       "height": 20,
+       "fills": [
+        {
+         "type": "SOLID",
+         "color": {
+          "r": 1,
+          "g": 1,
+          "b": 1
+         },
+         "opacity": 1,
+         "visible": true
+        }
+       ],
+       "children": [
+        {
+         "id": "6:14",
+         "name": "Text",
+         "type": "TEXT",
+         "x": 4,
+         "y": 2,
+         "width": 52,
+         "height": 16,
+         "characters": "Saved",
+         "fontName": {
+          "family": "Inter",
+          "style": "Regular"
+         },
+         "fills": [
+          {
+           "type": "SOLID",
+           "color": {
+            "r": 0.1,
+            "g": 0.1,
+            "b": 0.12
+           },
+           "opacity": 1,
+           "visible": true
+          }
+         ],
+         "reactions": [
+          {
+           "trigger": {
+            "type": "ON_CLICK"
+           },
+           "actions": [
+            {
+             "type": "NODE",
+             "destinationId": "7:5",
+             "navigation": "NAVIGATE",
+             "transition": null
+            }
+           ]
+          }
+         ]
+        }
+       ],
+       "reactions": [
+        {
+         "trigger": {
+          "type": "ON_CLICK"
+         },
+         "actions": [
+          {
+           "type": "NODE",
+           "destinationId": "6:11",
+           "navigation": "CHANGE_TO",
+           "transition": null
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  }
+ ],
+ "remote": [
+  {
+   "id": "9:1",
+   "name": "Plan chip",
+   "type": "COMPONENT_SET",
+   "x": 0,
+   "y": 0,
+   "width": 400,
+   "height": 100,
+   "remote": true,
+   "children": [
+    {
+     "id": "9:2",
+     "name": "Plan=Basic",
+     "type": "COMPONENT",
+     "x": 0,
+     "y": 0,
+     "width": 160,
+     "height": 40,
+     "remote": true,
+     "key": "lib-plan-basic",
+     "children": [
+      {
+       "id": "9:4",
+       "name": "Label",
+       "type": "TEXT",
+       "x": 12,
+       "y": 8,
+       "width": 136,
+       "height": 24,
+       "characters": "Basic",
+       "fontName": {
+        "family": "Inter",
+        "style": "Regular"
+       },
+       "fills": [
+        {
+         "type": "SOLID",
+         "color": {
+          "r": 0.1,
+          "g": 0.1,
+          "b": 0.12
+         },
+         "opacity": 1,
+         "visible": true
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "id": "9:3",
+     "name": "Plan=Pro",
+     "type": "COMPONENT",
+     "x": 0,
+     "y": 50,
+     "width": 160,
+     "height": 40,
+     "remote": true,
+     "key": "lib-plan-pro",
+     "children": [
+      {
+       "id": "9:5",
+       "name": "Label",
+       "type": "TEXT",
+       "x": 12,
+       "y": 8,
+       "width": 136,
+       "height": 24,
+       "characters": "Pro",
+       "fontName": {
+        "family": "Inter",
+        "style": "Regular"
+       },
+       "fills": [
+        {
+         "type": "SOLID",
+         "color": {
+          "r": 0.1,
+          "g": 0.1,
+          "b": 0.12
+         },
+         "opacity": 1,
+         "visible": true
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  }
+ ],
+ "library": {
+  "lib-plan-basic": {
+   "id": "L:2",
+   "name": "Plan=Basic",
+   "type": "COMPONENT",
+   "x": 0,
+   "y": 0,
+   "width": 160,
+   "height": 40,
+   "key": "lib-plan-basic",
+   "reactions": [
+    {
+     "trigger": {
+      "type": "ON_CLICK"
+     },
+     "actions": [
+      {
+       "type": "NODE",
+       "destinationId": "9:3",
+       "navigation": "CHANGE_TO",
+       "transition": null
+      }
+     ]
+    }
+   ],
+   "children": [
+    {
+     "id": "L:3",
+     "name": "Label",
+     "type": "TEXT",
+     "x": 12,
+     "y": 8,
+     "width": 136,
+     "height": 24,
+     "characters": "Basic",
+     "fontName": {
+      "family": "Inter",
+      "style": "Regular"
+     },
+     "fills": [
+      {
+       "type": "SOLID",
+       "color": {
+        "r": 0.1,
+        "g": 0.1,
+        "b": 0.12
+       },
+       "opacity": 1,
+       "visible": true
+      }
+     ]
+    }
+   ]
+  },
+  "lib-plan-pro": null
+ },
+ "variableCollections": [
+  {
+   "id": "VariableCollectionId:10:0",
+   "name": "Billing",
+   "modes": [
+    {
+     "modeId": "10:0",
+     "name": "Light"
+    },
+    {
+     "modeId": "10:1",
+     "name": "Dark"
+    }
+   ],
+   "defaultModeId": "10:0",
+   "variables": [
+    {
+     "id": "VariableID:10:1",
+     "name": "bankLinked",
+     "resolvedType": "BOOLEAN",
+     "valuesByMode": {
+      "10:0": false,
+      "10:1": false
+     }
+    },
+    {
+     "id": "VariableID:10:2",
+     "name": "attempts",
+     "resolvedType": "FLOAT",
+     "valuesByMode": {
+      "10:0": 0,
+      "10:1": 0
+     }
+    },
+    {
+     "id": "VariableID:10:3",
+     "name": "accent",
+     "resolvedType": "COLOR",
+     "valuesByMode": {
+      "10:0": {
+       "r": 0.15,
+       "g": 0.35,
+       "b": 0.9,
+       "a": 1
+      },
+      "10:1": {
+       "r": 0.5,
+       "g": 0.7,
+       "b": 1,
+       "a": 1
+      }
+     }
+    },
+    {
+     "id": "VariableID:10:4",
+     "name": "greeting",
+     "resolvedType": "STRING",
+     "valuesByMode": {
+      "10:0": "Welcome back, Mara",
+      "10:1": "Welcome back, Mara"
+     }
+    },
+    {
+     "id": "VariableID:10:5",
+     "name": "brand",
+     "resolvedType": "COLOR",
+     "valuesByMode": {
+      "10:0": {
+       "type": "VARIABLE_ALIAS",
+       "id": "VariableID:10:3"
+      },
+      "10:1": {
+       "type": "VARIABLE_ALIAS",
+       "id": "VariableID:10:3"
+      }
+     }
+    }
+   ]
+  }
+ ]
+}

@@ -56,6 +56,7 @@ export function protoDoc(frames: ProtoFrame[], reactions: Record<string, ProtoRe
     reactions,
     variantSets: {},
     variableCollections: {},
+    libraryVariants: [],
     ...extra,
   };
 }

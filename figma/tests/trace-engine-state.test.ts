@@ -288,9 +288,9 @@ describe('CONDITIONAL', () => {
 describe('CHANGE_TO', () => {
   // The instance `tgl` in A shows variant v1; v2 has a link on its label, at path `lbl2`.
   const variants: ProtoVariant[] = [
-    { id: 'v1', name: 'State=Off', reactions: { '': [on('ON_CLICK', changeTo('v2'))] } },
-    { id: 'v2', name: 'State=On', reactions: { '': [on('ON_CLICK', changeTo('v1'))], lbl2: [on('ON_CLICK', navigate('B'))] } },
-    { id: 'v3', name: 'State=Library', reactions: {}, unavailable: true },
+    { id: 'v1', name: 'State=Off', componentId: 'v1', reactions: { '': [on('ON_CLICK', changeTo('v2'))] } },
+    { id: 'v2', name: 'State=On', componentId: 'v2', reactions: { '': [on('ON_CLICK', changeTo('v1'))], lbl2: [on('ON_CLICK', navigate('B'))] } },
+    { id: 'v3', name: 'State=Library', componentId: null, reactions: {}, unavailable: true },
   ];
   const doc = (tgl: ProtoReaction[], extra: Record<string, ProtoReaction[]> = {}) =>
     protoDoc([A, B], { tgl, ...extra }, { variantSets: { tgl: { frameId: 'A', variants } } });
@@ -549,8 +549,8 @@ describe('timers', () => {
   describe('on an interactive component', () => {
     // A carousel instance in A whose variants change to each other after a second.
     const slides: ProtoVariant[] = [
-      { id: 's1', name: 'Slide=1', reactions: { '': [afterDelay(1000, changeTo('s2'))] } },
-      { id: 's2', name: 'Slide=2', reactions: { '': [afterDelay(1000, changeTo('s1'))] } },
+      { id: 's1', name: 'Slide=1', componentId: 's1', reactions: { '': [afterDelay(1000, changeTo('s2'))] } },
+      { id: 's2', name: 'Slide=2', componentId: 's2', reactions: { '': [afterDelay(1000, changeTo('s1'))] } },
     ];
     const doc = protoDoc([A, B], { car: [afterDelay(1000, changeTo('s2'))], btn: [on('ON_CLICK', navigate('B'))] }, {
       variantSets: { car: { frameId: 'A', variants: slides } },
@@ -566,7 +566,7 @@ describe('timers', () => {
 
     it('a change by hand while a timer is pending replaces that timer', () => {
       const d = protoDoc([A], { car: [afterDelay(5000, changeTo('s2')), on('ON_CLICK', changeTo('s2'))] }, {
-        variantSets: { car: { frameId: 'A', variants: [slides[0] as ProtoVariant, { id: 's2', name: 'Slide=2', reactions: { '': [afterDelay(5000, changeTo('s1'))] } }] } },
+        variantSets: { car: { frameId: 'A', variants: [slides[0] as ProtoVariant, { id: 's2', name: 'Slide=2', componentId: 's2', reactions: { '': [afterDelay(5000, changeTo('s1'))] } }] } },
       });
       const layers = [...screenA, layer('car', 'A', [0, 100, 400, 200], { type: 'INSTANCE' })];
       const { state } = run(d, { ...start(d, 'A'), clockMs: 1000 }, click('car'), layers);

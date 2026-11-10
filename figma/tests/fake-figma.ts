@@ -1,13 +1,28 @@
 import { vi } from 'vitest';
 
+/** What the nodes of one fake file share: the node index, and the API flags that change what a node shows. */
+export interface FakeWorld {
+  nodes: Map<string, FakeNode>;
+  flags: { skipInvisibleInstanceChildren: boolean };
+}
+
 /** A small stand in for the Figma Plugin API: enough of the node tree, storage and UI. */
 export class FakeNode {
+  /** Fixture properties (fills, overflowDirection, boundVariables, ...) land on the node as they are. */
+  [prop: string]: unknown;
   id: string;
   name: string;
   type: string;
   parent: FakeNode | null = null;
-  children: FakeNode[] = [];
+  world: FakeWorld | null = null;
+  private kids: FakeNode[] = [];
   reactions: unknown[] = [];
+  visible = true;
+  x = 0;
+  y = 0;
+  width = 0;
+  height = 0;
+  mainComponentId: string | null = null;
   characters = '';
   removed = false;
   overlayBackgroundInteraction = 'NONE';
@@ -31,12 +46,38 @@ export class FakeNode {
     this._annotations = v;
   }
 
+  /** As in Figma, with `skipInvisibleInstanceChildren` on, hidden layers inside instances can't be reached. */
+  get children(): FakeNode[] {
+    if (this.world?.flags.skipInvisibleInstanceChildren && this.inInstance()) return this.kids.filter((k) => k.visible);
+    return this.kids;
+  }
+
+  private inInstance(): boolean {
+    for (let n: FakeNode | null = this; n; n = n.parent) if (n.type === 'INSTANCE') return true;
+    return false;
+  }
+
   add(...kids: FakeNode[]): this {
     for (const k of kids) {
       k.parent = this;
-      this.children.push(k);
+      this.kids.push(k);
     }
     return this;
+  }
+
+  /** Node x and y are relative to the parent, as in Figma; pages and sections' parents start at the canvas. */
+  get absoluteBoundingBox() {
+    let x = 0;
+    let y = 0;
+    for (let n: FakeNode | null = this; n && n.type !== 'PAGE' && n.type !== 'DOCUMENT'; n = n.parent) {
+      x += n.x;
+      y += n.y;
+    }
+    return { x, y, width: this.width, height: this.height };
+  }
+
+  async getMainComponentAsync(): Promise<FakeNode | null> {
+    return this.mainComponentId ? (this.world?.nodes.get(this.mainComponentId) ?? null) : null;
   }
 
   findAll(pred: (n: FakeNode) => boolean): FakeNode[] {
@@ -150,4 +191,81 @@ export function makeFigma(opts: { fileKey?: string; readOnlyRoot?: boolean } = {
     },
   };
   return { api: api as unknown as PluginAPI & typeof api, nodes: all, storage, page, other };
+}
+
+/** A node of `harness/fixtures/farside-proto.json`: Figma's properties, with children nested. */
+export interface FixtureNode {
+  id: string;
+  name: string;
+  type: string;
+  children?: FixtureNode[];
+  [prop: string]: unknown;
+}
+
+export interface ProtoFixture {
+  fileName: string;
+  pages: FixtureNode[];
+  /** Library components the file uses but doesn't own: reachable by id, on no page. */
+  remote: FixtureNode[];
+  /** What `importComponentByKeyAsync` gives per key; null makes the import fail. */
+  library: Record<string, FixtureNode | null>;
+  variableCollections: Array<{
+    id: string;
+    name: string;
+    modes: Array<{ modeId: string; name: string }>;
+    defaultModeId: string;
+    variables: Array<{ id: string; name: string; resolvedType: string; valuesByMode: Record<string, unknown> }>;
+  }>;
+}
+
+function build(world: FakeWorld, spec: FixtureNode): FakeNode {
+  const { id, name, type, children, ...props } = spec;
+  const node = new FakeNode(id, name, type);
+  Object.assign(node, structuredClone(props));
+  node.world = world;
+  if (type === 'PAGE') node.loadAsync = vi.fn(async () => {});
+  world.nodes.set(id, node);
+  for (const child of children ?? []) node.add(build(world, child));
+  return node;
+}
+
+/** A fake file built from a prototype fixture, with the variables API, library imports and the API flags. */
+export function fakeFromFixture(fixture: ProtoFixture) {
+  const world: FakeWorld = { nodes: new Map(), flags: { skipInvisibleInstanceChildren: true } };
+  const root = new FakeNode('0:0', fixture.fileName, 'DOCUMENT');
+  root.world = world;
+  world.nodes.set(root.id, root);
+  for (const page of fixture.pages) root.add(build(world, page));
+  for (const remote of fixture.remote) build(world, remote);
+  const library = new Map<string, FakeNode | null>();
+  for (const [key, spec] of Object.entries(fixture.library)) library.set(key, spec ? build(world, spec) : null);
+
+  const variables = new Map<string, Record<string, unknown>>();
+  const collections = fixture.variableCollections.map((c) => {
+    for (const v of c.variables) variables.set(v.id, { ...structuredClone(v), variableCollectionId: c.id });
+    return { id: c.id, name: c.name, modes: c.modes, defaultModeId: c.defaultModeId, variableIds: c.variables.map((v) => v.id) };
+  });
+
+  const pages = root.children;
+  const api = {
+    root,
+    currentPage: pages[0] as FakeNode,
+    get skipInvisibleInstanceChildren() {
+      return world.flags.skipInvisibleInstanceChildren;
+    },
+    set skipInvisibleInstanceChildren(v: boolean) {
+      world.flags.skipInvisibleInstanceChildren = v;
+    },
+    getNodeByIdAsync: vi.fn(async (id: string) => world.nodes.get(id) ?? null),
+    importComponentByKeyAsync: vi.fn(async (key: string) => {
+      const node = library.get(key);
+      if (!node) throw new Error(`The component ${key} isn't published in a library this file can use`);
+      return node;
+    }),
+    variables: {
+      getLocalVariableCollectionsAsync: vi.fn(async () => structuredClone(collections)),
+      getVariableByIdAsync: vi.fn(async (id: string) => (variables.has(id) ? structuredClone(variables.get(id)) : null)),
+    },
+  };
+  return { api: api as unknown as PluginAPI & typeof api, world, nodes: world.nodes, pages };
 }
