@@ -59,12 +59,30 @@ const PRESETS = {
   'study-fail': { status: 'draft', title: 'Connect a business bank account so invoices can be paid by bank transfer', runs: () => [], failFactors: true },
 };
 
+/** The designs a study may ask for (spec, study design): a single design is one persona, one try, one wave. */
+const DESIGN_MODES = ['ofat_stress', 'single'];
+
+/** What is wrong with a study's design, as the backend's invalid_study fields say it, or null. */
+function designProblem(design) {
+  if (!isObject(design) || !DESIGN_MODES.includes(design.mode)) return { mode: `one of ${DESIGN_MODES.join(', ')}` };
+  if (design.mode === 'single' && (design.archetypeBudget !== 1 || design.repeatPolicy !== 'explore')) {
+    return { archetypeBudget: 'a single design runs one persona once: archetypeBudget 1, repeatPolicy explore' };
+  }
+  return null;
+}
+
+/** The personas a study builds: the baseline alone for a single design. */
+const archetypesFor = (s) => (s.body?.design?.mode === 'single' ? ARCHETYPES.slice(0, 1) : ARCHETYPES);
+
 /**
  * `clock` is the trace runs' time (the turn deadline); `thinkingPolls` how
  * many polls of a new turn still see it thinking before the scripted brain
- * decides it.
+ * decides it. With `traceScripts`, a plugin-mode study created here runs
+ * its runs as trace runs, each persona's from the script it gives, which
+ * the panel's runner claims and plays; without it, a study's runs play out
+ * on their own, for the harness's screens.
  */
-export function createMockBackend({ log = () => {}, clock = () => Date.now(), thinkingPolls = 0 } = {}) {
+export function createMockBackend({ log = () => {}, clock = () => Date.now(), thinkingPolls = 0, traceScripts = null } = {}) {
   const studies = new Map();
   const trace = createTraceRuns({ clock, thinkingPolls });
   let deviceSeq = 0;
@@ -73,10 +91,17 @@ export function createMockBackend({ log = () => {}, clock = () => Date.now(), th
 
   for (const [id, p] of Object.entries(PRESETS)) studies.set(id, { id, ...p, created: Date.now() });
 
+  /** A traced study's runs as GET /runs lists them, and whether all of them ended. */
+  function tracedRuns(s) {
+    const [, listed] = trace.handle('GET', `/api/studies/${s.id}/runs`, null, {});
+    return { status: listed.status, runs: listed.runs };
+  }
+
   function simulated(s) {
+    if (s.traced) return tracedRuns(s);
     if (!s.runsAt) return { status: s.status, runs: s.runs ? s.runs() : [] };
     const t = (Date.now() - s.runsAt) / 1000;
-    const runs = ARCHETYPES.map((a, i) => {
+    const runs = archetypesFor(s).map((a, i) => {
       const startAt = 3 + i * 1.5;
       const endAt = startAt + 5;
       if (t < startAt) return runRow(a, i, 'queued');
@@ -95,7 +120,7 @@ export function createMockBackend({ log = () => {}, clock = () => Date.now(), th
     return {
       studyId: s.id,
       status,
-      archetypeCount: ARCHETYPES.length,
+      archetypeCount: s.body ? archetypesFor(s).length : ARCHETYPES.length,
       factorSpecReady: status !== 'draft',
       runs: { allTerminal: runs.length > 0 && terminal === runs.length, byStatus, terminal, total: runs.length },
       updatedAt: iso(),
@@ -125,6 +150,8 @@ export function createMockBackend({ log = () => {}, clock = () => Date.now(), th
     if (traced) return traced;
 
     if (path === '/api/studies' && method === 'POST') {
+      const fields = designProblem(body?.design);
+      if (fields) return [400, { error: 'invalid_study', message: 'The study design is not one this backend runs.', fields: Object.fromEntries(Object.entries(fields).map(([k, v]) => [`design.${k}`, v])) }];
       const id = `mock${String(++seq).padStart(4, '0')}${Date.now().toString(16)}`;
       const s = { id, status: 'draft', title: body?.title ?? 'Untitled', created: Date.now(), body };
       studies.set(id, s);
@@ -145,9 +172,18 @@ export function createMockBackend({ log = () => {}, clock = () => Date.now(), th
       if (sub === '/archetypes' && method === 'POST') {
         await sleep(s.slowArchetypes ? 600_000 : 2500);
         s.status = 'archetypes_ready';
-        return [200, { studyId: s.id, status: s.status, generated: true, archetypes: ARCHETYPES }];
+        return [200, { studyId: s.id, status: s.status, generated: true, archetypes: archetypesFor(s) }];
       }
       if (sub === '/runs' && method === 'POST') {
+        if (traceScripts && s.body?.execution === 'plugin' && !s.traced) {
+          // Wave 1 as trace runs, one per persona, for the panel's runner to claim and play.
+          const design = s.body.design;
+          const specs = archetypesFor(s).map((a, i) => ({ runId: `${s.id}-run${i + 1}`, archetypeId: a.archetypeId, archetypeName: a.archetypeName, script: traceScripts(a) }));
+          trace.addStudy({ studyId: s.id, goal: s.body.task?.goal, waves: [specs], repeatPolicy: design.repeatPolicy });
+          s.traced = true;
+          s.status = 'running';
+          return [201, { created: true, studyId: s.id, wave: 1, repeatPolicy: design.repeatPolicy, runs: specs.map((r) => ({ runId: r.runId, archetypeId: r.archetypeId, archetypeName: r.archetypeName, repeatIndex: 0 })) }];
+        }
         if (!s.runsAt) s.runsAt = Date.now();
         s.status = 'running';
         return [201, { created: true, studyId: s.id, wave: 1, repeatPolicy: 'explore', runs: simulated(s).runs }];
@@ -157,10 +193,39 @@ export function createMockBackend({ log = () => {}, clock = () => Date.now(), th
         const { status, runs } = simulated(s);
         return [200, { studyId: s.id, status, currentWave: 1, runs }];
       }
-      if (sub === '/report' && method === 'GET') return [200, { ...REPORT, studyId: s.id, title: s.title, cached: false }];
+      if (sub === '/report' && method === 'GET') return [200, s.traced ? tracedReport(s) : s.body?.design?.mode === 'single' ? singleReport(s) : { ...REPORT, studyId: s.id, title: s.title, cached: false }];
       if (sub === '' && method === 'GET') return [200, { studyId: s.id, title: s.title, status: simulated(s).status }];
     }
     return [404, { error: 'not_found', message: `${method} ${path} is not part of the mock.` }];
+  }
+
+  /** The report of a traced study, from how its trace runs ended: who reached the goal, and nothing the mock can't know. */
+  function tracedReport(s) {
+    const { runs } = tracedRuns(s);
+    const scored = runs.filter((r) => r.status === 'completed' || r.status === 'abandoned');
+    const archetypes = archetypesFor(s).map((a) => {
+      const mine = scored.filter((r) => r.archetypeId === a.archetypeId);
+      const k = mine.filter((r) => r.status === 'completed').length;
+      return { archetypeId: a.archetypeId, name: a.archetypeName, role: a.role, completion: { k, n: mine.length, rate: mine.length ? k / mine.length : null }, abandonment: [], quitReasons: {} };
+    });
+    return {
+      studyId: s.id, title: s.title, status: scored.length === runs.length ? 'complete' : 'running', partial: scored.length < runs.length,
+      runsTotal: runs.length, runsScored: scored.length, runsPending: runs.length - scored.length,
+      icp: s.body.icp, design: s.body.design, archetypes,
+      runs: runs.map((r) => ({ runId: r.runId, archetypeId: r.archetypeId, archetypeName: r.archetypeName, wave: r.wave, status: r.status, completed: r.status === 'completed' })),
+      factorImpact: [], headline: null, findings: { clusters: [] }, recommendations: [], cached: false,
+    };
+  }
+
+  /** The fixture report cut to its baseline persona's first try, for a single design the harness plays out. */
+  function singleReport(s) {
+    const [baseline] = REPORT.archetypes;
+    const run = REPORT.runs.find((r) => r.archetypeId === baseline.archetypeId);
+    return {
+      ...REPORT, studyId: s.id, title: s.title, runsTotal: 1, runsScored: 1, runsPending: 0, design: s.body.design,
+      archetypes: [{ ...baseline, completion: { k: run.completed ? 1 : 0, n: 1, rate: run.completed ? 1 : 0 }, abandonment: [], quitReasons: {} }],
+      runs: [run], excludedRuns: [], factorImpact: [], headline: null, comparisons: [], findings: { ...REPORT.findings, clusters: [] }, cached: false,
+    };
   }
 
   return { handle, studies, trace };
@@ -627,8 +692,8 @@ function createTraceRuns({ clock, thinkingPolls }) {
 
   /** A plugin-mode study with its waves of runs: wave 1 is queued now, the rest come from next-wave. */
   /** A study with its waves of runs; `execution` 'remote' stands for a study no Figma panel runs. */
-  function addStudy({ studyId, goal = 'Connect a bank account', waves, execution = 'plugin' }) {
-    const study = { studyId, goal, waves, wave: 1, execution };
+  function addStudy({ studyId, goal = 'Connect a bank account', waves, execution = 'plugin', repeatPolicy = 'confirm' }) {
+    const study = { studyId, goal, waves, wave: 1, execution, repeatPolicy };
     studies.set(studyId, study);
     for (const spec of waves[0]) addRun(study, 1, spec);
     return study;
@@ -643,11 +708,15 @@ function createTraceRuns({ clock, thinkingPolls }) {
       throw new Refused(409, 'wave_in_progress', `wave ${study.wave} still has ${open.length} run(s) that are not finished; wait until every run is completed, failed, aborted or abandoned.`);
     }
     const specs = study.waves[study.wave];
-    if (!specs) return [200, { studyId, done: true, reason: `at most ${study.waves.length} waves run per study`, baseline: null, wave: study.wave }];
+    if (!specs) {
+      // run_protocol.plan_next_wave: a policy other than confirm runs a single wave.
+      const reason = study.repeatPolicy === 'confirm' ? `at most ${study.waves.length} waves run per study` : `repeat policy ${study.repeatPolicy} runs a single wave`;
+      return [200, { studyId, done: true, reason, baseline: null, wave: study.wave }];
+    }
     study.wave += 1;
     const made = specs.map((spec) => addRun(study, study.wave, spec));
     return [201, {
-      studyId, wave: study.wave, created: true, repeatPolicy: 'confirm',
+      studyId, wave: study.wave, created: true, repeatPolicy: study.repeatPolicy,
       runs: made.map((r) => ({ runId: r.runId, archetypeId: r.archetypeId, archetypeName: r.archetypeName, repeatIndex: r.repeatIndex })),
       reasons: made.map((r) => ({ archetypeId: r.archetypeId, archetypeName: r.archetypeName, count: 1, reason: 'the script adds it' })),
       baseline: null,

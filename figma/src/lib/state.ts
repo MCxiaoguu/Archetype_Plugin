@@ -1,4 +1,5 @@
 import type { DeviceCode, RunRowApi, StudyStatusValue } from './api';
+import { isRunSize } from './form';
 import { DEFAULT_SETTINGS, type Draft, type InitPayload, type Settings, type StudyRecord } from './messages';
 import { nextQueuedSince } from './poll';
 import type { StudyReport } from './report';
@@ -171,7 +172,8 @@ function mergeDraft(form: StudyForm, draft: Partial<Draft> | null): StudyForm {
     who: draft.who ?? form.who,
     product: draft.product ?? form.product,
     link: draft.link ?? form.link,
-    size: draft.size === 'thorough' ? 'thorough' : 'quick',
+    // A draft from a plugin with sizes this one doesn't have starts from the form's default.
+    size: isRunSize(draft.size) ? draft.size : form.size,
   };
 }
 

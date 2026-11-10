@@ -69,7 +69,7 @@ export interface TraceRefusal {
 
 export interface TraceRuns {
   handle(method: string, path: string, body: unknown, request: { bytes?: number }): [number, Record<string, unknown>] | null;
-  addStudy(study: { studyId: string; goal?: string; waves: TraceRunSpec[][]; execution?: 'plugin' | 'remote' }): unknown;
+  addStudy(study: { studyId: string; goal?: string; waves: TraceRunSpec[][]; execution?: 'plugin' | 'remote'; repeatPolicy?: 'explore' | 'confirm' }): unknown;
   release(runId: string, name: string): void;
   runs: Map<string, TraceRun>;
   studies: Map<string, unknown>;
@@ -85,7 +85,20 @@ export interface MockBackend {
   trace: TraceRuns;
 }
 
-export function createMockBackend(opts?: { log?: (message: string) => void; clock?: () => number; thinkingPolls?: number }): MockBackend;
+/** A persona of a study the mock built: who the script given by `traceScripts` is for. */
+export interface MockArchetype {
+  archetypeId: string;
+  archetypeName: string;
+  role: string;
+}
+
+export function createMockBackend(opts?: {
+  log?: (message: string) => void;
+  clock?: () => number;
+  thinkingPolls?: number;
+  /** Plugin-mode studies created here run as trace runs, each persona playing the script this gives it. */
+  traceScripts?: ((archetype: MockArchetype) => ScriptStep[]) | null;
+}): MockBackend;
 
 /** The backend's turn body validation: throws its 400 for a body it refuses. */
 export function cleanTurn(body: unknown): { n: number; owner: string; observation: Record<string, unknown>; shot: string };

@@ -135,6 +135,13 @@ function roleLabel(role: string): string {
 
 const MAX_FINDINGS = 5;
 
+const tries = (n: number) => (n === 1 ? 'try' : 'tries');
+
+/** The score's label: "try reached the goal" for a test of one try. */
+export function triesReached(n: number): string {
+  return `${tries(n)} reached the goal`;
+}
+
 export function buildReportView(report: StudyReport, frames: FrameIndex): ReportView {
   const impactByArchetype = new Map<string, ReportFactorImpact>();
   for (const fi of report.factorImpact ?? []) {
@@ -204,7 +211,7 @@ export function buildReportView(report: StudyReport, frames: FrameIndex): Report
     pinLines.set(f.id, p);
   };
   for (const fv of findings) {
-    for (const f of fv.frames) addPin(f, `${fv.id} ${fv.title} (${fv.severityLabel}, ${fv.hitCount} of ${fv.runCount} tries)`);
+    for (const f of fv.frames) addPin(f, `${fv.id} ${fv.title} (${fv.severityLabel}, ${fv.hitCount} of ${fv.runCount} ${tries(fv.runCount)})`);
   }
   for (const d of dropOff) {
     if (d.frame) addPin(d.frame, `${d.count} ${d.count === 1 ? 'try' : 'tries'} gave up here: ${d.personas.join(', ')}`);
@@ -218,7 +225,7 @@ export function buildReportView(report: StudyReport, frames: FrameIndex): Report
   const headline =
     report.headline?.sentence ??
     report.robustness?.sentence ??
-    (n > 0 ? `${k} of ${n} tries reached the goal.` : 'No finished tries yet.');
+    (n > 0 ? `${k} of ${n} ${triesReached(n)}.` : 'No finished tries yet.');
 
   return {
     partial: report.partial,

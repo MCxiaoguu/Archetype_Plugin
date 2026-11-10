@@ -42,6 +42,12 @@ describe('panel state machine', () => {
     expect(s.study).toMatchObject({ id: 's1', stage: 'watching', watchingSince: 5000 });
   });
 
+  it('restores a Single persona draft, and starts from Quick when the draft names no size it knows', () => {
+    expect(init({ draft: { who: 'Nurses', size: 'single' } }).form.size).toBe('single');
+    expect(init({ draft: { who: 'Nurses', size: 'huge' as never } }).form.size).toBe('quick');
+    expect(init({ draft: { who: 'Nurses' } }).form.size).toBe('quick');
+  });
+
   it('restores the draft', () => {
     const s = init({ draft: { link: 'https://www.figma.com/design/abcdefghijkl/x', who: 'Nurses', size: 'thorough' } });
     expect(s.form).toMatchObject({ link: 'https://www.figma.com/design/abcdefghijkl/x', who: 'Nurses', size: 'thorough' });

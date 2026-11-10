@@ -1,6 +1,6 @@
 import { useMemo } from 'preact/hooks';
 import { indexFrames } from '../../lib/frames';
-import { buildReportView } from '../../lib/report';
+import { buildReportView, triesReached } from '../../lib/report';
 import type { AppState } from '../../lib/state';
 import { toMain } from '../bridge';
 import type { Effects } from '../effects';
@@ -49,13 +49,13 @@ export function Report({ state, fx }: { state: AppState; fx: Effects }) {
         </header>
         {view.partial && <Banner kind="info">Some tries are still running; this report covers {plural(view.runsScored, 'finished try', 'finished tries')}.</Banner>}
 
-        <div class="score" aria-label={`${k} of ${n} tries reached the goal`}>
+        <div class="score" aria-label={`${k} of ${n} ${triesReached(n)}`}>
           <div class="score-num">
             <span class="score-k">{k}</span>
             <span class="score-n">of {n}</span>
           </div>
           <div class="score-side">
-            <span class="score-label">tries reached the goal</span>
+            <span class="score-label">{triesReached(n)}</span>
             <div class="score-bar" aria-hidden="true">
               {view.personas.flatMap((p) =>
                 Array.from({ length: p.n }, (_, i) => <span class={i < p.k ? 'seg seg-ok' : 'seg seg-no'} title={p.name} />),

@@ -345,7 +345,7 @@ export function NewTest({ state, store, fx }: { state: AppState; store: Store; f
         ) : pf?.blocker === 'goal_is_overlay' ? (
           <p class="actionbar-note error">Pick a goal the flow navigates to.</p>
         ) : (
-          <p class="actionbar-note">{form.size === 'quick' ? 'Takes about 5 to 10 minutes' : 'Takes about 15 to 30 minutes'}</p>
+          <p class="actionbar-note">{RUN_SIZES[form.size].estimate}</p>
         )}
         <button type="submit" class="btn btn-primary" disabled={isFlowBlocker(pf?.blocker ?? null) || state.gate?.kind === 'checking' || state.gate?.kind === 'confirm-import' || state.gate?.kind === 'import-failed'}>
           {state.gate?.kind === 'checking' ? 'Checking the file' : 'Launch test'}

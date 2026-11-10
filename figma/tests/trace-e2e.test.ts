@@ -1,6 +1,11 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { cleanTurn, createMockBackend, serveMock, type MockBackend, type ScriptStep } from '../harness/mock-backend.mjs';
 import { ApiClient, ApiError, type TurnBody } from '../src/lib/api';
+import { indexFrames } from '../src/lib/frames';
+import { runPreflight } from '../src/lib/preflight';
+import { buildReportView, type StudyReport } from '../src/lib/report';
+import { EMPTY_FORM, buildStudyRequest } from '../src/lib/study';
+import { readDocument } from '../src/main/document';
 import type { MainToUi, SavedSession } from '../src/lib/messages';
 import { start } from '../src/lib/proto/engine';
 import type { ProtoDoc } from '../src/lib/proto/model';
@@ -928,6 +933,74 @@ describe('a whole study through the runner', () => {
     expect(await second.bridge.call('trace-load', { studyId: 'study-turn0' })).toEqual({ sessions: [] });
     expect([...first.failures, ...second.failures]).toEqual([]);
   }, 30_000);
+});
+
+// --- A Single persona study, from the request the panel builds ---------------
+
+describe('a Single persona study', () => {
+  it('runs one persona on the golden path to done, one run in one wave, and reports that run', async () => {
+    const backend = createMockBackend({ thinkingPolls: 1, traceScripts: () => GOLDEN });
+    const served = await serveMock(backend);
+    const api = new ApiClient({ baseUrl: served.url, getToken: () => 'mock-token' });
+    try {
+      const fake = fakeFile();
+      const plugin = openPlugin(fake);
+      // The launch as the panel makes it: its request for the Single persona size, then factors, the persona, wave 1.
+      const page = await readDocument(fake.api);
+      const form = { ...EMPTY_FORM, startId: '1:2', goalId: '2:50', goal: 'Connect a business bank account', who: 'Founders who do their own books', size: 'single' as const };
+      const body = buildStudyRequest(form, { doc: page, preflight: runPreflight(page, '1:2', '2:50'), pluginVersion: '0.1.0', knownFileKey: null });
+      expect(body.design).toEqual({ mode: 'single', archetypeBudget: 1, repeatPolicy: 'explore' });
+      const { studyId } = await api.createStudy<{ studyId: string }>(body);
+      await api.identifyFactors(studyId);
+      expect(await api.buildArchetypes(studyId)).toMatchObject({ archetypes: [{ role: 'baseline' }] });
+      const wave = (await api.startRuns(studyId)) as { runs: Array<{ runId: string }> };
+      expect(wave.runs).toHaveLength(1);
+      const runId = wave.runs[0]!.runId;
+
+      const clock = panelClock();
+      const runner: RunnerStatus[] = [];
+      const result = await runStudy(
+        { studyId, owner: OWNER, read: await plugin.readDoc(), shareKey: null, startFrameId: '1:2' },
+        {
+          bridge: plugin.bridge, api, now: clock.now, sleep: clock.sleep, pluginVersion: '0.1.0', onSession: () => {}, onRunner: (st) => runner.push(st),
+          watchFile: plugin.watchFile, readDoc: plugin.readDoc, postTurnTimeoutMs: 10_000, signal: plugin.signal,
+        },
+      );
+      expect(result).toEqual({
+        stop: 'done',
+        reason: 'repeat policy explore runs a single wave',
+        sessions: [{ runId, ended: { status: 'finalizing', reason: 'done' }, stop: 'ended', message: null }],
+      });
+      expect(runner.map((r) => r.phase)).toEqual(['running', 'next_wave', 'done']);
+      const posts = backend.trace.posts.map((p) => p.body as unknown as TurnBody);
+      expect(posts.map((b) => b.screen.title)).toEqual([
+        'Dashboard', 'Billing settings', 'Connect bank', 'Connect bank', 'Connect bank', 'Connect bank', 'Connect bank', 'Verify phone', 'Bank connected',
+      ]);
+      expect(backend.trace.refusals).toEqual([]);
+
+      const report = await api.getReport<StudyReport & { runs: unknown[] }>(studyId);
+      expect(report).toMatchObject({ status: 'complete', partial: false, runsTotal: 1, runsScored: 1, archetypes: [{ role: 'baseline', completion: { k: 1, n: 1 } }] });
+      expect(report.runs).toEqual([expect.objectContaining({ runId, status: 'completed', completed: true })]);
+      const view = buildReportView(report, indexFrames(page));
+      expect(view).toMatchObject({ headline: '1 of 1 try reached the goal.', personas: [{ roleLabel: 'Typical user', k: 1, n: 1, confidenceWords: null }] });
+    } finally {
+      await served.close();
+    }
+  }, 30_000);
+
+  it('refuses a single design that asks for more than one persona once', async () => {
+    const backend = createMockBackend();
+    const served = await serveMock(backend);
+    const api = new ApiClient({ baseUrl: served.url, getToken: () => 'mock-token' });
+    try {
+      const err = await api.createStudy({ title: 't', design: { mode: 'single', archetypeBudget: 5, repeatPolicy: 'explore' } }).then(() => null, (e: unknown) => e);
+      expect(err).toMatchObject({ status: 400, code: 'invalid_study' });
+      const odd = await api.createStudy({ title: 't', design: { mode: 'pairs', archetypeBudget: 2, repeatPolicy: 'explore' } }).then(() => null, (e: unknown) => e);
+      expect(odd).toMatchObject({ status: 400, code: 'invalid_study' });
+    } finally {
+      await served.close();
+    }
+  });
 });
 
 // --- The mock backend itself: the rules of trace_turn_service.py ------------

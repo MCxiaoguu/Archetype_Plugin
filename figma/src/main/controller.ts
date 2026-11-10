@@ -1,3 +1,4 @@
+import { isRunSize } from '../lib/form';
 import { isSafeWebUrl, isTraceRequest, PIN_PREFIX, type MainToUi, type Settings, type StudyRecord, type UiToMain } from '../lib/messages';
 import { clearPins, pinFindings, showNode } from './canvas';
 import { readDocument, selectedFrame } from './document';
@@ -37,7 +38,7 @@ function checkRecord(r: unknown): StudyRecord {
     isObject(r) &&
     isText(r.studyId) && r.studyId.length > 0 &&
     isText(r.title) && isText(r.startName) && isText(r.goalName) && isText(r.status) &&
-    (r.size === 'quick' || r.size === 'thorough') &&
+    isRunSize(r.size) &&
     typeof r.launchedAt === 'number' && Number.isFinite(r.launchedAt);
   if (!ok) invalid('an incomplete test record (it needs a study id, names, size, status and launch time)');
   return r as unknown as StudyRecord;

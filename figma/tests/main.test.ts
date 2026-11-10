@@ -226,6 +226,14 @@ describe('main thread controller', () => {
     expect(api.ui.postMessage).toHaveBeenLastCalledWith({ type: 'pin-result', ok: true, count: 1, message: 'Cleared pins from 1 frame.' });
   });
 
+  it('keeps the record of a Single persona test', async () => {
+    const { api, storage } = makeFigma();
+    const c = createController(api, '0.1.0');
+    await c.handle({ type: 'save-study', record: { ...rec('s-single', 1), size: 'single' } });
+    expect([...storage.values()].some((v) => Array.isArray(v) && v.some((r: StudyRecord) => r.studyId === 's-single' && r.size === 'single'))).toBe(true);
+    await expect(c.handle({ type: 'save-study', record: { ...rec('s-odd', 1), size: 'huge' } } as unknown as UiToMain)).rejects.toThrow(/^The panel sent/);
+  });
+
   it('refuses panel messages it cannot act on safely, and says so', async () => {
     const { api, nodes, storage } = makeFigma();
     const c = createController(api, '0.1.0');

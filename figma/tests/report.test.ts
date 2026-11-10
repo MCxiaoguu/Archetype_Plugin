@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { indexFrames } from '../src/lib/frames';
-import { buildReportView, quitWords } from '../src/lib/report';
-import { fixtureDoc, fixtureReport } from './helpers';
+import { buildReportView, quitWords, triesReached } from '../src/lib/report';
+import { fixtureDoc, fixtureReport, protoAt } from './helpers';
 
 describe('report view', () => {
   const view = buildReportView(fixtureReport(), indexFrames(fixtureDoc()));
@@ -60,6 +60,19 @@ describe('report view', () => {
     const v = buildReportView(r, indexFrames(fixtureDoc()));
     expect(v.dropOff.every((d) => d.frame === null)).toBe(true);
     expect(v.dropOff[0]?.label).toMatch(/not on this page/);
+  });
+
+  it('reads naturally for one persona and one try', () => {
+    const one = buildReportView({
+      studyId: 's', title: 't', status: 'complete', partial: false, runsTotal: 1, runsScored: 1, runsPending: 0,
+      archetypes: [{ archetypeId: 'a1', name: 'Baseline founder', role: 'baseline', completion: { k: 1, n: 1, rate: 1 } }],
+      findings: { clusters: [{ clusterId: 'F1', title: 'The bank sign in fails', severity: 2, severityLabel: 'Major', hitBy: ['Baseline founder'], hitCount: 1, runCount: 1, evidence: [{ runId: 'r1', step: 4, url: protoAt('2-20'), quote: null }] }] },
+    }, indexFrames(fixtureDoc()));
+    expect(one.headline).toBe('1 of 1 try reached the goal.');
+    expect(one.personas).toMatchObject([{ name: 'Baseline founder', roleLabel: 'Typical user', k: 1, n: 1, confidenceWords: null }]);
+    expect(one.pins[0]?.label).toBe('Archetype: F1 The bank sign in fails (Major, 1 of 1 try)');
+    expect(triesReached(1)).toBe('try reached the goal');
+    expect(triesReached(6)).toBe('tries reached the goal');
   });
 
   it('copes with an empty report', () => {

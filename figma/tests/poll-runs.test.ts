@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { RunRowApi } from '../src/lib/api';
 import { frameForUrl, indexFrames } from '../src/lib/frames';
 import { FAST_POLL_MS, SLOW_POLL_MS, isStudyDone, isTerminalRun, nextQueuedSince, pollDelay, runnerState } from '../src/lib/poll';
-import { panelNotices, panelRunText, personaRows, rowUrl, type LiveRun } from '../src/lib/runs';
+import { panelNotices, panelRunText, personaRows, rowUrl, runningTexts, type LiveRun } from '../src/lib/runs';
 import { fixtureDoc, protoAt } from './helpers';
 
 const run = (over: Partial<RunRowApi>): RunRowApi => ({ runId: 'r', archetypeId: 'a', archetypeName: 'Baseline founder', role: 'baseline', status: 'queued', ...over });
@@ -119,6 +119,22 @@ describe('persona rows', () => {
       ['Impatient founder', 'waiting', 'Not running in this panel', false],
       ['Stress: everything at risk', 'waiting', 'Waiting to start', false],
     ]);
+  });
+
+  it('words the Running screen for one persona as one', () => {
+    const one = [run({ runId: 'b1', status: 'running' })];
+    const here = personaRows(one, index, { inPanel: true, live: { b1: { runId: 'b1', phase: 'thinking', frameName: 'Dashboard', turn: 1, notices: [] } } });
+    const waiting = personaRows([run({ runId: 'b1', status: 'queued' })], index, { inPanel: true, live: {} });
+    expect(panelRunText(here, { phase: 'running', notice: null }, 'running')).toBe('The persona is clicking through your prototype here in the panel.');
+    expect(panelRunText(waiting, null, 'queued')).toBe('Starting the persona.');
+    // One persona has one try: asking for the next round finds it all in.
+    expect(panelRunText(waiting, { phase: 'next_wave', notice: null }, 'finishing')).toBe('All tries are in. Putting the results together.');
+    const single = runningTexts('single');
+    expect(single.steps.map((s) => s.title)).toEqual(['Understanding your user', 'Building the persona', 'Running']);
+    expect(single.steps[1]?.hint).toBe('One typical user, from who you said your user is.');
+    expect(single).toMatchObject({ section: 'Persona', keepOpen: 'Keep this panel open while the persona runs' });
+    expect(runningTexts('quick')).toMatchObject({ section: 'Personas', keepOpen: 'Keep this panel open while the personas run' });
+    expect(runningTexts('thorough').steps.map((s) => s.title)).toEqual(['Understanding your users', 'Building personas', 'Running']);
   });
 
   it("words the Running screen by the panel's own runner and sessions", () => {

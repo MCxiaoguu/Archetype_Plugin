@@ -1,20 +1,12 @@
 import { indexFrames } from '../../lib/frames';
 import { runnerState } from '../../lib/poll';
-import { panelNotices, panelRunText, personaRows, type PersonaRow } from '../../lib/runs';
+import { panelNotices, panelRunText, personaRows, runningTexts, type PersonaRow } from '../../lib/runs';
 import type { AppState, Stage } from '../../lib/state';
 import type { Effects } from '../effects';
 import { NOTICE } from '../trace/session';
 import { IconCheck, IconClock, IconExternal } from '../icons';
 import { Banner, Section, Spinner, elapsed, plural } from '../parts';
 import { useTicker } from '../store';
-
-type Step = { key: 'understand' | 'personas' | 'run'; title: string; hint: string };
-
-const STEPS: Step[] = [
-  { key: 'understand', title: 'Understanding your users', hint: 'Finding the traits most likely to change whether someone finishes. Usually under 30 s.' },
-  { key: 'personas', title: 'Building personas', hint: 'One typical user, then variants that each differ in one trait. Usually about a minute.' },
-  { key: 'run', title: 'Running', hint: 'Personas open your prototype and click through it.' },
-];
 
 function stepIndex(stage: Stage): number {
   if (stage === 'creating' || stage === 'factors') return 0;
@@ -49,6 +41,8 @@ export function Progress({ state, fx }: { state: AppState; fx: Effects }) {
   const now = useTicker(!!st && st.stage !== 'done');
   if (!st) return <div class="screen" />;
   const idx = stepIndex(st.stage);
+  // The study's own size once its record exists; before that, the size the form launched with.
+  const texts = runningTexts(st.record?.size ?? state.form.size);
   // A plugin-mode study runs its personas in this panel; the screen and step come from its sessions.
   const inPanel = !!st.record?.trace;
   const rows = personaRows(st.runs, indexFrames(state.doc), { live: st.live, inPanel });
@@ -88,7 +82,7 @@ export function Progress({ state, fx }: { state: AppState; fx: Effects }) {
         )}
 
         <ol class="stages" aria-label="Progress">
-          {STEPS.map((s, i) => {
+          {texts.steps.map((s, i) => {
             const state_ = i < idx || st.stage === 'done' ? 'done' : i === idx ? (st.error ? 'failed' : 'active') : 'todo';
             return (
               <li class={`stage stage-${state_}`} aria-current={state_ === 'active' ? 'step' : undefined}>
@@ -108,7 +102,7 @@ export function Progress({ state, fx }: { state: AppState; fx: Effects }) {
         </ol>
 
         {idx === 2 && (
-          <Section title="Personas" id="personas">
+          <Section title={texts.section} id="personas">
             {runner === 'waiting_for_runner' && !inPanel && (
               <Banner kind="warn">
                 <strong>Waiting for a runner.</strong> The tests are queued, but no runner has picked them up yet. They start as soon as one is online; you can close this panel and come back.
@@ -180,7 +174,7 @@ export function Progress({ state, fx }: { state: AppState; fx: Effects }) {
       </div>
       <footer class="actionbar">
         <p class="actionbar-note">
-          <IconClock size={12} /> {inPanel && st.stage !== 'done' ? 'Keep this panel open while the personas run' : st.stage === 'watching' ? 'Updates every few seconds' : 'Keep this panel open for now'}
+          <IconClock size={12} /> {inPanel && st.stage !== 'done' ? texts.keepOpen : st.stage === 'watching' ? 'Updates every few seconds' : 'Keep this panel open for now'}
         </p>
         {st.id && (
           <button type="button" class="btn btn-secondary" onClick={() => fx.openInArchetype()}>
