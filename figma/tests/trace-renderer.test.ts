@@ -429,6 +429,16 @@ describe('render', () => {
       expect(layerOf(layers, '2:22').fixed).toBe(false);
     });
 
+    it.each([
+      { height: 80.4, maxY: 400 },
+      { height: 80.6, maxY: 401 },
+    ])('round a scroll range measured in fractions to whole pixels, as the engine scrolls it ($height px row: $maxY)', async ({ height, maxY }) => {
+      // The last bank row reaches past the list by a fraction of a pixel more.
+      const fake = await setup((f) => (node(f, '2:69').height = height));
+      const { layers } = await fake.renderer.render(fake.doc, state(fake.doc, '2:20'));
+      expect(layerOf(layers, '2:25').scroll).toEqual({ direction: 'VERTICAL', maxX: 0, maxY });
+    });
+
     it('leave hidden content out of a scroll range', async () => {
       const fake = await setup((f) => (node(f, '2:69').visible = false));
       const { layers } = await fake.renderer.render(fake.doc, state(fake.doc, '2:20'));

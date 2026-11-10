@@ -38,14 +38,24 @@ const STEP: Record<TraceScrollAmount, number> = { page: 0.9, half: 0.5 };
 
 const clamp = (value: number, max: number) => Math.min(Math.max(value, 0), max);
 
+/**
+ * How far content that overflows by `overflow` scrolls: in whole pixels,
+ * never below zero. Under half a pixel (a frame 818.4 tall in an 818
+ * viewport) doesn't scroll, since nothing would visibly move. The renderer
+ * measures scroll areas with it too, so its ranges are the engine's.
+ */
+export function scrollRange(overflow: number): number {
+  return Math.max(0, Math.round(overflow));
+}
+
 export function pageRange(frame: ProtoFrame, viewport: Size): ScrollRange {
-  return { maxX: Math.max(0, frame.width - viewport.width), maxY: Math.max(0, frame.height - viewport.height) };
+  return { maxX: scrollRange(frame.width - viewport.width), maxY: scrollRange(frame.height - viewport.height) };
 }
 
 function areaRange(area: ScrollArea): ScrollRange {
   return {
-    maxX: area.direction === 'VERTICAL' ? 0 : area.maxX,
-    maxY: area.direction === 'HORIZONTAL' ? 0 : area.maxY,
+    maxX: area.direction === 'VERTICAL' ? 0 : scrollRange(area.maxX),
+    maxY: area.direction === 'HORIZONTAL' ? 0 : scrollRange(area.maxY),
   };
 }
 
