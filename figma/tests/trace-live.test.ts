@@ -410,6 +410,19 @@ describe.skipIf(!LIVE.url)('a live trace study against the local backend', () =>
     expect(report.runsPending).toBe(0);
   });
 
+  /**
+   * What the briefing tells the persona's brain: all of it but the success
+   * criterion, which only scores the run, and the actor brief, which
+   * restates the criterion and which the trace brain doesn't send.
+   */
+  function briefingTold(briefing: RunBriefing | null): string {
+    if (!briefing) return '';
+    const told = structuredClone(briefing) as unknown as Record<string, unknown> & { instructions: Record<string, unknown> };
+    delete told.brief;
+    delete told.instructions.success;
+    return JSON.stringify(told);
+  }
+
   /** What a persona said in its own words: each step's monologue, and its debrief. */
   function personaWords(runId: string): Array<{ where: string; text: string }> {
     const words = stepsOf(runId).map((step) => ({
@@ -432,7 +445,7 @@ describe.skipIf(!LIVE.url)('a live trace study against the local backend', () =>
     const checked: Record<string, { hidden: string[]; told: string[] }> = {};
     for (const run of runs.values()) {
       // Everything the run gave this persona: its briefing, and what its screens said and listed.
-      const told = [JSON.stringify(run.briefing), ...run.turns.flatMap((t) => [t.visibleText, ...t.elements.map((e) => e.label)])].join('\n');
+      const told = [briefingTold(run.briefing), ...run.turns.flatMap((t) => [t.visibleText, ...t.elements.map((e) => e.label)])].join('\n');
       const names = hiddenFrameNames(fake, doc, told);
       checked[run.runId] = names;
       for (const { where, text } of personaWords(run.runId)) {
