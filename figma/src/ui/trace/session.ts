@@ -39,7 +39,7 @@ export const NOTICE = {
   offline: 'Lost touch with Archetype. Retrying.',
   signIn: 'Sign in to Archetype again to continue this test.',
   hiddenTab: 'Keep this tab visible, or use the desktop app.',
-  fileChanged: 'This file changed while the test ran: later steps use the flow as it is now.',
+  fileChanged: 'This file changed while the test ran, so its later steps may not match the flow it started with.',
   notSaved: 'Could not save this test\'s progress on this machine, so it can\'t resume if the plugin closes.',
 } as const;
 

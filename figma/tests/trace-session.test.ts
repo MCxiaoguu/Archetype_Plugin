@@ -47,20 +47,23 @@ async function mainThread(edit: (fake: Fake) => void = () => {}) {
   const saves: Array<SavedSession | null> = [];
   const renders = { failures: 0, notes: null as RenderNote[] | null, change: null as ((r: TraceRenderReply) => TraceRenderReply) | null };
   const call = vi.fn(async (type: string, payload: Record<string, unknown>) => {
-      if (type === 'trace-render') {
-        if (renders.failures > 0) {
-          renders.failures--;
-          throw new BridgeError('trace-render', 'The export of the screen came back empty');
-        }
-        let r = await renderer.render(payload.doc as ProtoDoc, payload.state as TraceState);
-        if (renders.notes) r = { ...r, notes: renders.notes };
-        return renders.change ? renders.change(r) : r;
+    if (type === 'trace-render') {
+      if (renders.failures > 0) {
+        renders.failures--;
+        throw new BridgeError('trace-render', 'The export of the screen came back empty');
       }
-      if (type === 'trace-save') {
-        saves.push(structuredClone(payload.session) as SavedSession | null);
-        return null;
-      }
-      throw new Error(`The session should not ask for ${type}`);
+      // The main thread answers a render that throws with trace-error, which the bridge rejects as a BridgeError.
+      let r = await renderer.render(payload.doc as ProtoDoc, payload.state as TraceState).catch((err: Error) => {
+        throw new BridgeError('trace-render', err.message);
+      });
+      if (renders.notes) r = { ...r, notes: renders.notes };
+      return renders.change ? renders.change(r) : r;
+    }
+    if (type === 'trace-save') {
+      saves.push(structuredClone(payload.session) as SavedSession | null);
+      return null;
+    }
+    throw new Error(`The session should not ask for ${type}`);
   });
   // The in-process main thread answers the bridge's calls, whatever their type.
   const bridge = { call: call as unknown as Bridge['call'] };
@@ -393,6 +396,13 @@ describe('when things go wrong', () => {
     expect(failed.result).toMatchObject({ stop: 'aborted', ended: { status: 'aborted', reason: 'render_failed' } });
     expect(failed.posted).toEqual([]);
     expect(failed.saves).toEqual([null]);
+  });
+
+  it('aborts with render_failed and the renderer\'s reason for a screenshot too big for a turn, without shrinking it', async () => {
+    const { aborted, posted, result } = await play(() => DONE, { edit: (fake) => (fake.world.exportFails = 'huge') });
+    expect(aborted).toEqual([{ owner: 'p_7f3a', code: 'render_failed', detail: expect.stringMatching(/^The screenshot is \d+ bytes, over the 1\.5 MiB a turn can carry$/) }]);
+    expect(posted).toEqual([]);
+    expect(result).toMatchObject({ stop: 'aborted', ended: { reason: 'render_failed' } });
   });
 
   it('aborts with turn_timeout after 180 s of thinking', async () => {
