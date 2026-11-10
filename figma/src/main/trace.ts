@@ -8,8 +8,8 @@
  */
 
 import type { MainToUi, SavedSession, ScratchCheckReply, TraceRequestMessage } from '../lib/messages';
-import type { ProtoDoc, TraceState } from '../lib/proto/model';
-import { pageOf } from './document';
+import type { ProtoDoc, RawLayer, TraceState } from '../lib/proto/model';
+import { pageOf, topFrameOf } from './document';
 import { readProto } from './protoReader';
 import { createRenderer } from './renderer';
 import { isScratch, recordScratchContainer, SCRATCH_KEY, SCRATCH_VALUE } from './scratch';
@@ -68,13 +68,22 @@ export function createTraceMain(api: PluginAPI, post: (msg: MainToUi) => void): 
   const renderer = createRenderer(api);
   /** The frames of the ProtoDoc read last, which the file-change watcher reports on. */
   let frames: ReadonlySet<string> = new Set();
+  /**
+   * Every original node id the trace knows, with the ProtoDoc frame it
+   * belongs to (null when unknown): a deleted node can only be matched by id.
+   */
+  let known = new Map<string, string | null>();
   const watchedPages = new Set<string>();
+
+  function remember(id: string, frameId: string | null) {
+    if (!known.has(id) || known.get(id) === null) known.set(id, frameId);
+  }
 
   function watch(page: PageNode) {
     if (watchedPages.has(page.id)) return;
     watchedPages.add(page.id);
     page.on('nodechange', (event) => {
-      const changed = changedProtoFrames(event.nodeChanges, frames);
+      const changed = changedProtoFrames(event.nodeChanges, frames, known);
       if (changed.length) post({ type: 'trace-file-changed', frameIds: changed });
     });
   }
@@ -83,13 +92,43 @@ export function createTraceMain(api: PluginAPI, post: (msg: MainToUi) => void): 
     if (typeof importLibraryVariants !== 'boolean') bad('importLibraryVariants that is not true or false');
     const doc = await readProto(api, api.currentPage, { importLibraryVariants });
     frames = new Set(doc.frames.map((f) => f.id));
-    // Frames reached on other pages are watched on their own page.
+    known = new Map();
     for (const frame of doc.frames) {
+      known.set(frame.id, frame.id);
+      // Frames reached on other pages are watched on their own page.
       const node = await api.getNodeByIdAsync(frame.id);
       const page = node ? pageOf(node) : null;
       if (page) watch(page);
     }
+    for (const key of Object.keys(doc.reactions)) {
+      // Path keys inside swapped variants are not node ids: no node, no frame.
+      const node = await api.getNodeByIdAsync(key);
+      const frameId = node ? (topFrameOf(node)?.id ?? null) : null;
+      remember(key, frameId && frames.has(frameId) ? frameId : null);
+    }
+    for (const [instanceKey, set] of Object.entries(doc.variantSets)) {
+      remember(instanceKey, set.frameId);
+      for (const variant of set.variants) {
+        remember(variant.id, set.frameId);
+        if (variant.componentId) remember(variant.componentId, set.frameId);
+      }
+    }
     return doc;
+  }
+
+  /** The layers a render measured, under the frame each was drawn in. */
+  function rememberLayers(layers: readonly RawLayer[]) {
+    const parentOf = new Map(layers.map((l) => [l.key, l.parentKey]));
+    for (const layer of layers) {
+      let frameId: string | null = null;
+      // Bounded by the keys seen, so inconsistent layers can't loop.
+      const seen = new Set<string>();
+      for (let key: string | null = layer.key; key !== null && frameId === null && !seen.has(key); key = parentOf.get(key) ?? null) {
+        seen.add(key);
+        if (frames.has(key)) frameId = key;
+      }
+      remember(layer.key, frameId);
+    }
   }
 
   /** Makes and removes an empty container: a view only file refuses the first step. */
@@ -117,8 +156,11 @@ export function createTraceMain(api: PluginAPI, post: (msg: MainToUi) => void): 
     switch (msg.type) {
       case 'trace-read':
         return read(msg.importLibraryVariants);
-      case 'trace-render':
-        return renderer.render(checkDoc(msg.doc), checkState(msg.state));
+      case 'trace-render': {
+        const result = await renderer.render(checkDoc(msg.doc), checkState(msg.state));
+        rememberLayers(result.layers);
+        return result;
+      }
       case 'trace-save': {
         const studyId = checkId(msg.studyId, 'study');
         const runId = checkId(msg.runId, 'run');

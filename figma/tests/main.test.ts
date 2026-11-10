@@ -444,6 +444,41 @@ describe('trace requests on the main thread', () => {
   });
 });
 
+describe('deleted prototype layers', () => {
+  it('flag a file change by id, since a removed node has no parent to trace', async () => {
+    const t = traceMain();
+    const doc = (await t.ask({ type: 'trace-read', requestId: 'r', importLibraryVariants: true })).result as ProtoDoc;
+    const changes = () => t.posted().filter((m) => m.type === 'trace-file-changed');
+    const deleted = (id: string, type = 'TEXT') => ({ type: 'DELETE', node: { id, type, removed: true } });
+    t.postMessage.mockClear();
+
+    // A layer with reactions, inside the Dashboard: the button the persona was about to press.
+    expect(doc.reactions['1:7']).toBeDefined();
+    t.fire('0:1', [deleted('1:7')]);
+    expect(changes()).toEqual([{ type: 'trace-file-changed', frameIds: ['1:2'] }]);
+    t.postMessage.mockClear();
+
+    // A layer without reactions is known once a render measured it.
+    t.fire('0:1', [deleted('1:5')]);
+    expect(changes()).toEqual([]);
+    await t.ask({ type: 'trace-render', requestId: 'p', doc, state: start(doc, '1:2') });
+    t.postMessage.mockClear();
+    t.fire('0:1', [deleted('1:5')]);
+    expect(changes()).toEqual([{ type: 'trace-file-changed', frameIds: ['1:2'] }]);
+    t.postMessage.mockClear();
+
+    // A variant a CHANGE_TO shows names the frame its instance is in.
+    const [, set] = Object.entries(doc.variantSets)[0] as [string, ProtoDoc['variantSets'][string]];
+    t.fire('0:1', [deleted(set.variants[0]!.id, 'COMPONENT')]);
+    expect(changes()).toEqual([{ type: 'trace-file-changed', frameIds: [set.frameId] }]);
+    t.postMessage.mockClear();
+
+    // Nodes the prototype never referenced.
+    t.fire('0:1', [deleted('6:9'), deleted('99:1')]);
+    expect(changes()).toEqual([]);
+  });
+});
+
 describe('telling the renderer\'s changes from the designer\'s', () => {
   function world() {
     const fake = fakeFromFixture(structuredClone(fixtureJson) as unknown as ProtoFixture);

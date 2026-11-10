@@ -48,14 +48,28 @@ export function designerChanges(changes: readonly NodeChange[]): NodeChange[] {
   return kept;
 }
 
-/** The ProtoDoc frames (by id) that the designer's changes touched, in the order first touched. */
-export function changedProtoFrames(changes: readonly NodeChange[], frames: ReadonlySet<string>): string[] {
+/**
+ * Which frames of the ProtoDoc the designer's changes touched, in the order
+ * first touched. A live node counts through its top level frame. A removed
+ * one can't be traced to its frame any more, so it counts when the trace
+ * knows its id (`known`: original id to the frame it belongs to, null when
+ * unknown), naming that frame, or else the id itself.
+ */
+export function changedProtoFrames(
+  changes: readonly NodeChange[],
+  frames: ReadonlySet<string>,
+  known: ReadonlyMap<string, string | null>,
+): string[] {
   const touched: string[] = [];
   for (const change of designerChanges(changes)) {
     const node = change.node;
-    // A removed layer can't be traced to its frame; a removed frame is known by its own id.
-    const frameId = isRemoved(node) ? node.id : (topFrameOf(node)?.id ?? null);
-    if (frameId && frames.has(frameId) && !touched.includes(frameId)) touched.push(frameId);
+    let named: string | null;
+    if (isRemoved(node)) named = known.has(node.id) ? (known.get(node.id) ?? node.id) : null;
+    else {
+      const frameId = topFrameOf(node)?.id ?? null;
+      named = frameId && frames.has(frameId) ? frameId : null;
+    }
+    if (named && !touched.includes(named)) touched.push(named);
   }
   return touched;
 }
