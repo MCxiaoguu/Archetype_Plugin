@@ -151,6 +151,17 @@ function inside(index: LayerIndex, key: string, ancestor: string): boolean {
   return false;
 }
 
+/**
+ * Whether an element lists as a flow map candidate: no reaction of its own,
+ * and something to click by its role (button, link, input, card, icon), an
+ * image with a readable name, or a text that reads as a nav item.
+ */
+export function isCandidate(layer: RawLayer, role: RoleHint, label: string): boolean {
+  if (layer.hasReactions) return false;
+  const readable = label !== role && label !== 'unlabeled area';
+  return CLICKABLE.has(role) || (role === 'text' && readsAsLabel(layer)) || (role === 'image' && readable);
+}
+
 /** The visible texts of measured layers, in reading order. */
 export function visibleTexts(layers: RawLayer[], index: LayerIndex = indexLayers(layers)): RawLayer[] {
   return layers
@@ -170,9 +181,7 @@ export function candidatesOf(node: string, layers: RawLayer[], shareOf: (key: st
   const texts = visibleTexts(layers, index);
   const out: FlowCandidate[] = [];
   for (const { layer, role, label } of classifyElements(whole)) {
-    const readable = label !== role && label !== 'unlabeled area';
-    const listed = CLICKABLE.has(role) || (role === 'text' && readsAsLabel(layer)) || (role === 'image' && readable);
-    if (!listed || layer.hasReactions) continue;
+    if (!isCandidate(layer, role, label)) continue;
     const c = centre(layer);
     const near = texts
       .filter((t) => !inside(index, t.key, layer.key))

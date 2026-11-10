@@ -16,8 +16,9 @@ import { ApiError, TURN_TIMEOUT_MS, type AbortCode, type ApiClient, type TimerEf
 import { SAVED_SESSION_VERSION, type SavedSession, type TraceRenderReply } from '../../lib/messages';
 import { listElements } from '../../lib/proto/elements';
 import { apply, settle, start, type EngineEffect } from '../../lib/proto/engine';
-import type { FlowMap } from '../../lib/proto/flow';
+import { isCandidate, readingLookup, type FlowMap } from '../../lib/proto/flow';
 import { EngineError, type EngineErrorCode } from '../../lib/proto/errors';
+import { indexLayers } from '../../lib/proto/hitTest';
 import type { Element, ElementTarget, ProtoDoc, RawLayer, TraceAction, TraceOutcome, TraceState } from '../../lib/proto/model';
 import { outcomeOf } from '../../lib/proto/outcome';
 import { measuredPageRange, pageOffset } from '../../lib/proto/scroll';
@@ -237,6 +238,7 @@ function targetOf(action: TraceAction, elements: readonly Element[]): string | n
 export async function runSession(run: SessionRun, deps: SessionDeps): Promise<SessionResult> {
   const { api, bridge } = deps;
   const doc = run.doc;
+  const reads = run.map ? readingLookup(run.map) : null;
   const startedAt = deps.now();
   const notices: string[] = [];
   let phase: SessionPhase = 'acting';
@@ -246,6 +248,8 @@ export async function runSession(run: SessionRun, deps: SessionDeps): Promise<Se
   let pendingEffects: TimerEffect[] = [];
   /** Frames a loop of timers ran through since the last turn posted. */
   let loopFrames: string[] = [];
+  /** What the last click hit that the run's map has no reading for, for the next turn's map_miss flag. */
+  let mapMisses: string[] = [];
   /** Turns the backend already holds (after a turn_out_of_order): polled, never posted again. */
   let backendHas = 0;
 
@@ -396,6 +400,11 @@ export async function runSession(run: SessionRun, deps: SessionDeps): Promise<Se
       flags.push('missing_font');
       details.missing_font = { fonts: fonts.slice(0, MAX_FLAG_DETAILS).map((f) => cap(f, MAX_DETAIL)) };
     }
+    // A run note only while the click still reports nothing happening (a settle may have changed that).
+    if (mapMisses.length && last?.outcome === 'nothing_happened') {
+      flags.push('map_miss');
+      details.map_miss = { labels: mapMisses.slice(0, MAX_FLAG_DETAILS) };
+    }
     return {
       owner: run.owner,
       turn,
@@ -519,6 +528,7 @@ export async function runSession(run: SessionRun, deps: SessionDeps): Promise<Se
     // Turn 1 has no `last` to carry what timers did: that waits for turn 2.
     if (last) pendingEffects = [];
     loopFrames = [];
+    mapMisses = [];
 
     let view: DecidedView;
     try {
@@ -539,7 +549,7 @@ export async function runSession(run: SessionRun, deps: SessionDeps): Promise<Se
     setPhase('acting');
     let applied;
     try {
-      applied = apply(doc, state, action, rendered.layers, listed.targets);
+      applied = apply(doc, state, action, rendered.layers, listed.targets, reads?.lookup ?? null);
     } catch (err) {
       throw engineAbort(err, `Playing turn ${turn}'s ${action.type}`);
     }
@@ -554,7 +564,9 @@ export async function runSession(run: SessionRun, deps: SessionDeps): Promise<Se
       outcome: applied.outcome,
       target: targetOf(action, listed.elements),
       ...(applied.outcome === 'unsupported' ? { unsupported: unsupportedDetail(applied.effects) } : {}),
+      ...(applied.reading ? { reading: applied.reading.id } : {}),
     };
+    if (reads && action.type === 'click' && applied.outcome === 'nothing_happened') mapMisses = missedBy(action.element, listed, rendered.layers);
     await save({
       owner: run.owner,
       runId: run.runId,
@@ -564,6 +576,7 @@ export async function runSession(run: SessionRun, deps: SessionDeps): Promise<Se
       timerEffects: [...pendingEffects],
       loopFrames: [...loopFrames],
       flowMapVersion: run.map?.version ?? null,
+      mapMisses: [...mapMisses],
       version: SAVED_SESSION_VERSION,
     });
     turn += 1;
@@ -593,6 +606,21 @@ export async function runSession(run: SessionRun, deps: SessionDeps): Promise<Se
     }
   }
 
+  /**
+   * The element a click hit that nothing handled, when it is one the flow
+   * map should have read (a candidate) and has no reading of: a run note
+   * that the map missed it.
+   */
+  function missedBy(element: string, listed: { elements: Element[]; targets: Record<string, ElementTarget> }, layers: readonly RawLayer[]): string[] {
+    const e = listed.elements.find((x) => x.id === element) as Element;
+    const target = listed.targets[element] as ElementTarget;
+    const index = indexLayers(layers as RawLayer[]);
+    const layer = index.byKey.get(target.layerKey);
+    if (!layer) throw new EngineError('invalid_layers', `The element ${element} names layer ${target.layerKey}, which the render didn't measure`);
+    const read = reads?.lookup(index.rootOf.get(layer.key) as string, layer.key) ?? null;
+    return isCandidate(layer, e.role, e.label) && read === null ? [e.label] : [];
+  }
+
   /** Sets the first state: the saved one of a run this panel owns, or the start frame's. */
   function begin() {
     const resume = run.resume;
@@ -611,6 +639,7 @@ export async function runSession(run: SessionRun, deps: SessionDeps): Promise<Se
     state = resume.state;
     pendingEffects = [...resume.timerEffects];
     loopFrames = [...resume.loopFrames];
+    mapMisses = [...resume.mapMisses];
     const missing = [state.frameId, ...state.overlays.map((o) => o.frameId)].filter((id) => !doc.frames.some((f) => f.id === id));
     if (missing.length) throw new Abort('file_changed', `The frames this persona was on are gone from the file (${missing.join(', ')}).`);
     // The backend refuses a turn after the first without `last`: this save can't go on.

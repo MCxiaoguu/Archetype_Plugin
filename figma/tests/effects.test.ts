@@ -589,6 +589,7 @@ describe('panel effects', () => {
       timerEffects: [],
       loopFrames: [],
       flowMapVersion: null,
+      mapMisses: [],
       version: 2,
     };
     main.stored.set('s5', new Map([['r1', saved]]));

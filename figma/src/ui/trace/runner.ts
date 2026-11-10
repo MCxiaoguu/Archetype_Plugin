@@ -349,7 +349,7 @@ async function run(study: StudyTrace, deps: RunnerDeps, results: SessionResult[]
   }
 
   async function saveTurn0(runId: string, flowMapVersion: number | null): Promise<void> {
-    const session: SavedSession = { owner, runId, turn: 0, state: startState, lastOutcome: null, timerEffects: [], loopFrames: [], flowMapVersion, version: SAVED_SESSION_VERSION };
+    const session: SavedSession = { owner, runId, turn: 0, state: startState, lastOutcome: null, timerEffects: [], loopFrames: [], flowMapVersion, mapMisses: [], version: SAVED_SESSION_VERSION };
     let failure: unknown;
     for (let attempt = 0; attempt < 2; attempt++) {
       try {

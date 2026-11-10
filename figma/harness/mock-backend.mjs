@@ -260,9 +260,13 @@ const ACTION_TYPES = ['click', 'hover', 'drag', 'press_key', 'scroll', 'wait', '
 const OUTCOMES = [
   'navigated', 'swapped', 'opened_overlay', 'closed_overlay', 'changed_state', 'scrolled', 'timers_fired',
   'nothing_happened', 'scroll_at_end', 'back_empty', 'waited', 'typed_nothing', 'left_prototype', 'unsupported',
+  'already_here', 'accepted', 'missing',
 ];
-const FLAGS = ['file_changed', 'timer_loop', 'missing_font'];
-const FLAG_DETAILS = { timer_loop: 'frames', missing_font: 'fonts' };
+/** The outcomes only a flow map reading gives, so `last.reading` names it; an inferred navigated names one too. */
+const READING_OUTCOMES = ['already_here', 'accepted', 'missing'];
+const READING_ID = /^r[0-9]+$/;
+const FLAGS = ['file_changed', 'timer_loop', 'missing_font', 'map_miss'];
+const FLAG_DETAILS = { timer_loop: 'frames', missing_font: 'fonts', map_miss: 'labels' };
 const MAX_FLAG_DETAILS = 50;
 const TIMER_EFFECTS = ['left_prototype', 'unsupported'];
 const MAX_TIMER_EFFECTS = 10;
@@ -383,6 +387,16 @@ function cleanLast(last, n) {
   } else if (unsupported !== null && unsupported !== undefined) {
     throw badRequest('last.unsupported is only allowed with the unsupported outcome.');
   }
+  const reading = last.reading;
+  if (READING_OUTCOMES.includes(last.outcome) && (reading === null || reading === undefined)) {
+    throw badRequest(`last.reading is required with ${last.outcome}: the id of the flow map reading that gave it.`);
+  }
+  if (reading !== null && reading !== undefined) {
+    if (!READING_OUTCOMES.includes(last.outcome) && last.outcome !== 'navigated') {
+      throw badRequest(`last.reading is only allowed with navigated, already_here, accepted and missing (got ${repr(last.outcome)}).`);
+    }
+    if (!isText(reading) || !READING_ID.test(reading)) throw badRequest(`last.reading must be a reading id such as r7 (got ${repr(reading)}).`);
+  }
   const effects = last.timer_effects;
   if (effects === null || effects === undefined) return;
   if (!Array.isArray(effects) || effects.length > MAX_TIMER_EFFECTS) throw badRequest(`last.timer_effects must be a list of at most ${MAX_TIMER_EFFECTS} {type, detail}.`);
@@ -425,6 +439,10 @@ export function cleanTurn(body) {
     throw badRequest(`flags must be a list drawn from ${FLAGS.join(', ')}, each at most once (got ${repr(flags)}).`);
   }
   cleanFlagDetails(body.flag_details, flags);
+  if (flags.includes('map_miss') && body.last?.outcome !== 'nothing_happened') {
+    throw badRequest('flags.map_miss is only allowed when last.outcome is nothing_happened: the click hit an element the map has no reading for.');
+  }
+  if (flags.includes('map_miss') && !body.flag_details?.map_miss) throw badRequest('flags.map_miss needs flag_details.map_miss.labels: the labels the map has no reading for.');
   const excerpt = body.visible_text_excerpt;
   if (excerpt !== null && excerpt !== undefined && !(isText(excerpt) && chars(excerpt) <= MAX_EXCERPT)) {
     throw badRequest(`visible_text_excerpt must be a string of at most ${MAX_EXCERPT} characters.`);
@@ -883,14 +901,31 @@ function createTraceRuns({ clock, thinkingPolls }) {
     }
     if (n > 1) {
       // last reports what the action turn n-1 chose did: the step it completes is that action's.
-      const chosen = run.turns.get(n - 1).result.action;
+      const before = run.turns.get(n - 1);
+      const chosen = before.result.action;
       if (!sameJson(observation.last.action, chosen)) {
         throw badRequest(`last.action must be the action turn ${n - 1} chose, ${repr(chosen)} (got ${repr(observation.last.action)}).`);
       }
+      checkReading(run, observation.last, before.observation.screen.frameId);
     }
     const rec = { turn: n, owner, status: 'thinking', observation, screenshot: shot, deadlineAt: clock() + TURN_DEADLINE_S * 1000, polls: 0, result: null, error: null };
     run.turns.set(n, rec);
     return [202, view(rec)];
+  }
+
+  /** _clean_last's check of last.reading against the run's own flow map version and the frame turn n-1 showed. */
+  function checkReading(run, last, shownFrame) {
+    const id = last.reading;
+    if (id === undefined || id === null) return;
+    const version = run.flowMapVersion;
+    if (version === null || version === undefined) throw badRequest(`last.reading ${id} names a flow map reading, but this run plays under no flow map version.`);
+    const map = maps.versionOf(run.studyId, version);
+    const reading = map?.readings.find((r) => r.id === id);
+    if (!reading) throw badRequest(`last.reading ${id} is not a reading of flow map version ${version}.`);
+    const need = { navigated: 'edge', already_here: 'edge', accepted: 'control', missing: 'gap' }[last.outcome];
+    if (reading.kind !== need) throw badRequest(`last.reading ${id} is ${reading.kind === 'edge' ? 'an' : 'a'} ${reading.kind} reading in flow map version ${version}, not ${need === 'edge' ? 'an' : 'a'} ${need} (outcome ${last.outcome}).`);
+    if (last.outcome === 'navigated' && reading.to === shownFrame) throw badRequest(`last.reading ${id} leads to ${reading.to}, the frame turn's screen showed, so its outcome is already_here, not navigated.`);
+    if (last.outcome === 'already_here' && reading.to !== shownFrame) throw badRequest(`last.reading ${id} leads to ${reading.to}, another frame than the screen's ${shownFrame}, so its outcome is navigated, not already_here.`);
   }
 
   function getTurn(runId, n) {

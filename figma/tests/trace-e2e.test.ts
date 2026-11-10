@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { cleanTurn, createMockBackend, serveMock, type MockBackend, type ScriptStep } from '../harness/mock-backend.mjs';
+import { cleanTurn, createMockBackend, serveMock, type MockBackend, type MockFlowMap, type ScriptStep } from '../harness/mock-backend.mjs';
 import { ApiClient, ApiError, type TurnBody } from '../src/lib/api';
 import { indexFrames } from '../src/lib/frames';
 import { runPreflight } from '../src/lib/preflight';
@@ -749,6 +749,7 @@ describe('a whole study through the runner', () => {
       timerEffects: [],
       loopFrames: [],
       flowMapVersion: null,
+      mapMisses: [],
       version: 2,
     };
     await plugin.bridge.call('trace-save', { studyId: 'study-shared', runId: 'run-theirs', session: theirs });
@@ -910,7 +911,7 @@ describe('a whole study through the runner', () => {
     const reread = await second.bridge.call('trace-read', { importLibraryVariants: true });
     const { sessions } = await second.bridge.call('trace-load', { studyId: 'study-turn0' });
     // Saved on the flow map version the panel committed before claiming them.
-    const turn0 = (runId: string): SavedSession => ({ owner: OWNER, runId, turn: 0, state: start(doc, '1:2'), lastOutcome: null, timerEffects: [], loopFrames: [], flowMapVersion: 1, version: 2 });
+    const turn0 = (runId: string): SavedSession => ({ owner: OWNER, runId, turn: 0, state: start(doc, '1:2'), lastOutcome: null, timerEffects: [], loopFrames: [], flowMapVersion: 1, mapMisses: [], version: 2 });
     expect([...sessions].sort((a, b) => a.runId.localeCompare(b.runId))).toEqual([turn0('run-z-one'), turn0('run-z-two')]);
 
     for (const runId of ['run-z-one', 'run-z-two']) mock.trace.release(runId, 'reopened');
@@ -1343,4 +1344,99 @@ describe('the flow map of the fake Farside page', () => {
     expect(new Set(map?.readings.map((r) => `${r.kind} ${String(r.by)}`))).toEqual(new Set(['gap bulk_gap']));
     expect(mock.trace.runs.get('run-map-fails')).toMatchObject({ status: 'completed', flowMapVersion: 1 });
   }, 30_000);
+
+  /** As a model reads the fake Farside page: the routing link a gap, the bank page's header the way back, the billing periods a choice. */
+  const FARSIDE: NonNullable<MockFlowMap['read']> = (c) => {
+    if (c.label === 'Use routing number instead') return { kind: 'gap', reason: 'No page covers routing numbers.' };
+    if (c.label === 'Connect your bank') return { kind: 'edge', to: '1:2', reason: 'The header leads back to the dashboard.' };
+    if (['Monthly', 'Yearly', 'Team', 'Business', 'Enterprise'].includes(c.label)) return { kind: 'control', reason: 'A choice of billing period.' };
+    return { kind: 'gap', reason: 'No page covers it.' };
+  };
+
+  it('plays a gap as missing, a nav label as an edge to the Dashboard and a radio as a control, and the golden path still completes', async () => {
+    const NAV: ScriptStep[] = [
+      { expect: 'Dashboard', click: 'Billing' },
+      { expect: 'Billing settings', click: 'Connect a bank' },
+      { expect: 'Connect bank', click: 'Connect your bank' },
+      { expect: 'Dashboard', give_up: 'Back where I started.' },
+    ];
+    const RADIO: ScriptStep[] = [
+      { expect: 'Dashboard', click: 'unlabeled area' },
+      { expect: 'Plans', click: 'Yearly' },
+      { expect: 'Plans', give_up: 'Plans only sells subscriptions.' },
+    ];
+    mock.trace.addStudy({
+      studyId: 'study-map-play',
+      waves: [[{ runId: 'run-mp-golden', script: GOLDEN }, { runId: 'run-mp-nav', script: NAV }, { runId: 'run-mp-radio', script: RADIO }]],
+      flowMap: { read: FARSIDE },
+    });
+    const fake = fakeFile();
+    const plugin = openPlugin(fake);
+    const doc = await plugin.bridge.call('trace-read', { importLibraryVariants: true });
+    expect(await study(plugin, doc, 'study-map-play')).toMatchObject({ stop: 'done' });
+    const map = mock.trace.maps.latest('study-map-play');
+    const idOf = (label: string) => map?.readings.find((r) => r.label === label)?.id;
+
+    // "Use routing number instead" is a gap: missing, and the persona goes on along the golden path to the end.
+    const golden = bodiesOf('run-mp-golden');
+    expect(golden.find((b) => b.last?.target?.startsWith('Use routing number instead'))?.last).toMatchObject({ outcome: 'missing', reading: idOf('Use routing number instead') });
+    expect(golden.map((b) => b.screen.title).pop()).toBe('Bank connected');
+    expect(mock.trace.runs.get('run-mp-golden')?.status).toBe('completed');
+    // The bank page's header is an edge to the Dashboard.
+    const nav = bodiesOf('run-mp-nav');
+    expect(nav[3]?.screen.title).toBe('Dashboard');
+    expect(nav[3]?.last).toMatchObject({ outcome: 'navigated', reading: idOf('Connect your bank'), target: expect.stringMatching(/^Connect your bank/) });
+    // A billing period is a control: accepted, and the screen stays.
+    const radio = bodiesOf('run-mp-radio');
+    expect(radio[2]?.last).toMatchObject({ outcome: 'accepted', reading: idOf('Yearly') });
+    expect(radio[2]?.screen.title).toBe('Plans');
+
+    // No candidate is left giving nothing_happened, and the map missed nothing.
+    const all = [...golden, ...nav, ...radio];
+    expect(all.filter((b) => b.last?.outcome === 'nothing_happened')).toEqual([]);
+    expect(all.filter((b) => b.flags.includes('map_miss'))).toEqual([]);
+    expect(refusalsOf('run-mp-golden', 'run-mp-nav', 'run-mp-radio')).toEqual([]);
+  }, 30_000);
+
+  it('resumes a run on its own map version, though the map changed while the panel was closed', async () => {
+    mock.trace.addStudy({
+      studyId: 'study-map-resume',
+      waves: [[{
+        runId: 'run-map-resume',
+        script: [
+          { expect: 'Dashboard', click: 'Billing' },
+          { expect: 'Billing settings', click: 'Connect a bank' },
+          { expect: 'Connect bank', click: 'Use routing number instead', hold: 'reopened' },
+          // Version 1 reads it as a gap: the screen stays.
+          { expect: 'Connect bank', done: 'I would type my routing number once that page exists.' },
+        ],
+      }]],
+      flowMap: { read: FARSIDE },
+    });
+    const fake = fakeFile();
+    const first = openPlugin(fake);
+    const doc = await first.bridge.call('trace-read', { importLibraryVariants: true });
+    const clock = panelClock();
+    const closing = async (ms: number) => {
+      if (mock.trace.runs.get('run-map-resume')?.turns.has(3)) first.close();
+      await clock.sleep(ms);
+    };
+    await expect(study(first, doc, 'study-map-resume', { sleep: closing })).resolves.toMatchObject({ stop: 'cancelled' });
+
+    // While the panel is closed the designer sets the routing link to lead to Verify phone: version 2.
+    const versions = mock.trace.maps.studies.get('study-map-resume')?.versions as Array<Record<string, unknown> & { version: number; readings: Array<Record<string, unknown>> }>;
+    const v1 = versions[0] as (typeof versions)[number];
+    versions.push({ ...structuredClone(v1), version: 2, baseVersion: 1, buildId: null, readings: v1.readings.map((r) => (r.label === 'Use routing number instead' ? { ...r, kind: 'edge', to: '2:30', by: 'designer' } : r)) });
+
+    const second = openPlugin(fake);
+    const reread = await second.bridge.call('trace-read', { importLibraryVariants: true });
+    mock.trace.release('run-map-resume', 'reopened');
+    expect(await study(second, reread, 'study-map-resume')).toMatchObject({ stop: 'done', sessions: [{ runId: 'run-map-resume', stop: 'ended' }] });
+    const last = bodiesOf('run-map-resume').pop();
+    expect(last?.screen.title).toBe('Connect bank');
+    expect(last?.last).toMatchObject({ outcome: 'missing' });
+    expect(mock.trace.runs.get('run-map-resume')).toMatchObject({ status: 'completed', flowMapVersion: 1 });
+    expect(refusalsOf('run-map-resume')).toEqual([]);
+  }, 30_000);
 });
+

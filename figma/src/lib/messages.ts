@@ -148,6 +148,8 @@ export interface SavedSession {
   loopFrames: string[];
   /** The flow map version the run plays (its claim's); null for a run claimed with no map. */
   flowMapVersion: number | null;
+  /** The labels of the elements that turn's click hit that the map has no reading for, for the next turn's `map_miss` flag. */
+  mapMisses: string[];
   /** SAVED_SESSION_VERSION when it was saved: another version's saved state isn't resumed. */
   version: number;
 }

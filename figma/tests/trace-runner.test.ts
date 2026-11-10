@@ -286,6 +286,7 @@ function savedSession(main: MainThread, runId: string, change: { owner?: string;
     timerEffects: [],
     loopFrames: [],
     flowMapVersion: null,
+    mapMisses: [],
     version: 2,
   };
 }
@@ -475,7 +476,7 @@ describe('running a study in the panel', () => {
     const first = await runner(shortWalk, { main, runs, signal: closing.signal, onClaim: () => ++claimed === 2 && closing.abort() });
     // Closed before either session started: no session runs on, and both runs are saved.
     expect(first.result).toEqual({ stop: 'cancelled', sessions: [] });
-    const turn0 = (runId: string) => ({ owner: OWNER, runId, turn: 0, state: start(main.doc, '1:2'), lastOutcome: null, timerEffects: [], loopFrames: [], flowMapVersion: 1, version: 2 });
+    const turn0 = (runId: string) => ({ owner: OWNER, runId, turn: 0, state: start(main.doc, '1:2'), lastOutcome: null, timerEffects: [], loopFrames: [], flowMapVersion: 1, mapMisses: [], version: 2 });
     expect([...(main.stored.get('s1')?.values() ?? [])]).toEqual([turn0('r1'), turn0('r2')]);
     expect(first.claims.map((c) => c.runId)).toEqual(['r1', 'r2']);
 
