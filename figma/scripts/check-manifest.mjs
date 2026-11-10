@@ -21,6 +21,14 @@ for (const key of ['main', 'ui']) {
 const net = manifest.networkAccess ?? {};
 need(Array.isArray(net.allowedDomains) && net.allowedDomains.length > 0, 'networkAccess.allowedDomains must list at least one domain');
 need(!(net.allowedDomains ?? []).some((d) => /localhost|127\.0\.0\.1/.test(d)), 'local servers belong in devAllowedDomains, not allowedDomains');
+// Figma refuses the whole manifest on import ("must be a valid URL") when a
+// domain is an IP address, so loopback servers are listed as localhost only.
+for (const key of ['allowedDomains', 'devAllowedDomains']) {
+  for (const d of net[key] ?? []) {
+    const host = d.replace(/^[a-z]+:\/\//i, '').replace(/[:/].*$/, '');
+    need(!/^\d{1,3}(\.\d{1,3}){3}$/.test(host) && !d.includes('['), `networkAccess.${key}: ${d} is an IP address, which Figma rejects; use a host name such as localhost`);
+  }
+}
 need(typeof net.reasoning === 'string' && net.reasoning.length > 20, 'networkAccess.reasoning should explain the access');
 const text = JSON.stringify(manifest);
 need(!/[\u2013\u2014]/.test(text), 'no en or em dashes in the manifest');
