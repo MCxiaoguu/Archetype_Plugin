@@ -142,19 +142,23 @@ export function pressKey(deps: KeyDeps, s: TraceState, codes: number[]): void {
  * first): each character presses its key there, bubbling up to the
  * nearest layer with a trigger for it, until one shows a different frame
  * or overlay. Figma has no text fields, so the text itself goes nowhere.
+ * Returns whether any typed key reached a reaction.
  */
-export function typeText(deps: KeyDeps, s: TraceState, text: string): void {
+export function typeText(deps: KeyDeps, s: TraceState, text: string): boolean {
   const { layers } = deps;
   const focus = s.focus;
-  if (!focus || !layers.byKey.has(focus.layerKey) || !isShown(s, focus.frameId)) return;
-  if (rootOf(layers, focus.layerKey) !== hittableFrame(layers, s)) return;
+  if (!focus || !layers.byKey.has(focus.layerKey) || !isShown(s, focus.frameId)) return false;
+  if (rootOf(layers, focus.layerKey) !== hittableFrame(layers, s)) return false;
   const shown = screenOf(s);
+  let handled = false;
   for (const char of text) {
     const code = charCode(char);
     if (code === null) continue;
     const key = bubble(layers, focus.layerKey, (k) => deps.handles(s, k, [code]));
     if (key === null) continue;
+    handled = true;
     deps.fire(s, key, [code]);
-    if (screenOf(s) !== shown) return;
+    if (screenOf(s) !== shown) break;
   }
+  return handled;
 }
