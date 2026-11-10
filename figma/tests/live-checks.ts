@@ -43,10 +43,30 @@ export function hiddenFrameNames(fake: Fake, doc: ProtoDoc, told: string): { hid
 const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 /**
+ * Lowercase words after a name that leave it a name: a screen word ("the
+ * Verify phone screen") or a word that starts the rest of the sentence ("I
+ * opened Help: What is ACH and closed it"). Any other lowercase word makes
+ * the name the start of a longer phrase ("Connect bank account").
+ */
+const ENDS_NAME: ReadonlySet<string> = new Set([
+  'screen', 'page', 'view', 'step', 'dialog', 'modal',
+  'and', 'or', 'but', 'so', 'then', 'to', 'is', 'was', 'were', 'are', 'has', 'had', 'with', 'when', 'where', 'which', 'that', 'again', 'now', 'first', 'still', 'too', 'also',
+]);
+
+/**
  * The names `text` uses as the prototype writes them: the exact name, case
- * included, as a whole phrase. Quoting a screen's title matches; plain
- * speech that shares the words ("get my bank connected") doesn't.
+ * included, as a whole phrase that doesn't go on into a longer one. Quoting
+ * a screen's title matches; plain speech that shares the words ("get my
+ * bank connected") doesn't, and nor does a phrase the name only starts
+ * ("Connect bank account for invoice payments", made from the goal).
  */
 export function namesIn(text: string, names: readonly string[]): string[] {
-  return names.filter((name) => new RegExp(`(?<![\\p{L}\\p{N}])${escape(name)}(?![\\p{L}\\p{N}])`, 'u').test(text));
+  return names.filter((name) => {
+    const at = new RegExp(`(?<![\\p{L}\\p{N}])${escape(name)}(?![\\p{L}\\p{N}])`, 'gu');
+    for (const match of text.matchAll(at)) {
+      const next = /^\s+(\p{Ll}+)/u.exec(text.slice((match.index ?? 0) + match[0].length));
+      if (!next || ENDS_NAME.has(next[1] as string)) return true;
+    }
+    return false;
+  });
 }
