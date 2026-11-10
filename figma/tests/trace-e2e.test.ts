@@ -80,6 +80,8 @@ function openPlugin(fake: Fake) {
     return () => void listeners.delete(handler);
   };
   const bridge = createBridge(panelTransport(toMain, onMain));
+  // Fires as the plugin closes, before the bridge goes: the sessions stop where they are.
+  const closing = new AbortController();
   const watchFile = (onChange: (frameIds: string[]) => void) =>
     onMain((msg) => {
       if (msg.type === 'trace-file-changed') onChange(msg.frameIds);
@@ -90,6 +92,7 @@ function openPlugin(fake: Fake) {
     posted,
     failures,
     watchFile,
+    signal: closing.signal,
     /** Holds the next `count` trace-saves (of those `which` picks) until all of them are sent, then delivers them in one task. */
     holdSaves(count: number, which: (msg: TraceRequestMessage) => boolean = () => true) {
       held = { count, which, saves: [] };
@@ -98,8 +101,9 @@ function openPlugin(fake: Fake) {
     serialSaves() {
       serial = Promise.resolve();
     },
-    /** The plugin closes: the panel's bridge and the main thread stop together. */
+    /** The plugin closes: the sessions are told, then the panel's bridge and the main thread stop together. */
     close() {
+      closing.abort();
       bridge.close();
       open = false;
     },
@@ -188,6 +192,7 @@ function persona(
       onStatus: (status) => opts.statuses?.push(status),
       watchFile: plugin.watchFile,
       postTurnTimeoutMs: 10_000,
+      signal: plugin.signal,
     },
   );
 }
@@ -369,17 +374,15 @@ describe('closing the plugin mid-run', () => {
     const before = snapshot(fake);
     await claim('run-resume');
     // The designer closes the plugin while turn 3 is thinking.
-    const closing = async () => {
-      if (mock.trace.runs.get('run-resume')?.turns.has(3)) throw new PanelClosed('The plugin closed');
-      await tick();
-    };
     await expect(
       runSession(
         { runId: 'run-resume', studyId: RESUME, owner: OWNER, doc, shareKey: null, startFrameId: '1:2', resume: null },
-        { bridge: first.bridge, api: client, now: () => Date.now(), sleep: closing, onStatus: () => {}, watchFile: first.watchFile },
+        {
+          bridge: first.bridge, api: client, now: () => Date.now(), onStatus: () => {}, watchFile: first.watchFile, signal: first.signal,
+          sleep: closeWhen(first, () => !!mock.trace.runs.get('run-resume')?.turns.has(3)),
+        },
       ),
-    ).rejects.toThrow(PanelClosed);
-    first.close();
+    ).resolves.toMatchObject({ stop: 'cancelled', ended: null });
     expect(mock.trace.runs.get('run-resume')?.status).toBe('running');
 
     // Reopened: a new main thread and panel on the same file.
@@ -420,19 +423,16 @@ describe('closing the plugin mid-run', () => {
   }, 30_000);
 });
 
-class PanelClosed extends Error {}
-
-/** A sleep that closes the plugin once `when` holds: the session's poll throws, as a closed panel stops mid-turn. */
-const closeWhen = (when: () => boolean) => async () => {
-  if (when()) throw new PanelClosed('The plugin closed');
+/** A sleep that closes the plugin once `when` holds: the sessions stop mid-turn, as a closing panel's do. */
+const closeWhen = (plugin: Plugin, when: () => boolean) => async () => {
+  if (when()) plugin.close();
   await tick();
 };
 
 describe('a wave whose sessions save at once', () => {
-  // Fails until impl-turns' "Fix session review findings" lands (review C1):
-  // trace-save reads, changes and writes one key per study, so two saves
-  // reaching the main thread together keep only one session.
-  it.fails('keeps every session, so each run resumes after the plugin closes', async () => {
+  // Review C1: trace-save reads, changes and writes one key per study, so two
+  // saves reaching the main thread together must not keep only one session.
+  it('keeps every session, so each run resumes after the plugin closes', async () => {
     const script: ScriptStep[] = [
       { expect: 'Dashboard', click: 'Billing' },
       { expect: 'Billing settings', click: 'Connect a bank', hold: 'reopened' },
@@ -445,15 +445,14 @@ describe('a wave whose sessions save at once', () => {
     for (const runId of ['run-a', 'run-b']) await claim(runId);
     // Both personas' turn 1 saves reach the main thread in one task.
     first.holdSaves(2);
-    const closing = (runId: string) => closeWhen(() => !!mock.trace.runs.get(runId)?.turns.has(2));
+    const closing = (runId: string) => closeWhen(first, () => !!mock.trace.runs.get(runId)?.turns.has(2));
     const started = ['run-a', 'run-b'].map((runId) =>
       runSession(
         { runId, studyId: 'study-together', owner: OWNER, doc, shareKey: null, startFrameId: '1:2', resume: null },
-        { bridge: first.bridge, api: client, now: () => Date.now(), sleep: closing(runId), onStatus: () => {}, watchFile: first.watchFile },
+        { bridge: first.bridge, api: client, now: () => Date.now(), sleep: closing(runId), onStatus: () => {}, watchFile: first.watchFile, signal: first.signal },
       ),
     );
-    for (const session of started) await expect(session).rejects.toThrow(PanelClosed);
-    first.close();
+    for (const session of started) await expect(session).resolves.toMatchObject({ stop: 'cancelled' });
 
     const second = openPlugin(fake);
     const reread = await second.bridge.call('trace-read', { importLibraryVariants: true });
@@ -506,13 +505,12 @@ describe('a backend ahead of the saved session', () => {
       runSession(
         { runId: 'run-ahead', studyId: 'study-ahead', owner: OWNER, doc, shareKey: null, startFrameId: '1:2', resume: null },
         {
-          bridge: first.bridge, api: client, now: () => Date.now(), onStatus: (st) => statuses.push(st), watchFile: first.watchFile,
-          sleep: closeWhen(() => !!mock.trace.runs.get('run-ahead')?.turns.has(4)),
+          bridge: first.bridge, api: client, now: () => Date.now(), onStatus: (st) => statuses.push(st), watchFile: first.watchFile, signal: first.signal,
+          sleep: closeWhen(first, () => !!mock.trace.runs.get('run-ahead')?.turns.has(4)),
         },
       ),
-    ).rejects.toThrow(PanelClosed);
-    first.close();
-    expect(statuses[statuses.length - 1]?.notices).toContain(NOTICE.notSaved);
+    ).resolves.toMatchObject({ stop: 'cancelled' });
+    expect(statuses[statuses.length - 1]?.notices).toContain(`${NOTICE.notSaved} The storage quota is full`);
 
     const second = openPlugin(fake);
     const reread = await second.bridge.call('trace-read', { importLibraryVariants: true });
@@ -646,6 +644,7 @@ function study(
       onRunner: (status) => opts.runner?.push(status),
       watchFile: plugin.watchFile,
       postTurnTimeoutMs: 10_000,
+      signal: plugin.signal,
     },
   );
 }
@@ -704,15 +703,12 @@ describe('a whole study through the runner', () => {
     await tick();
     expect(scratchOn(fake)).toEqual([]);
     expectUntouched(fake, before);
-    // What this machine keeps of the runs afterwards: the it.fails case below, until review C1 is fixed.
     expect(plugin.failures).toEqual([]);
   }, 30_000);
 
-  // Fails until impl-turns' "Fix session review findings" lands (review C1,
-  // which cherry-picks f514088): two runs that end together each forget
-  // themselves from a copy of the study's sessions, and the save written
-  // last brings the other one back.
-  it.fails('forgets every run on this machine once the study is done, also runs that end at once', async () => {
+  // Review C1: two runs that end together each forget themselves from the
+  // study's sessions; the save written last must not bring the other back.
+  it('forgets every run on this machine once the study is done, also runs that end at once', async () => {
     const quick = (reason: string): ScriptStep[] => [{ expect: 'Dashboard', click: 'Billing' }, { expect: 'Billing settings', give_up: reason }];
     mock.trace.addStudy({ studyId: 'study-runner-forget', waves: [[{ runId: 'run-f-one', script: quick('Nothing about banks.') }, { runId: 'run-f-two', script: quick('No bank here.') }]] });
     const fake = fakeFile();
@@ -776,7 +772,15 @@ describe('a whole study through the runner', () => {
     const plugin = openPlugin(fake);
     const doc = await plugin.bridge.call('trace-read', { importLibraryVariants: true });
     // An earlier panel on this machine, with another owner id, saved where its run stood.
-    const theirs: SavedSession = { owner: 'panel-other', runId: 'run-theirs', turn: 1, state: start(doc, '1:2'), lastOutcome: null };
+    const theirs: SavedSession = {
+      owner: 'panel-other',
+      runId: 'run-theirs',
+      turn: 1,
+      state: start(doc, '1:2'),
+      lastOutcome: null,
+      timerEffects: [],
+      loopFrames: [],
+    };
     await plugin.bridge.call('trace-save', { studyId: 'study-shared', runId: 'run-theirs', session: theirs });
     const clock = panelClock();
     // The wave waits for the other panel's run, which that panel then aborts.
@@ -815,11 +819,10 @@ describe('a whole study through the runner', () => {
     const before = snapshot(fake);
     const clock = panelClock();
     const closing = async (ms: number) => {
-      if (mock.trace.runs.get('run-rr')?.turns.has(3)) throw new PanelClosed('The plugin closed');
+      if (mock.trace.runs.get('run-rr')?.turns.has(3)) first.close();
       await clock.sleep(ms);
     };
-    await expect(study(first, doc, 'study-runner-resume', { sleep: closing })).rejects.toThrow(PanelClosed);
-    first.close();
+    await expect(study(first, doc, 'study-runner-resume', { sleep: closing })).resolves.toMatchObject({ stop: 'cancelled', sessions: [{ runId: 'run-rr', stop: 'cancelled' }] });
     expect(mock.trace.runs.get('run-rr')).toMatchObject({ status: 'running', owner: OWNER });
 
     const second = openPlugin(fake);
