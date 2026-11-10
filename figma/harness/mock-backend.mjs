@@ -263,13 +263,22 @@ export function createMockBackend({ log = () => {}, clock = () => Date.now(), th
       const k = mine.filter((r) => r.status === 'completed').length;
       return { archetypeId: a.archetypeId, name: a.archetypeName, role: a.role, completion: { k, n: mine.length, rate: mine.length ? k / mine.length : null }, abandonment: [], quitReasons: {} };
     });
+    const flow = flowOf(s);
     return {
       studyId: s.id, title: s.title, status: scored.length === runs.length ? 'complete' : 'running', partial: scored.length < runs.length,
       runsTotal: runs.length, runsScored: scored.length, runsPending: runs.length - scored.length,
       icp: s.body.icp, design: s.body.design, archetypes,
       runs: runs.map((r) => ({ runId: r.runId, archetypeId: r.archetypeId, archetypeName: r.archetypeName, wave: r.wave, status: r.status, completed: r.status === 'completed' })),
-      factorImpact: [], headline: null, findings: null, flow: flowOf(s), recommendations: [], cached: false,
+      factorImpact: [], headline: null, findings: null, flow, recommendations: recommendationsOf(flow), cached: false,
     };
+  }
+
+  /** The recommendations a plugin-mode study's report builds from its flow: add what was looked for, wire what was taken. */
+  function recommendationsOf(flow) {
+    return [
+      ...flow.featureNeeds.map((n) => ({ title: `Add '${n.label}' on '${n.nodeNames[0]}'`, whatToChange: `${n.personas} ${n.personas === 1 ? 'persona' : 'personas'} looked for it and found no page behind it.`, affectedArchetypes: [] })),
+      ...flow.inferredTransitions.map((t) => ({ title: `Wire '${t.label}' to '${t.toName}'`, whatToChange: `Personas took it as a link ${t.uses} ${t.uses === 1 ? 'time' : 'times'}; the prototype doesn't draw it.`, affectedArchetypes: [] })),
+    ];
   }
 
   /** study_report_service's flow, from the runs' paths and the map versions they played. */
@@ -299,18 +308,22 @@ export function createMockBackend({ log = () => {}, clock = () => Date.now(), th
         if (!st.reading) continue;
         const reading = readingOf(p, st.reading);
         if (st.outcome === 'missing') {
-          const n = needs.get(reading.id) ?? { id: `N${needs.size + 1}`, reading: reading.id, label: reading.label, nodes: [], nodeNames: [], personas: 0, tries: 0, runIds: [], quotes: [], needs: [] };
-          n.tries += 1;
+          const n = needs.get(reading.id) ?? { id: `N${needs.size + 1}`, reading: reading.id, label: reading.label, nodes: [], nodeNames: [], personas: 0, tries: 0, runIds: [], quotes: [], needs: [], archetypes: new Set() };
+          // Tries count the runs that clicked it, personas the archetypes (a repeat run is the same persona).
           if (!n.runIds.includes(p.runId)) n.runIds.push(p.runId);
-          n.personas = n.runIds.length;
+          n.archetypes.add(p.archetypeId);
+          n.tries = n.runIds.length;
+          n.personas = n.archetypes.size;
           if (!n.nodes.includes(st.node)) n.nodes.push(st.node), n.nodeNames.push(names.get(st.node) ?? st.node);
           needs.set(reading.id, n);
         }
         if (st.outcome === 'navigated') {
-          const t = transitions.get(reading.id) ?? { id: `T${transitions.size + 1}`, reading: reading.id, label: reading.label, from: [], to: reading.to, toName: names.get(reading.to) ?? reading.to, uses: 0, personas: 0, runIds: [] };
+          const t = transitions.get(reading.id) ?? { id: `T${transitions.size + 1}`, reading: reading.id, label: reading.label, from: [], to: reading.to, toName: names.get(reading.to) ?? reading.to, uses: 0, personas: 0, runIds: [], archetypes: new Set() };
+          // Uses count the steps.
           t.uses += 1;
           if (!t.runIds.includes(p.runId)) t.runIds.push(p.runId);
-          t.personas = t.runIds.length;
+          t.archetypes.add(p.archetypeId);
+          t.personas = t.archetypes.size;
           if (!t.from.includes(st.node)) t.from.push(st.node);
           transitions.set(reading.id, t);
         }
@@ -323,8 +336,8 @@ export function createMockBackend({ log = () => {}, clock = () => Date.now(), th
       nodes: [...names].map(([id, name]) => ({ id, name })),
       paths: paths.map(({ misses, ...p }) => p),
       completion: { runs: paths.length, reachedGoal: paths.filter((p) => p.reachedGoal).length },
-      dropOffs: [...dropOffs.values()], featureNeeds: [...needs.values()], otherNeeds: [],
-      inferredTransitions: [...transitions.values()],
+      dropOffs: [...dropOffs.values()], featureNeeds: [...needs.values()].map(({ archetypes, ...n }) => n), otherNeeds: [],
+      inferredTransitions: [...transitions.values()].map(({ archetypes, ...t }) => t),
       mapMisses: { count: missed.reduce((n, p) => n + p.misses.length, 0), runIds: missed.map((p) => p.runId), labels: [...new Set(missed.flatMap((p) => p.misses))] },
     };
   }
@@ -1010,14 +1023,15 @@ function createTraceRuns({ clock, thinkingPolls }) {
     if (run.status !== 'queued') {
       throw new Refused(409, 'already_claimed', `run ${runId} is ${run.status}, not queued, so it cannot be claimed again. Another actor has it; take the next queued run of the study.`);
     }
-    // A plugin-mode run plays the study's current flow map version, which its claim names.
+    // A plugin-mode run plays the flow map version its claim names, which must be the current one;
+    // a claim that names none plays no map, as an older panel's does.
     const current = maps.latest(run.studyId)?.version ?? null;
-    if (owned && asked !== current) {
+    if (owned && asked !== null && asked !== current) {
       throw new Refused(409, 'flow_map_stale', current === null
         ? `flow map version ${asked} is not current: study ${run.studyId} has no flow map, so claim with none.`
         : `flow map version ${asked} is not current (${current}): commit the map again and claim with version ${current}.`);
     }
-    Object.assign(run, { status: 'running', owner: body.owner ?? null, browser: body.browser ?? null, claimedAt: new Date(clock()).toISOString(), flowMapVersion: owned ? current : null });
+    Object.assign(run, { status: 'running', owner: body.owner ?? null, browser: body.browser ?? null, claimedAt: new Date(clock()).toISOString(), flowMapVersion: owned ? asked : null });
     return [200, { ...structuredClone(run.briefing), claimedAt: run.claimedAt, flowMapVersion: run.flowMapVersion }];
   }
 

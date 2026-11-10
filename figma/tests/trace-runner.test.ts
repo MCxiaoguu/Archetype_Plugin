@@ -114,12 +114,12 @@ function studyBackend(brain: (runId: string, body: TurnBody) => Decision, opts: 
         maps.push({ ...last, version: last.version + 1, baseVersion: last.version, buildId: null });
         log.push('edit');
       }
-      // A queued run is claimed only on the current version; its own owner's repeat claim answers its first briefing.
+      // A queued run is claimed on the current version, or on none; its own owner's repeat claim answers its first briefing.
       const current = maps[maps.length - 1]?.version ?? null;
-      if (r.status === 'queued' && body.flowMapVersion !== current) {
+      if (r.status === 'queued' && body.flowMapVersion !== null && body.flowMapVersion !== current) {
         throw new ApiError(409, 'flow_map_stale', `flow map version ${body.flowMapVersion} is not current (${current}): commit the map again and claim with version ${current}.`);
       }
-      if (!versionOf.has(runId) && r.status === 'queued') versionOf.set(runId, current);
+      if (!versionOf.has(runId) && r.status === 'queued') versionOf.set(runId, body.flowMapVersion);
       const briefing = {
         runId,
         sessionId: `sess-${runId}`,

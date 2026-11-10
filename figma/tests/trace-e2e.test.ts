@@ -996,6 +996,7 @@ describe('a Single persona study', () => {
         'Dashboard', 'Billing settings', 'Connect bank', 'Connect bank', 'Bank sign in error', 'Connect bank', 'Connect bank', 'Verify phone', 'Bank connected',
       ]);
       expect(await api.getPaths(studyId)).toEqual({ runs: [expect.objectContaining({ runId, flowMapVersion: 1, endNode: '2:50' })] });
+      expect(view.changes).toEqual([{ title: "Add 'Use routing number instead' on 'Connect bank'", whatToChange: '1 persona looked for it and found no page behind it.' }]);
     } finally {
       await served.close();
     }
@@ -1311,6 +1312,71 @@ describe('the mock backend', () => {
     await api.claimRun('run-w2', { browser, owner: OWNER, flowMapVersion: null });
     await api.abortRun('run-w2', { owner: OWNER, code: 'render_failed', detail: 'x' });
     expect(await api.nextWave('study-waves')).toMatchObject({ studyId: 'study-waves', done: true, wave: 2 });
+  });
+
+  describe('the flow map', () => {
+    const NODE = { id: '1:2', kind: 'frame' as const, name: 'Dashboard', pageId: '0:1', heading: 'Welcome back', text: 'Welcome back · Continue' };
+    const CANDIDATE = { node: '1:2', layerKey: '1:5', shareKey: 'L:1:2:1:5', label: 'Welcome back', role: 'text' as const, box: [0, 0, 100, 20] as [number, number, number, number], nearText: 'Continue' };
+    /** A plugin-mode study whose map reads its one candidate as `kind`, committed and built: version 1. */
+    async function mapped(kind: 'edge' | 'control' | 'gap', runs: string[]) {
+      const studyId = `study-map-${++n}`;
+      own.trace.addStudy({ studyId, waves: [runs.map((runId) => ({ runId: `${runId}-${n}`, script: [{ click: 'Continue' }, { done: 'Done.' }] as ScriptStep[] }))], flowMap: { read: () => (kind === 'edge' ? { kind, to: '1:2' } : { kind }) } });
+      const answer = await api.commitFlowMap(studyId, { baseVersion: null, docHash: 'h1', nodes: [NODE], edges: [], candidates: [CANDIDATE] });
+      if (answer.status !== 'building') throw new Error('A new input should build');
+      const build = await api.getFlowBuild(studyId, answer.buildId);
+      if (build.status !== 'ready') throw new Error('The build should be ready');
+      return { studyId, map: build.map, runIds: runs.map((r) => `${r}-${n}`) };
+    }
+    /** Turn 2 of a run that clicked Continue on turn 1, reporting `last`, with `flags`. */
+    async function turn2(runId: string, last: Record<string, unknown>, extra: Partial<TurnBody> = {}) {
+      await api.postTurn(runId, body(1));
+      await api.getTurn(runId, 1);
+      return api.postTurn(runId, body(2, { last: { action: { type: 'click', element: 'e1' }, target: 'Continue (e1)', ...last } as TurnBody['last'], ...extra }));
+    }
+
+    it('claims a run on the current version, plays no map for a claim that names none, and refuses a stale version', async () => {
+      const { map, runIds } = await mapped('gap', ['run-a', 'run-b', 'run-c']);
+      expect(map).toMatchObject({ version: 1, readings: [{ id: 'r1', shareKey: 'L:1:2:1:5', nodes: ['1:2'], layerKeys: ['1:5'], kind: 'gap' }] });
+      const [a, b, c] = runIds as [string, string, string];
+      expect(await api.claimRun(a, { browser, owner: OWNER, flowMapVersion: 1 })).toMatchObject({ flowMapVersion: 1 });
+      // Contract v2, section 6 as changed: no version is no map, as with an older panel.
+      expect(await api.claimRun(b, { browser, owner: OWNER, flowMapVersion: null })).toMatchObject({ flowMapVersion: null });
+      expect(await refused(api.claimRun(c, { browser, owner: OWNER, flowMapVersion: 2 }))).toMatchObject({ status: 409, code: 'flow_map_stale', message: 'flow map version 2 is not current (1): commit the map again and claim with version 1.' });
+      // A repeat claim answers the run's own version.
+      expect(await api.claimRun(a, { browser, owner: OWNER, flowMapVersion: 7 })).toMatchObject({ flowMapVersion: 1 });
+    });
+
+    it("takes last.reading only of a kind that fits the outcome, in the run's own version", async () => {
+      const gap = await mapped('gap', ['run-ok', 'run-kind', 'run-none', 'run-other', 'run-unknown', 'run-nomap']);
+      const [ok, kind, none, other, unknown, nomap] = gap.runIds as [string, string, string, string, string, string];
+      for (const runId of [ok, kind, none, other, unknown]) await api.claimRun(runId, { browser, owner: OWNER, flowMapVersion: 1 });
+      await api.claimRun(nomap, { browser, owner: OWNER, flowMapVersion: null });
+      expect(await turn2(ok, { outcome: 'missing', reading: 'r1' })).toMatchObject({ turn: 2, status: 'thinking' });
+      expect((await refused(turn2(kind, { outcome: 'accepted', reading: 'r1' }))).message).toBe('last.reading r1 is a gap reading in flow map version 1, not a control (outcome accepted).');
+      expect((await refused(turn2(none, { outcome: 'missing' }))).message).toBe('last.reading is required with missing: the id of the flow map reading that gave it.');
+      expect((await refused(turn2(other, { outcome: 'nothing_happened', reading: 'r1' }))).message).toMatch(/^last\.reading is only allowed with navigated, already_here, accepted and missing/);
+      expect((await refused(turn2(unknown, { outcome: 'missing', reading: 'r9' }))).message).toBe('last.reading r9 is not a reading of flow map version 1.');
+      expect((await refused(turn2(nomap, { outcome: 'missing', reading: 'r1' }))).message).toMatch(/this run plays under no flow map version/);
+    });
+
+    it('tells navigated from already here by the frame the screen showed', async () => {
+      const edge = await mapped('edge', ['run-here', 'run-away']);
+      const [here, away] = edge.runIds as [string, string];
+      for (const runId of edge.runIds) await api.claimRun(runId, { browser, owner: OWNER, flowMapVersion: 1 });
+      // The edge goes to 1:2, the frame turn 1 showed.
+      expect(await turn2(here, { outcome: 'already_here', reading: 'r1' })).toMatchObject({ status: 'thinking' });
+      expect((await refused(turn2(away, { outcome: 'navigated', reading: 'r1' }))).message).toMatch(/^last\.reading r1 leads to 1:2, the frame turn's screen showed, so its outcome is already_here/);
+    });
+
+    it('takes the map_miss flag only with nothing happening, and with its labels', async () => {
+      const { runIds } = await mapped('control', ['run-miss', 'run-miss-moved', 'run-miss-bare']);
+      const [miss, moved, bare] = runIds as [string, string, string];
+      for (const runId of runIds) await api.claimRun(runId, { browser, owner: OWNER, flowMapVersion: 1 });
+      const flagged = { flags: ['map_miss' as const], flag_details: { map_miss: { labels: ['Manifest'] } } };
+      expect(await turn2(miss, { outcome: 'nothing_happened' }, flagged)).toMatchObject({ status: 'thinking' });
+      expect((await refused(turn2(moved, { outcome: 'navigated' }, flagged))).message).toMatch(/^flags\.map_miss is only allowed when last\.outcome is nothing_happened/);
+      expect((await refused(turn2(bare, { outcome: 'nothing_happened' }, { flags: ['map_miss'] }))).message).toMatch(/needs flag_details\.map_miss\.labels/);
+    });
   });
 });
 
