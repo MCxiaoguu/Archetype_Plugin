@@ -35,7 +35,7 @@ describe('readProto', () => {
     it("reads the page's top level frames, and a frame on another page that a reaction reaches", async () => {
       const fake = await read();
       // 7:5 is reached only from a variant of an interactive component.
-      expect(fake.doc.frames.map((f) => f.id)).toEqual(['1:2', '2:10', '2:20', '2:30', '2:40', '2:50', '3:1', '3:3', '3:5', '4:1', '7:1', '7:5']);
+      expect(fake.doc.frames.map((f) => f.id)).toEqual(['1:2', '2:10', '2:20', '2:30', '2:40', '2:50', '3:1', '3:3', '3:5', '4:1', '4:5', '7:1', '7:5']);
       expect(fake.doc.frames.find((f) => f.id === '7:1')).toMatchObject({ name: 'Release notes', pageId: '0:2' });
       expect(fake.api.getNodeByIdAsync).toHaveBeenCalledWith('7:1');
       // Another page's layers are loaded before they are read; its reactions count too.
@@ -82,9 +82,16 @@ describe('readProto', () => {
       );
     });
 
+    it("keeps MOUSE_ENTER's deprecatedVersion as Figma has it", async () => {
+      const { doc } = await read(undefined, (f) => {
+        node(f, '1:8').reactions = [{ trigger: { type: 'MOUSE_LEAVE', delay: 0, deprecatedVersion: true }, actions: [{ type: 'BACK' }] }];
+      });
+      expect(doc.reactions['1:8']?.[0]?.trigger).toEqual({ type: 'MOUSE_LEAVE', delayMs: 0, deprecatedVersion: true });
+    });
+
     it('reads trigger types, delays and key codes', async () => {
       const { doc } = await read();
-      expect(doc.reactions['2:12']?.map((r) => r.trigger)).toEqual([{ type: 'ON_CLICK' }, { type: 'MOUSE_ENTER', delayMs: 500 }]);
+      expect(doc.reactions['2:12']?.map((r) => r.trigger)).toEqual([{ type: 'ON_CLICK' }, { type: 'MOUSE_ENTER', delayMs: 500, deprecatedVersion: false }]);
       expect(doc.reactions['2:30']?.[0]?.trigger).toEqual({ type: 'ON_KEY_DOWN', device: 'KEYBOARD', keyCodes: [13] });
       expect(doc.reactions['3:1']?.[0]?.trigger).toEqual({ type: 'AFTER_TIMEOUT', delayMs: 4000 });
     });
@@ -231,19 +238,18 @@ describe('readProto', () => {
       expect(Object.keys(doc.variantSets).sort()).toEqual(['2:33', '2:33;8:6', '3:6']);
     });
 
-    it('imports library variants, and marks one whose import fails unavailable without throwing', async () => {
+    it('reads a library variant the file holds in place, imports one whose layers it lacks, and keeps a failed import with its error', async () => {
       const fake = await read();
-      expect(fake.api.importComponentByKeyAsync).toHaveBeenCalledWith('lib-plan-basic');
+      expect(fake.api.importComponentByKeyAsync.mock.calls).toEqual([['lib-plan-pro']]);
       expect(fake.doc.variantSets['3:6']).toEqual({
         frameId: '3:5',
         variants: [
-          { id: '9:2', name: 'Plan=Basic', componentId: 'L:2', unavailable: false, reactions: { '': [{ trigger: { type: 'ON_CLICK' }, actions: [go('9:3', 'CHANGE_TO')] }] } },
+          { id: '9:2', name: 'Plan=Basic', componentId: '9:2', unavailable: false, reactions: { '': [{ trigger: { type: 'ON_CLICK' }, actions: [go('9:3', 'CHANGE_TO')] }] } },
           { id: '9:3', name: 'Plan=Pro', componentId: null, unavailable: true, reactions: {} },
         ],
       });
       expect(fake.doc.libraryVariants).toEqual([
-        { variantId: '9:2', key: 'lib-plan-basic', name: 'Plan=Basic', status: 'imported' },
-        { variantId: '9:3', key: 'lib-plan-pro', name: 'Plan=Pro', status: 'failed' },
+        { variantId: '9:3', key: 'lib-plan-pro', name: 'Plan=Pro', status: 'failed', error: expect.stringContaining("isn't published") },
       ]);
     });
 
@@ -251,10 +257,31 @@ describe('readProto', () => {
       const fake = await read({ importLibraryVariants: false });
       expect(fake.api.importComponentByKeyAsync).not.toHaveBeenCalled();
       expect(fake.doc.variantSets['3:6']?.variants.map((v) => [v.id, v.unavailable])).toEqual([
-        ['9:2', true],
+        ['9:2', false],
         ['9:3', true],
       ]);
-      expect(fake.doc.libraryVariants.map((v) => v.status)).toEqual(['needs_import', 'needs_import']);
+      expect(fake.doc.libraryVariants).toEqual([{ variantId: '9:3', key: 'lib-plan-pro', name: 'Plan=Pro', status: 'needs_import', error: null }]);
+    });
+
+    it('reads an imported variant as the remote node the file now holds', async () => {
+      const f = fixture();
+      f.library['lib-plan-pro'] = {
+        id: 'L:9',
+        name: 'Plan=Pro',
+        type: 'COMPONENT',
+        key: 'lib-plan-pro',
+        children: [{ id: '9:5', name: 'Label', type: 'TEXT', characters: 'Pro', reactions: [{ trigger: { type: 'ON_CLICK' }, actions: [{ type: 'NODE', destinationId: '9:2', navigation: 'CHANGE_TO', transition: null }] }] }],
+      };
+      const fake = fakeFromFixture(f);
+      const doc = await readProto(fake.api, fake.api.currentPage, { importLibraryVariants: true });
+      expect(doc.variantSets['3:6']?.variants[1]).toEqual({
+        id: '9:3',
+        name: 'Plan=Pro',
+        componentId: '9:3',
+        unavailable: false,
+        reactions: { '9:5': [{ trigger: { type: 'ON_CLICK' }, actions: [go('9:2', 'CHANGE_TO')] }] },
+      });
+      expect(doc.libraryVariants).toEqual([{ variantId: '9:3', key: 'lib-plan-pro', name: 'Plan=Pro', status: 'imported', error: null }]);
     });
   });
 
@@ -266,6 +293,24 @@ describe('readProto', () => {
       expect(billing?.variables['VariableID:10:1']).toEqual({ id: 'VariableID:10:1', name: 'bankLinked', resolvedType: 'BOOLEAN', valuesByMode: { '10:0': false, '10:1': false } });
       expect(billing?.variables['VariableID:10:3']?.valuesByMode['10:0']).toEqual({ r: 0.15, g: 0.35, b: 0.9, a: 1 });
       expect(billing?.variables['VariableID:10:5']?.valuesByMode).toEqual({ '10:0': { alias: 'VariableID:10:3' }, '10:1': { alias: 'VariableID:10:3' } });
+    });
+
+    it('merges the explicit modes of the sections around a frame, outer to inner, the frame its own last', async () => {
+      const { doc } = await read(undefined, (f) => {
+        const outer = node(f, '5:1');
+        outer.explicitVariableModes = { [COLL]: '10:1' };
+        const inner = new FakeNode('5:9', 'Done screens', 'SECTION');
+        inner.world = f.world;
+        inner.explicitVariableModes = { [COLL]: '10:0' };
+        outer.add(inner);
+        inner.appendChild(node(f, '2:50'));
+        node(f, '2:30').explicitVariableModes = { [COLL]: '10:0' };
+      });
+      const modes = (id: string) => doc.frames.find((fr) => fr.id === id)?.explicitVariableModes;
+      expect(modes('2:10')).toEqual({ [COLL]: '10:1' });
+      expect(modes('2:50')).toEqual({ [COLL]: '10:0' });
+      expect(modes('2:30')).toEqual({ [COLL]: '10:0' });
+      expect(modes('1:2')).toEqual({});
     });
 
     it("reads the page's and the frames' explicit modes", async () => {
@@ -281,6 +326,52 @@ describe('readProto', () => {
       const fake = fakeFromFixture(f);
       const doc = await readProto(fake.api, fake.api.currentPage, { importLibraryVariants: true });
       expect(doc.variableCollections[COLL]?.variables['VariableID:10:9']).toBeUndefined();
+    });
+  });
+
+  describe('refusals', () => {
+    const fails = async (edit: (f: ReturnType<typeof fakeFromFixture>) => void, message: RegExp) => {
+      const fake = fakeFromFixture(fixture());
+      edit(fake);
+      await expect(readProto(fake.api, fake.api.currentPage, { importLibraryVariants: true })).rejects.toThrow(message);
+      expect(fake.api.skipInvisibleInstanceChildren).toBe(true);
+    };
+
+    it('refuses a CHANGE_TO inside an instance without a main component', async () => {
+      await fails((f) => (node(f, '2:33').mainComponentId = null), /2:33.*main component/);
+    });
+
+    it('refuses a variable value it has no plain form for', async () => {
+      await fails((f) => {
+        const accent = f.api.variables.getVariableByIdAsync;
+        accent.mockImplementation(async (id: string) => ({
+          id,
+          name: 'accent',
+          resolvedType: 'COLOR',
+          variableCollectionId: COLL,
+          valuesByMode: { '10:0': { color: { r: 1, g: 0, b: 0 }, opacity: { type: 'VARIABLE_ALIAS', id: 'VariableID:10:2' } } },
+        }));
+      }, /accent.*10:0/);
+    });
+
+    it('refuses an expression without its arguments', async () => {
+      await fails((f) => {
+        node(f, '1:8').reactions = [
+          { trigger: { type: 'ON_CLICK' }, actions: [{ type: 'SET_VARIABLE', variableId: 'VariableID:10:2', variableValue: { type: 'EXPRESSION', value: { expressionFunction: 'ADDITION' } } }] },
+        ];
+      }, /ADDITION.*arguments/);
+    });
+
+    it('refuses a destination frame that is on no page', async () => {
+      await fails((f) => {
+        const loose = new FakeNode('8:90', 'Loose section', 'SECTION');
+        const lost = new FakeNode('8:91', 'Lost frame', 'FRAME');
+        loose.world = f.world;
+        lost.world = f.world;
+        loose.add(lost);
+        f.nodes.set('8:91', lost);
+        node(f, '1:8').reactions = [{ trigger: { type: 'ON_CLICK' }, actions: [{ type: 'NODE', destinationId: '8:91', navigation: 'NAVIGATE', transition: null }] }];
+      }, /8:91.*page/);
     });
   });
 

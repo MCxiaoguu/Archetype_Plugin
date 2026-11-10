@@ -1,7 +1,8 @@
 /**
  * What the trace's reading and rendering share on the main thread: the
  * mark on the scratch container the renderer draws in (which every reader
- * skips), and a way to see every layer inside instances.
+ * skips), the ids of the nodes it makes, and the one queue reads and
+ * renders run through.
  */
 
 /** Plugin data on the scratch container: `archetype.trace = "scratch"`. */
@@ -12,42 +13,43 @@ export function isScratch(node: BaseNode): boolean {
   return 'getPluginData' in node && node.getPluginData(SCRATCH_KEY) === SCRATCH_VALUE;
 }
 
-const containers = new Set<string>();
+const made = new Set<string>();
 
-/** Notes a container this session made. A removed node's plugin data can't be read, so watchers go by these ids. */
-export function recordScratchContainer(id: string): void {
-  containers.add(id);
+/** Notes a node a render made: a container, a copy, a backdrop or a detached frame. */
+export function recordScratchNode(id: string): void {
+  made.add(id);
 }
-
-/** Every scratch container this session made, removed ones included: change watchers ignore them and their layers. */
-export function scratchContainerIds(): ReadonlySet<string> {
-  return containers;
-}
-
-const holds = new WeakMap<PluginAPI, { count: number; saved: boolean }>();
 
 /**
- * Runs `work` with `skipInvisibleInstanceChildren` off, so hidden layers
- * inside instances (which a variable or a variant can reveal) are
- * reachable, and puts the flag back afterwards, also when `work` throws.
- * Reads and renders can overlap, so the flag goes back only when the last
- * of them ends.
+ * Every node a render of this session made, removed ones included. The
+ * change watchers ignore their CREATE and DELETE, by id, since a removed
+ * node's plugin data can't be read any more.
  */
-export async function withEveryInstanceChild<T>(api: PluginAPI, work: () => Promise<T>): Promise<T> {
-  let hold = holds.get(api);
-  if (!hold) {
-    hold = { count: 0, saved: api.skipInvisibleInstanceChildren };
-    holds.set(api, hold);
-  }
-  if (hold.count === 0) {
-    hold.saved = api.skipInvisibleInstanceChildren;
+export function scratchNodeIds(): ReadonlySet<string> {
+  return made;
+}
+
+const queues = new WeakMap<PluginAPI, Promise<unknown>>();
+
+/**
+ * Runs `work` after every read or render queued before it, with
+ * `skipInvisibleInstanceChildren` off, so hidden layers inside instances
+ * (which a variable or a variant can reveal) are reachable; the flag goes
+ * back afterwards, also when `work` throws. The flag is global to the
+ * plugin, so reads and renders never overlap.
+ */
+export function exclusive<T>(api: PluginAPI, work: () => Promise<T>): Promise<T> {
+  const before = queues.get(api) ?? Promise.resolve();
+  const next = before.then(async () => {
+    const saved = api.skipInvisibleInstanceChildren;
     api.skipInvisibleInstanceChildren = false;
-  }
-  hold.count++;
-  try {
-    return await work();
-  } finally {
-    hold.count--;
-    if (hold.count === 0) api.skipInvisibleInstanceChildren = hold.saved;
-  }
+    try {
+      return await work();
+    } finally {
+      api.skipInvisibleInstanceChildren = saved;
+    }
+  });
+  // The queue only orders the work; each job's own failure reaches its caller through `next`.
+  queues.set(api, next.catch(() => undefined));
+  return next;
 }

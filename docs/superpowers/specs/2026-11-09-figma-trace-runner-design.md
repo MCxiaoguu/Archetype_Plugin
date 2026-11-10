@@ -225,7 +225,7 @@ The renderer never creates a page: Starter-plan files are limited in pages, and 
 4. **Measure.** Walks the copies in z-order. For each layer it records a `RawLayer`: logical key, type, name, text, box in viewport coordinates, whether it is visible, whether it has reactions, its role hints, and its parent key.
    - The **logical key** is the original layer id, matched by walking the original and the copy in parallel.
    - Inside a swapped instance, the key is the instance's key plus the child's path in the variant.
-5. **Export.** Exports the viewport as JPEG at quality 80 and 1x. JPEG keeps photo-heavy screens under `ingest_step`'s 1 MB screenshot limit.
+5. **Export.** Exports the viewport as JPEG at 1x; Figma's export has no quality setting, so it uses Figma's own. A screenshot over the turn's 1.5 MB cap fails the render with its size. For the replay, `ingest_step` keeps at most six screenshots of 1 MB per run, as for every plugin run.
 6. **Delete** the copies.
 
 ### Element list (`elements.ts`)

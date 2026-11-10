@@ -2482,7 +2482,7 @@
        ],
        "children": [
         {
-         "id": "I3:6;L:3",
+         "id": "I3:6;9:4",
          "name": "Label",
          "type": "TEXT",
          "x": 12,
@@ -2504,6 +2504,290 @@
            },
            "opacity": 1,
            "visible": true
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "id": "3:8",
+       "name": "Chip row",
+       "type": "INSTANCE",
+       "x": 40,
+       "y": 300,
+       "width": 300,
+       "height": 32,
+       "fills": [],
+       "mainComponentId": "6:20",
+       "children": [
+        {
+         "id": "I3:8;6:21",
+         "name": "Chips",
+         "type": "FRAME",
+         "x": 0,
+         "y": 0,
+         "width": 300,
+         "height": 32,
+         "fills": [],
+         "clipsContent": true,
+         "overflowDirection": "HORIZONTAL",
+         "numberOfFixedChildren": 0,
+         "overlayPositionType": "CENTER",
+         "overlayBackground": {
+          "type": "NONE"
+         },
+         "overlayBackgroundInteraction": "NONE",
+         "explicitVariableModes": {},
+         "children": [
+          {
+           "id": "I3:8;6:22",
+           "name": "Monthly",
+           "type": "FRAME",
+           "x": 0,
+           "y": 0,
+           "width": 96,
+           "height": 32,
+           "fills": [
+            {
+             "type": "SOLID",
+             "color": {
+              "r": 0.96,
+              "g": 0.96,
+              "b": 0.97
+             },
+             "opacity": 1,
+             "visible": true
+            }
+           ],
+           "clipsContent": false,
+           "children": [
+            {
+             "id": "I3:8;6:33",
+             "name": "Label",
+             "type": "TEXT",
+             "x": 8,
+             "y": 6,
+             "width": 80,
+             "height": 20,
+             "characters": "Monthly",
+             "fontName": {
+              "family": "Inter",
+              "style": "Regular"
+             },
+             "fills": [
+              {
+               "type": "SOLID",
+               "color": {
+                "r": 0.1,
+                "g": 0.1,
+                "b": 0.12
+               },
+               "opacity": 1,
+               "visible": true
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "I3:8;6:23",
+           "name": "Yearly",
+           "type": "FRAME",
+           "x": 100,
+           "y": 0,
+           "width": 96,
+           "height": 32,
+           "fills": [
+            {
+             "type": "SOLID",
+             "color": {
+              "r": 0.96,
+              "g": 0.96,
+              "b": 0.97
+             },
+             "opacity": 1,
+             "visible": true
+            }
+           ],
+           "clipsContent": false,
+           "children": [
+            {
+             "id": "I3:8;6:34",
+             "name": "Label",
+             "type": "TEXT",
+             "x": 8,
+             "y": 6,
+             "width": 80,
+             "height": 20,
+             "characters": "Yearly",
+             "fontName": {
+              "family": "Inter",
+              "style": "Regular"
+             },
+             "fills": [
+              {
+               "type": "SOLID",
+               "color": {
+                "r": 0.1,
+                "g": 0.1,
+                "b": 0.12
+               },
+               "opacity": 1,
+               "visible": true
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "I3:8;6:24",
+           "name": "Team",
+           "type": "FRAME",
+           "x": 200,
+           "y": 0,
+           "width": 96,
+           "height": 32,
+           "fills": [
+            {
+             "type": "SOLID",
+             "color": {
+              "r": 0.96,
+              "g": 0.96,
+              "b": 0.97
+             },
+             "opacity": 1,
+             "visible": true
+            }
+           ],
+           "clipsContent": false,
+           "children": [
+            {
+             "id": "I3:8;6:35",
+             "name": "Label",
+             "type": "TEXT",
+             "x": 8,
+             "y": 6,
+             "width": 80,
+             "height": 20,
+             "characters": "Team",
+             "fontName": {
+              "family": "Inter",
+              "style": "Regular"
+             },
+             "fills": [
+              {
+               "type": "SOLID",
+               "color": {
+                "r": 0.1,
+                "g": 0.1,
+                "b": 0.12
+               },
+               "opacity": 1,
+               "visible": true
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "I3:8;6:25",
+           "name": "Business",
+           "type": "FRAME",
+           "x": 300,
+           "y": 0,
+           "width": 96,
+           "height": 32,
+           "fills": [
+            {
+             "type": "SOLID",
+             "color": {
+              "r": 0.96,
+              "g": 0.96,
+              "b": 0.97
+             },
+             "opacity": 1,
+             "visible": true
+            }
+           ],
+           "clipsContent": false,
+           "children": [
+            {
+             "id": "I3:8;6:36",
+             "name": "Label",
+             "type": "TEXT",
+             "x": 8,
+             "y": 6,
+             "width": 80,
+             "height": 20,
+             "characters": "Business",
+             "fontName": {
+              "family": "Inter",
+              "style": "Regular"
+             },
+             "fills": [
+              {
+               "type": "SOLID",
+               "color": {
+                "r": 0.1,
+                "g": 0.1,
+                "b": 0.12
+               },
+               "opacity": 1,
+               "visible": true
+              }
+             ]
+            }
+           ]
+          },
+          {
+           "id": "I3:8;6:26",
+           "name": "Enterprise",
+           "type": "FRAME",
+           "x": 400,
+           "y": 0,
+           "width": 96,
+           "height": 32,
+           "fills": [
+            {
+             "type": "SOLID",
+             "color": {
+              "r": 0.96,
+              "g": 0.96,
+              "b": 0.97
+             },
+             "opacity": 1,
+             "visible": true
+            }
+           ],
+           "clipsContent": false,
+           "children": [
+            {
+             "id": "I3:8;6:37",
+             "name": "Label",
+             "type": "TEXT",
+             "x": 8,
+             "y": 6,
+             "width": 80,
+             "height": 20,
+             "characters": "Enterprise",
+             "fontName": {
+              "family": "Inter",
+              "style": "Regular"
+             },
+             "fills": [
+              {
+               "type": "SOLID",
+               "color": {
+                "r": 0.1,
+                "g": 0.1,
+                "b": 0.12
+               },
+               "opacity": 1,
+               "visible": true
+              }
+             ]
+            }
+           ]
           }
          ]
         }
@@ -2643,6 +2927,127 @@
        "visible": true
       }
      ]
+    },
+    {
+     "id": "4:5",
+     "name": "Settings sheet",
+     "type": "INSTANCE",
+     "x": 0,
+     "y": 4400,
+     "width": 1280,
+     "height": 1400,
+     "fills": [
+      {
+       "type": "SOLID",
+       "color": {
+        "r": 1,
+        "g": 1,
+        "b": 1
+       },
+       "opacity": 1,
+       "visible": true
+      }
+     ],
+     "clipsContent": true,
+     "overflowDirection": "VERTICAL",
+     "numberOfFixedChildren": 1,
+     "overlayPositionType": "CENTER",
+     "overlayBackground": {
+      "type": "NONE"
+     },
+     "overlayBackgroundInteraction": "NONE",
+     "explicitVariableModes": {},
+     "mainComponentId": "6:40",
+     "children": [
+      {
+       "id": "I4:5;6:41",
+       "name": "Body",
+       "type": "TEXT",
+       "x": 40,
+       "y": 120,
+       "width": 600,
+       "height": 24,
+       "characters": "Notification settings",
+       "fontName": {
+        "family": "Inter",
+        "style": "Regular"
+       },
+       "fills": [
+        {
+         "type": "SOLID",
+         "color": {
+          "r": 0.1,
+          "g": 0.1,
+          "b": 0.12
+         },
+         "opacity": 1,
+         "visible": true
+        }
+       ]
+      },
+      {
+       "id": "I4:5;6:42",
+       "name": "Sheet header",
+       "type": "FRAME",
+       "x": 0,
+       "y": 0,
+       "width": 1280,
+       "height": 80,
+       "fills": [
+        {
+         "type": "SOLID",
+         "color": {
+          "r": 0.15,
+          "g": 0.35,
+          "b": 0.9
+         },
+         "opacity": 1,
+         "visible": true
+        }
+       ],
+       "clipsContent": false,
+       "children": [
+        {
+         "id": "I4:5;6:43",
+         "name": "Title",
+         "type": "TEXT",
+         "x": 40,
+         "y": 24,
+         "width": 400,
+         "height": 32,
+         "characters": "Settings",
+         "fontName": {
+          "family": "Inter",
+          "style": "Regular"
+         },
+         "fills": [
+          {
+           "type": "SOLID",
+           "color": {
+            "r": 0.1,
+            "g": 0.1,
+            "b": 0.12
+           },
+           "opacity": 1,
+           "visible": true
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "prototypeBackgrounds": [
+    {
+     "type": "SOLID",
+     "color": {
+      "r": 0.12,
+      "g": 0.12,
+      "b": 0.12
+     },
+     "opacity": 1,
+     "visible": true
     }
    ]
   },
@@ -2784,6 +3189,18 @@
      },
      "overlayBackgroundInteraction": "NONE",
      "explicitVariableModes": {}
+    }
+   ],
+   "prototypeBackgrounds": [
+    {
+     "type": "SOLID",
+     "color": {
+      "r": 0.12,
+      "g": 0.12,
+      "b": 0.12
+     },
+     "opacity": 1,
+     "visible": true
     }
    ]
   },
@@ -3231,6 +3648,409 @@
        ]
       }
      ]
+    },
+    {
+     "id": "6:20",
+     "name": "Chip row",
+     "type": "COMPONENT",
+     "x": 0,
+     "y": 200,
+     "width": 300,
+     "height": 32,
+     "fills": [],
+     "children": [
+      {
+       "id": "6:21",
+       "name": "Chips",
+       "type": "FRAME",
+       "x": 0,
+       "y": 0,
+       "width": 300,
+       "height": 32,
+       "fills": [],
+       "clipsContent": true,
+       "overflowDirection": "HORIZONTAL",
+       "numberOfFixedChildren": 0,
+       "overlayPositionType": "CENTER",
+       "overlayBackground": {
+        "type": "NONE"
+       },
+       "overlayBackgroundInteraction": "NONE",
+       "explicitVariableModes": {},
+       "children": [
+        {
+         "id": "6:22",
+         "name": "Monthly",
+         "type": "FRAME",
+         "x": 0,
+         "y": 0,
+         "width": 96,
+         "height": 32,
+         "fills": [
+          {
+           "type": "SOLID",
+           "color": {
+            "r": 0.96,
+            "g": 0.96,
+            "b": 0.97
+           },
+           "opacity": 1,
+           "visible": true
+          }
+         ],
+         "clipsContent": false,
+         "children": [
+          {
+           "id": "6:33",
+           "name": "Label",
+           "type": "TEXT",
+           "x": 8,
+           "y": 6,
+           "width": 80,
+           "height": 20,
+           "characters": "Monthly",
+           "fontName": {
+            "family": "Inter",
+            "style": "Regular"
+           },
+           "fills": [
+            {
+             "type": "SOLID",
+             "color": {
+              "r": 0.1,
+              "g": 0.1,
+              "b": 0.12
+             },
+             "opacity": 1,
+             "visible": true
+            }
+           ]
+          }
+         ]
+        },
+        {
+         "id": "6:23",
+         "name": "Yearly",
+         "type": "FRAME",
+         "x": 100,
+         "y": 0,
+         "width": 96,
+         "height": 32,
+         "fills": [
+          {
+           "type": "SOLID",
+           "color": {
+            "r": 0.96,
+            "g": 0.96,
+            "b": 0.97
+           },
+           "opacity": 1,
+           "visible": true
+          }
+         ],
+         "clipsContent": false,
+         "children": [
+          {
+           "id": "6:34",
+           "name": "Label",
+           "type": "TEXT",
+           "x": 8,
+           "y": 6,
+           "width": 80,
+           "height": 20,
+           "characters": "Yearly",
+           "fontName": {
+            "family": "Inter",
+            "style": "Regular"
+           },
+           "fills": [
+            {
+             "type": "SOLID",
+             "color": {
+              "r": 0.1,
+              "g": 0.1,
+              "b": 0.12
+             },
+             "opacity": 1,
+             "visible": true
+            }
+           ]
+          }
+         ]
+        },
+        {
+         "id": "6:24",
+         "name": "Team",
+         "type": "FRAME",
+         "x": 200,
+         "y": 0,
+         "width": 96,
+         "height": 32,
+         "fills": [
+          {
+           "type": "SOLID",
+           "color": {
+            "r": 0.96,
+            "g": 0.96,
+            "b": 0.97
+           },
+           "opacity": 1,
+           "visible": true
+          }
+         ],
+         "clipsContent": false,
+         "children": [
+          {
+           "id": "6:35",
+           "name": "Label",
+           "type": "TEXT",
+           "x": 8,
+           "y": 6,
+           "width": 80,
+           "height": 20,
+           "characters": "Team",
+           "fontName": {
+            "family": "Inter",
+            "style": "Regular"
+           },
+           "fills": [
+            {
+             "type": "SOLID",
+             "color": {
+              "r": 0.1,
+              "g": 0.1,
+              "b": 0.12
+             },
+             "opacity": 1,
+             "visible": true
+            }
+           ]
+          }
+         ]
+        },
+        {
+         "id": "6:25",
+         "name": "Business",
+         "type": "FRAME",
+         "x": 300,
+         "y": 0,
+         "width": 96,
+         "height": 32,
+         "fills": [
+          {
+           "type": "SOLID",
+           "color": {
+            "r": 0.96,
+            "g": 0.96,
+            "b": 0.97
+           },
+           "opacity": 1,
+           "visible": true
+          }
+         ],
+         "clipsContent": false,
+         "children": [
+          {
+           "id": "6:36",
+           "name": "Label",
+           "type": "TEXT",
+           "x": 8,
+           "y": 6,
+           "width": 80,
+           "height": 20,
+           "characters": "Business",
+           "fontName": {
+            "family": "Inter",
+            "style": "Regular"
+           },
+           "fills": [
+            {
+             "type": "SOLID",
+             "color": {
+              "r": 0.1,
+              "g": 0.1,
+              "b": 0.12
+             },
+             "opacity": 1,
+             "visible": true
+            }
+           ]
+          }
+         ]
+        },
+        {
+         "id": "6:26",
+         "name": "Enterprise",
+         "type": "FRAME",
+         "x": 400,
+         "y": 0,
+         "width": 96,
+         "height": 32,
+         "fills": [
+          {
+           "type": "SOLID",
+           "color": {
+            "r": 0.96,
+            "g": 0.96,
+            "b": 0.97
+           },
+           "opacity": 1,
+           "visible": true
+          }
+         ],
+         "clipsContent": false,
+         "children": [
+          {
+           "id": "6:37",
+           "name": "Label",
+           "type": "TEXT",
+           "x": 8,
+           "y": 6,
+           "width": 80,
+           "height": 20,
+           "characters": "Enterprise",
+           "fontName": {
+            "family": "Inter",
+            "style": "Regular"
+           },
+           "fills": [
+            {
+             "type": "SOLID",
+             "color": {
+              "r": 0.1,
+              "g": 0.1,
+              "b": 0.12
+             },
+             "opacity": 1,
+             "visible": true
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "id": "6:40",
+     "name": "Sheet",
+     "type": "COMPONENT",
+     "x": 0,
+     "y": 400,
+     "width": 1280,
+     "height": 1400,
+     "fills": [
+      {
+       "type": "SOLID",
+       "color": {
+        "r": 1,
+        "g": 1,
+        "b": 1
+       },
+       "opacity": 1,
+       "visible": true
+      }
+     ],
+     "clipsContent": true,
+     "overflowDirection": "VERTICAL",
+     "numberOfFixedChildren": 1,
+     "overlayPositionType": "CENTER",
+     "overlayBackground": {
+      "type": "NONE"
+     },
+     "overlayBackgroundInteraction": "NONE",
+     "explicitVariableModes": {},
+     "children": [
+      {
+       "id": "6:41",
+       "name": "Body",
+       "type": "TEXT",
+       "x": 40,
+       "y": 120,
+       "width": 600,
+       "height": 24,
+       "characters": "Notification settings",
+       "fontName": {
+        "family": "Inter",
+        "style": "Regular"
+       },
+       "fills": [
+        {
+         "type": "SOLID",
+         "color": {
+          "r": 0.1,
+          "g": 0.1,
+          "b": 0.12
+         },
+         "opacity": 1,
+         "visible": true
+        }
+       ]
+      },
+      {
+       "id": "6:42",
+       "name": "Sheet header",
+       "type": "FRAME",
+       "x": 0,
+       "y": 0,
+       "width": 1280,
+       "height": 80,
+       "fills": [
+        {
+         "type": "SOLID",
+         "color": {
+          "r": 0.15,
+          "g": 0.35,
+          "b": 0.9
+         },
+         "opacity": 1,
+         "visible": true
+        }
+       ],
+       "clipsContent": false,
+       "children": [
+        {
+         "id": "6:43",
+         "name": "Title",
+         "type": "TEXT",
+         "x": 40,
+         "y": 24,
+         "width": 400,
+         "height": 32,
+         "characters": "Settings",
+         "fontName": {
+          "family": "Inter",
+          "style": "Regular"
+         },
+         "fills": [
+          {
+           "type": "SOLID",
+           "color": {
+            "r": 0.1,
+            "g": 0.1,
+            "b": 0.12
+           },
+           "opacity": 1,
+           "visible": true
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "prototypeBackgrounds": [
+    {
+     "type": "SOLID",
+     "color": {
+      "r": 0.12,
+      "g": 0.12,
+      "b": 0.12
+     },
+     "opacity": 1,
+     "visible": true
     }
    ]
   }
@@ -3283,6 +4103,21 @@
         }
        ]
       }
+     ],
+     "reactions": [
+      {
+       "trigger": {
+        "type": "ON_CLICK"
+       },
+       "actions": [
+        {
+         "type": "NODE",
+         "destinationId": "9:3",
+         "navigation": "CHANGE_TO",
+         "transition": null
+        }
+       ]
+      }
      ]
     },
     {
@@ -3295,92 +4130,12 @@
      "height": 40,
      "remote": true,
      "key": "lib-plan-pro",
-     "children": [
-      {
-       "id": "9:5",
-       "name": "Label",
-       "type": "TEXT",
-       "x": 12,
-       "y": 8,
-       "width": 136,
-       "height": 24,
-       "characters": "Pro",
-       "fontName": {
-        "family": "Inter",
-        "style": "Regular"
-       },
-       "fills": [
-        {
-         "type": "SOLID",
-         "color": {
-          "r": 0.1,
-          "g": 0.1,
-          "b": 0.12
-         },
-         "opacity": 1,
-         "visible": true
-        }
-       ]
-      }
-     ]
+     "unloaded": true
     }
    ]
   }
  ],
  "library": {
-  "lib-plan-basic": {
-   "id": "L:2",
-   "name": "Plan=Basic",
-   "type": "COMPONENT",
-   "x": 0,
-   "y": 0,
-   "width": 160,
-   "height": 40,
-   "key": "lib-plan-basic",
-   "reactions": [
-    {
-     "trigger": {
-      "type": "ON_CLICK"
-     },
-     "actions": [
-      {
-       "type": "NODE",
-       "destinationId": "9:3",
-       "navigation": "CHANGE_TO",
-       "transition": null
-      }
-     ]
-    }
-   ],
-   "children": [
-    {
-     "id": "L:3",
-     "name": "Label",
-     "type": "TEXT",
-     "x": 12,
-     "y": 8,
-     "width": 136,
-     "height": 24,
-     "characters": "Basic",
-     "fontName": {
-      "family": "Inter",
-      "style": "Regular"
-     },
-     "fills": [
-      {
-       "type": "SOLID",
-       "color": {
-        "r": 0.1,
-        "g": 0.1,
-        "b": 0.12
-       },
-       "opacity": 1,
-       "visible": true
-      }
-     ]
-    }
-   ]
-  },
   "lib-plan-pro": null
  },
  "variableCollections": [

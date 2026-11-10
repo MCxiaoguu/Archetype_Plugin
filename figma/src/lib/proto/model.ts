@@ -59,9 +59,11 @@ export type KeyDevice = 'KEYBOARD' | 'XBOX_ONE' | 'PS4' | 'SWITCH_PRO' | 'UNKNOW
 export type ProtoTrigger =
   | { type: 'ON_CLICK' | 'ON_HOVER' | 'ON_PRESS' | 'ON_DRAG' }
   | { type: 'AFTER_TIMEOUT'; delayMs: number }
-  | { type: 'MOUSE_UP' | 'MOUSE_DOWN' | 'MOUSE_ENTER' | 'MOUSE_LEAVE'; delayMs: number }
+  | { type: 'MOUSE_UP' | 'MOUSE_DOWN'; delayMs: number }
+  /** `deprecatedVersion` is Figma's flag for the old hover behaviour, kept as read. */
+  | { type: 'MOUSE_ENTER' | 'MOUSE_LEAVE'; delayMs: number; deprecatedVersion: boolean }
   | { type: 'ON_KEY_DOWN'; device: KeyDevice; keyCodes: number[] }
-  /** Figma doesn't document `mediaHitTime`'s unit; the engine plays no media, so it is kept as read. */
+  /** `mediaHitTime` is in seconds, as Figma documents it; the engine plays no media. */
   | { type: 'ON_MEDIA_HIT'; mediaHitTime: number }
   | { type: 'ON_MEDIA_END' }
   /** A trigger type the reader doesn't model, kept instead of dropped; nothing fires it. */
@@ -146,7 +148,7 @@ export interface ProtoVariant {
   unavailable?: boolean;
 }
 
-/** A variant from a library that a CHANGE_TO in the flow can show. */
+/** A variant from a library, whose layers the file doesn't hold, that a CHANGE_TO in the flow can show. */
 export interface LibraryVariant {
   /** Its id in this file, as a CHANGE_TO names it. */
   variantId: string;
@@ -154,6 +156,8 @@ export interface LibraryVariant {
   name: string;
   /** `needs_import`: the read wasn't allowed to import it. `failed`: `importComponentByKeyAsync` refused. */
   status: 'needs_import' | 'imported' | 'failed';
+  /** Why the import failed, as Figma said; null otherwise. */
+  error: string | null;
 }
 
 /**

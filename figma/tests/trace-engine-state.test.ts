@@ -338,6 +338,44 @@ describe('CHANGE_TO', () => {
     expect(run(d, start(d, 'A'), click('tgl'), asV1)).toMatchObject({ outcome: 'nothing_happened', effects: [] });
   });
 
+  describe('a card that changes on hover, holding a toggle', () => {
+    // Card 2:11 shows `rest`; hovering it shows `hover`, which holds a toggle at path 4:5.
+    const card: ProtoVariant[] = [
+      { id: 'rest', name: 'State=Rest', componentId: 'rest', reactions: { '': [on('ON_HOVER', changeTo('hover'))] } },
+      { id: 'hover', name: 'State=Hover', componentId: 'hover', reactions: { '4:5': [on('ON_CLICK', changeTo('on'))] } },
+    ];
+    const toggle: ProtoVariant[] = [
+      { id: 'off', name: 'On=No', componentId: 'off', reactions: {} },
+      { id: 'on', name: 'On=Yes', componentId: 'on', reactions: {} },
+    ];
+    const d = protoDoc([A], { '2:11': [on('ON_HOVER', changeTo('hover'))], 'I2:11;4:5': [on('ON_CLICK', changeTo('on'))] }, {
+      variantSets: {
+        '2:11': { frameId: 'A', variants: card },
+        '2:11;4:5': { frameId: 'A', variants: toggle },
+        'I2:11;4:5': { frameId: 'A', variants: toggle },
+      },
+    });
+    const cardBox = layer('2:11', 'A', [20, 100, 300, 100], { type: 'INSTANCE' });
+    const hovered = [...screenA, cardBox, layer('2:11;4:5', '2:11', [40, 120, 48, 24], { type: 'INSTANCE' })];
+    const resting = [...screenA, cardBox, layer('I2:11;4:5', '2:11', [40, 120, 48, 24], { type: 'INSTANCE' })];
+
+    it('clears the toggle set inside the hovered card when the hover ends, so the next render finds every override', () => {
+      const onCard = run(d, start(d, 'A'), hover('2:11'), resting).state;
+      expect(onCard.variants).toEqual({ A: { '2:11': 'hover' } });
+      const toggled = run(d, onCard, click('2:11;4:5'), hovered).state;
+      expect(toggled.variants).toEqual({ A: { '2:11': 'hover', '2:11;4:5': 'on' } });
+      const left = run(d, toggled, hover('btn'), hovered).state;
+      expect(left.variants).toEqual({});
+    });
+
+    it('clears an override on a layer Figma names inside the instance (I<key>;...) when the instance changes variant', () => {
+      // The toggle was switched while the card showed its main component, where the toggle has its Figma id.
+      const toggled = { ...start(d, 'A'), variants: { A: { 'I2:11;4:5': 'on' } } };
+      const swapped = run(d, toggled, hover('2:11'), resting).state;
+      expect(swapped.variants).toEqual({ A: { '2:11': 'hover' } });
+    });
+  });
+
   it('changing a variant clears the overrides of instances nested in the old one', () => {
     const d = doc([on('ON_CLICK', changeTo('v1'))]);
     const s = { ...start(d, 'A'), variants: { A: { tgl: 'v2', 'tgl;badge': 'b2', other: 'o1' } } };

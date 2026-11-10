@@ -87,7 +87,10 @@ export const mouse = (
   type: 'MOUSE_DOWN' | 'MOUSE_UP' | 'MOUSE_ENTER' | 'MOUSE_LEAVE',
   delayMs: number,
   ...actions: ProtoAction[]
-): ProtoReaction => ({ trigger: { type, delayMs }, actions });
+): ProtoReaction => ({
+  trigger: type === 'MOUSE_ENTER' || type === 'MOUSE_LEAVE' ? { type, delayMs, deprecatedVersion: false } : { type, delayMs },
+  actions,
+});
 
 export function layer(key: string, parentKey: string | null, rect: Rect, extra: Partial<RawLayer> = {}): RawLayer {
   return {

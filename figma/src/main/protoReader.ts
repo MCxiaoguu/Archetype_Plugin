@@ -31,7 +31,7 @@ import type {
   VariantSet,
 } from '../lib/proto/model';
 import { pageOf, topFrameOf, topLevelFrames } from './document';
-import { isScratch, withEveryInstanceChild } from './scratch';
+import { exclusive, isScratch } from './scratch';
 
 export interface ReadOptions {
   /** Whether the read may import library variants, which adds them to the designer's file. */
@@ -80,9 +80,10 @@ function trigger(t: Trigger): ProtoTrigger {
       return { type: t.type, delayMs: t.timeout };
     case 'MOUSE_UP':
     case 'MOUSE_DOWN':
+      return { type: t.type, delayMs: t.delay };
     case 'MOUSE_ENTER':
     case 'MOUSE_LEAVE':
-      return { type: t.type, delayMs: t.delay };
+      return { type: t.type, delayMs: t.delay, deprecatedVersion: t.deprecatedVersion };
     case 'ON_KEY_DOWN':
       return { type: t.type, device: t.device, keyCodes: [...t.keyCodes] };
     case 'ON_MEDIA_HIT':
@@ -98,7 +99,8 @@ function expression(data: VariableData | undefined): VariableExpr {
   if (isObject(value) && 'expressionFunction' in value) {
     const fn = String(value.expressionFunction);
     if (!OPERATORS.has(fn)) return { kind: 'unsupported', detail: `the expression function ${fn}` };
-    const args = (value.expressionArguments ?? []) as VariableData[];
+    if (!Array.isArray(value.expressionArguments)) throw new Error(`The expression ${fn} has no arguments`);
+    const args = value.expressionArguments as VariableData[];
     return { kind: 'op', operator: fn as VariableExprOperator, operands: args.map(expression) };
   }
   if (isObject(value) && value.type === 'VARIABLE_ALIAS') return { kind: 'alias', variableId: String(value.id) };
@@ -119,6 +121,7 @@ function nodeAction(a: Extract<Action, { type: 'NODE' }>): ProtoAction {
     destinationId: a.destinationId,
     resetScrollPosition: reset,
     preserveScrollPosition: a.preserveScrollPosition ?? !reset,
+    // Unset is unchecked, as Figma's prototype panel shows it.
     resetInteractiveComponents: a.resetInteractiveComponents ?? false,
     overlayRelativePosition: a.overlayRelativePosition ? { x: a.overlayRelativePosition.x, y: a.overlayRelativePosition.y } : null,
   };
@@ -166,6 +169,15 @@ function background(b: OverlayBackground): ProtoBackground {
   return b.type === 'SOLID_COLOR' ? { type: 'SOLID_COLOR', color: rgba(b.color) } : { type: 'NONE' };
 }
 
+/** The explicit modes a frame is read in: its sections', outer to inner, then its own. */
+function modesOf(node: Screen): Record<string, string> {
+  const sections: SectionNode[] = [];
+  for (let p = node.parent; p && p.type === 'SECTION'; p = p.parent) sections.unshift(p);
+  const modes: Record<string, string> = {};
+  for (const holder of [...sections, node]) Object.assign(modes, holder.explicitVariableModes);
+  return modes;
+}
+
 function frameOf(node: Screen, pageId: string): ProtoFrame {
   return {
     id: node.id,
@@ -180,7 +192,7 @@ function frameOf(node: Screen, pageId: string): ProtoFrame {
       background: background(node.overlayBackground),
       closeOnOutsideClick: node.overlayBackgroundInteraction === 'CLOSE_ON_CLICK_OUTSIDE',
     },
-    explicitVariableModes: { ...node.explicitVariableModes },
+    explicitVariableModes: modesOf(node),
   };
 }
 
@@ -188,7 +200,6 @@ function variableValue(v: VariableValue): ProtoValue | null {
   if (typeof v === 'boolean' || typeof v === 'number' || typeof v === 'string') return v;
   if ('type' in v && v.type === 'VARIABLE_ALIAS') return { alias: v.id };
   if (isColor(v)) return rgba(v);
-  // A composed colour or a motion value has no plain form here.
   return null;
 }
 
@@ -204,7 +215,9 @@ async function readVariables(api: PluginAPI): Promise<Record<string, ProtoCollec
       const valuesByMode: Record<string, ProtoValue> = {};
       for (const [modeId, value] of Object.entries(v.valuesByMode)) {
         const plain = variableValue(value);
-        if (plain !== null) valuesByMode[modeId] = plain;
+        // A composed colour (a colour with a bound opacity) has no plain form the engine can evaluate.
+        if (plain === null) throw new Error(`Variable ${v.name} has a value in mode ${modeId} the trace can't read`);
+        valuesByMode[modeId] = plain;
       }
       variables[id] = { id, name: v.name, resolvedType: v.resolvedType as VariableType, valuesByMode };
     }
@@ -243,13 +256,22 @@ function isTopLevelScreen(node: BaseNode): node is Screen {
 /** The variants an instance can show: those of its main component's set, or the main component alone. */
 async function variantsAround(instance: InstanceNode): Promise<ComponentNode[]> {
   const main = await instance.getMainComponentAsync();
-  if (!main) return [];
+  if (!main) throw new Error(`The instance ${instance.id} has no main component, so its variants can't be read`);
   const set = main.parent;
   return set && set.type === 'COMPONENT_SET' ? (set.children as ComponentNode[]) : [main];
 }
 
+/** A component's layers, or why they can't be read (a library component whose layers the file doesn't hold). */
+function layersOf(component: ComponentNode): SceneNode[] | Error {
+  try {
+    return [...subtree(component)];
+  } catch (err) {
+    return err instanceof Error ? err : new Error(String(err));
+  }
+}
+
 export async function readProto(api: PluginAPI, page: PageNode, options: ReadOptions): Promise<ProtoDoc> {
-  return withEveryInstanceChild(api, () => read(api, page, options));
+  return exclusive(api, () => read(api, page, options));
 }
 
 async function read(api: PluginAPI, page: PageNode, options: ReadOptions): Promise<ProtoDoc> {
@@ -279,31 +301,43 @@ async function read(api: PluginAPI, page: PageNode, options: ReadOptions): Promi
       const dest = await api.getNodeByIdAsync(a.destinationId);
       if (!dest || dest.removed || !isTopLevelScreen(dest)) continue;
       const home = pageOf(dest);
-      if (!home) continue;
+      if (!home) throw new Error(`The frame ${dest.id} that a reaction leads to is on no page`);
       // With dynamic page access another page's layers load on demand.
       if (home.id !== page.id) await home.loadAsync();
       addFrame(dest, home.id);
     }
   }
 
+  /**
+   * Reads a variant's reactions by path. A library variant the file holds
+   * is read in place, like a local one. One whose layers the file lacks is
+   * imported when the read may (adding it to the file, as using it in
+   * Figma would); it is unavailable otherwise, or when the import fails.
+   */
   async function readVariant(variant: ComponentNode, instanceKey: string, frameId: string): Promise<ProtoVariant> {
+    const unavailable: ProtoVariant = { id: variant.id, name: variant.name, reactions: {}, componentId: null, unavailable: true };
     let source: ComponentNode = variant;
-    if (variant.remote) {
+    let layers = layersOf(variant);
+    if (layers instanceof Error) {
+      if (!variant.remote) throw layers;
       const listed = libraryVariants.find((l) => l.variantId === variant.id);
-      const entry = listed ?? { variantId: variant.id, key: variant.key, name: variant.name, status: 'needs_import' as LibraryVariant['status'] };
+      const entry: LibraryVariant = listed ?? { variantId: variant.id, key: variant.key, name: variant.name, status: 'needs_import', error: null };
       if (!listed) libraryVariants.push(entry);
-      if (!options.importLibraryVariants) return { id: variant.id, name: variant.name, reactions: {}, componentId: null, unavailable: true };
+      if (!options.importLibraryVariants) return unavailable;
       try {
         source = await api.importComponentByKeyAsync(variant.key);
-        entry.status = 'imported';
-      } catch {
+      } catch (err) {
         // The library isn't available to this file: CHANGE_TO to it is unsupported, and the panel says why.
         entry.status = 'failed';
-        return { id: variant.id, name: variant.name, reactions: {}, componentId: null, unavailable: true };
+        entry.error = String(err);
+        return unavailable;
       }
+      entry.status = 'imported';
+      layers = layersOf(source);
+      if (layers instanceof Error) throw layers;
     }
     const byPath: Record<string, ProtoReaction[]> = {};
-    for (const node of subtree(source)) {
+    for (const node of layers) {
       const own = reactionsOf(node);
       if (!own.length) continue;
       byPath[node === source ? '' : pathOf(node)] = own;

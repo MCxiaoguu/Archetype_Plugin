@@ -9,8 +9,8 @@ export interface FakeWorld {
   /** Calls in order, for tests that check what happened when ("remove S:1", "commitUndo"). */
   log?: string[];
   nextId?: () => string;
-  /** Makes `exportAsync` throw, or return no bytes. */
-  exportFails?: 'throw' | 'empty' | null;
+  /** Makes `exportAsync` throw, return no bytes, or return more than a turn may carry. */
+  exportFails?: 'throw' | 'empty' | 'huge' | null;
 }
 
 /** Figma names a layer inside an instance `I<instance>;<path>`: the instance's id, with one `I` in front, and the layer's path in its component. */
@@ -36,8 +36,9 @@ export class FakeNode {
   private kids: FakeNode[] = [];
   reactions: unknown[] = [];
   visible = true;
-  x = 0;
-  y = 0;
+  private _x = 0;
+  private _y = 0;
+  private _layoutMode: string | undefined = undefined;
   width = 0;
   height = 0;
   mainComponentId: string | null = null;
@@ -64,8 +65,13 @@ export class FakeNode {
     this._annotations = v;
   }
 
-  /** As in Figma, with `skipInvisibleInstanceChildren` on, hidden layers inside instances can't be reached. */
+  /**
+   * As in Figma, with `skipInvisibleInstanceChildren` on, hidden layers
+   * inside instances can't be reached. A library component whose layers
+   * aren't in the file (`unloaded`) can't be read until it is imported.
+   */
   get children(): FakeNode[] {
+    if (this.unloaded) throw new Error(`The layers of ${this.name} aren't loaded in this file`);
     if (this.world?.flags.skipInvisibleInstanceChildren && this.inInstance()) return this.kids.filter((k) => k.visible);
     return this.kids;
   }
@@ -73,6 +79,41 @@ export class FakeNode {
   private inInstance(): boolean {
     for (let n: FakeNode | null = this; n; n = n.parent) if (n.type === 'INSTANCE') return true;
     return false;
+  }
+
+  /**
+   * Figma refuses to move a layer inside an instance or change its auto
+   * layout: "Position of any layers within the component, including items
+   * in an auto layout frame" can't be overridden. Nodes being built or
+   * copied aren't attached yet, so they aren't checked.
+   */
+  private refuseInInstance(what: string, withSelf: boolean): void {
+    if (!this.parent) return;
+    for (let n: FakeNode | null = withSelf ? this : this.parent; n; n = n.parent) {
+      if (n.type === 'INSTANCE') throw new Error(`Can't set ${what} of ${this.id}: it is inside the instance ${n.id}`);
+    }
+  }
+
+  get x(): number {
+    return this._x;
+  }
+  set x(v: number) {
+    this.refuseInInstance('x', false);
+    this._x = v;
+  }
+  get y(): number {
+    return this._y;
+  }
+  set y(v: number) {
+    this.refuseInInstance('y', false);
+    this._y = v;
+  }
+  get layoutMode(): string | undefined {
+    return this._layoutMode;
+  }
+  set layoutMode(v: string | undefined) {
+    this.refuseInInstance('layoutMode', true);
+    this._layoutMode = v;
   }
 
   add(...kids: FakeNode[]): this {
@@ -103,27 +144,72 @@ export class FakeNode {
     return this.world;
   }
 
-  /** A deep copy with new ids, placed on the current page as Figma does; layers inside instances get Figma's instance ids. */
+  /**
+   * A deep copy with new ids, placed on the current page as Figma does.
+   * Layers inside instances get Figma's instance ids, and a component
+   * inside the copied node becomes an instance of it, as Figma's clone does.
+   */
   clone(): FakeNode {
-    const copy = this.copyAs(this.w.nextId?.() ?? `${this.id}-copy`, null, null);
+    const copy = this.copyAs(this.w.nextId?.() ?? `${this.id}-copy`, null, null, true);
     this.w.currentPage?.add(copy);
+    this.w.log?.push(`clone ${copy.id}`);
     return copy;
   }
 
-  private copyAs(id: string, instanceCopy: FakeNode | null, instanceOriginal: FakeNode | null): FakeNode {
-    const copy = new FakeNode(id, this.name, this.type);
+  private copyAs(id: string, instanceCopy: FakeNode | null, instanceOriginal: FakeNode | null, root = false): FakeNode {
+    const becomesInstance = !root && this.type === 'COMPONENT' && !instanceCopy;
+    const copy = new FakeNode(id, this.name, becomesInstance ? 'INSTANCE' : this.type);
     for (const [k, v] of Object.entries(this)) {
       if (k === 'id' || k === 'parent' || k === 'world' || k === 'kids' || typeof v === 'function') continue;
-      copy[k] = structuredClone(v);
+      // figma.mixed is a symbol, which can't be cloned.
+      copy[k] = typeof v === 'symbol' ? v : structuredClone(v);
     }
+    if (becomesInstance) copy.mainComponentId = this.id;
     copy.world = this.world;
     this.w.nodes.set(id, copy);
-    const [into, from] = this.type === 'INSTANCE' ? [copy, this as FakeNode] : [instanceCopy, instanceOriginal];
+    const [into, from] = copy.type === 'INSTANCE' ? [copy, this as FakeNode] : [instanceCopy, instanceOriginal];
     for (const kid of this.kids) {
       const kidId = into && from ? instancePrefix(into.id) + localPath(kid, from) : (this.w.nextId?.() ?? `${kid.id}-copy`);
       copy.add(kid.copyAs(kidId, into, from));
     }
     return copy;
+  }
+
+  /** Turns this instance into a plain frame in its place: every layer in it gets a new id; nested instances stay instances. */
+  detachInstance(): FakeNode {
+    if (this.type !== 'INSTANCE') throw new Error(`${this.id} isn't an instance`);
+    const frame = this.copyAs(this.w.nextId?.() as string, null, null, true);
+    this.w.log?.push(`detach ${this.id} ${frame.id}`);
+    frame.type = 'FRAME';
+    frame.mainComponentId = null;
+    frame.kids = [];
+    for (const kid of this.kids) frame.add(kid.copyAs(this.w.nextId?.() as string, null, null));
+    const parent = this.parent;
+    if (parent) {
+      const at = parent.kids.indexOf(this);
+      parent.kids.splice(at, 1, frame);
+      frame.parent = parent;
+    }
+    this.parent = null;
+    this.removed = true;
+    this.w.nodes.delete(this.id);
+    return frame;
+  }
+
+  /** Sets component properties on an instance; a literal value replaces a variable bound to the property. */
+  setProperties(properties: Record<string, unknown>): void {
+    if (this.type !== 'INSTANCE') throw new Error(`${this.id} isn't an instance`);
+    const props = structuredClone((this.componentProperties as Record<string, Record<string, unknown>>) ?? {});
+    const bound = structuredClone((this.boundVariables as Record<string, unknown>) ?? {});
+    const boundProps = (bound.componentProperties as Record<string, unknown>) ?? {};
+    for (const [name, value] of Object.entries(properties)) {
+      if (!props[name]) throw new Error(`${this.id} has no component property ${name}`);
+      props[name] = { ...props[name], value };
+      delete (props[name] as Record<string, unknown>).boundVariables;
+      delete boundProps[name];
+    }
+    this.componentProperties = props;
+    this.boundVariables = { ...bound, componentProperties: boundProps };
   }
 
   /** Shows another component in this instance: its layers replace the instance's, under Figma's instance ids. */
@@ -181,12 +267,15 @@ export class FakeNode {
     this.w.log?.push(`export ${this.id} ${JSON.stringify(settings)} skipInvisible=${this.w.flags.skipInvisibleInstanceChildren}`);
     if (this.w.exportFails === 'throw') throw new Error('Export failed');
     if (this.w.exportFails === 'empty') return new Uint8Array();
+    if (this.w.exportFails === 'huge') return new Uint8Array(Math.round(1.6 * 1024 * 1024));
     return new TextEncoder().encode(JSON.stringify(this.drawn()));
   }
 
   drawn(): Record<string, unknown> {
     const out: Record<string, unknown> = { id: this.id, name: this.name, x: this.x, y: this.y, width: this.width, height: this.height, visible: this.visible };
-    for (const k of ['characters', 'fills', 'opacity', 'explicitVariableModes', 'layoutMode']) if (this[k] !== undefined && this[k] !== '') out[k] = this[k];
+    for (const k of ['type', 'characters', 'fills', 'opacity', 'explicitVariableModes', 'layoutMode', 'minWidth', 'strokeTopWeight', 'gridRowGap', 'componentProperties']) {
+      if (this[k] !== undefined && this[k] !== '') out[k] = this[k];
+    }
     if (this.kids.length) out.children = this.kids.map((k) => k.drawn());
     return out;
   }
@@ -355,8 +444,8 @@ export function fakeFromFixture(fixture: ProtoFixture) {
   world.nodes.set(root.id, root);
   for (const page of fixture.pages) root.add(build(world, page));
   for (const remote of fixture.remote) build(world, remote);
-  const library = new Map<string, FakeNode | null>();
-  for (const [key, spec] of Object.entries(fixture.library)) library.set(key, spec ? build(world, spec) : null);
+  /** What a library holds per key: the layers of a published component, or null when the import fails. */
+  const library = new Map<string, FixtureNode | null>(Object.entries(fixture.library));
 
   const variables = new Map<string, Record<string, unknown>>();
   const collections = fixture.variableCollections.map((c) => {
@@ -388,10 +477,25 @@ export function fakeFromFixture(fixture: ProtoFixture) {
       world.flags.skipInvisibleInstanceChildren = v;
     },
     getNodeByIdAsync: vi.fn(async (id: string) => world.nodes.get(id) ?? null),
+    /**
+     * Loads a component from its library and gives the remote component
+     * node that the file holds for it: the same node on every call. A node
+     * the file had without its layers gets them.
+     */
     importComponentByKeyAsync: vi.fn(async (key: string) => {
-      const node = library.get(key);
-      if (!node) throw new Error(`The component ${key} isn't published in a library this file can use`);
-      return node;
+      const spec = library.get(key);
+      if (!spec) throw new Error(`The component ${key} isn't published in a library this file can use`);
+      const held = [...world.nodes.values()].find((n) => n.key === key && n.remote);
+      if (held) {
+        if (held.unloaded) {
+          held.unloaded = false;
+          for (const child of spec.children ?? []) held.add(build(world, child));
+          held.reactions = structuredClone((spec.reactions as unknown[]) ?? []);
+        }
+        return held;
+      }
+      const made = build(world, { ...spec, remote: true });
+      return made;
     }),
     variables: {
       getVariableCollectionByIdAsync: vi.fn(async (id: string) => structuredClone(collections.find((c) => c.id === id) ?? null)),

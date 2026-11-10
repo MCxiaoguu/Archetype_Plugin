@@ -59,14 +59,23 @@ export function instancesIn(doc: ProtoDoc, frameId: string): string[] {
 }
 
 /**
+ * Whether `key` names a layer inside the instance `instanceKey`: under
+ * its path keys (`<instance>;<path>`), or under Figma's own ids for the
+ * layers of an instance showing its main component (`I<instance>;<path>`).
+ */
+export function isInside(instanceKey: string, key: string): boolean {
+  return key.startsWith(`${instanceKey};`) || (!instanceKey.startsWith('I') && key.startsWith(`I${instanceKey};`));
+}
+
+/**
  * Sets (or, with null, clears) an instance's override. The overrides of
- * instances nested in its old variant go with it: those layers are gone.
- * Returns whether it changed.
+ * instances inside it go with it: those layers are gone. Returns whether
+ * it changed.
  */
 export function setOverride(s: TraceState, frameId: string, instanceKey: string, variantId: string | null): boolean {
   const overrides = s.variants[frameId] ?? {};
   if ((overrides[instanceKey] ?? null) === variantId) return false;
-  for (const key of Object.keys(overrides)) if (key.startsWith(`${instanceKey};`)) delete overrides[key];
+  for (const key of Object.keys(overrides)) if (isInside(instanceKey, key)) delete overrides[key];
   if (variantId === null) delete overrides[instanceKey];
   else overrides[instanceKey] = variantId;
   if (Object.keys(overrides).length) s.variants[frameId] = overrides;

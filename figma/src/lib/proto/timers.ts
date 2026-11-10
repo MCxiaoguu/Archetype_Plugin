@@ -6,7 +6,7 @@
  */
 
 import type { Box, ProtoDoc, TraceState, TraceTimer } from './model';
-import { instancesIn, reactionsFor } from './variants';
+import { instancesIn, isInside, reactionsFor } from './variants';
 
 /** `settle` fires AFTER_TIMEOUT timers due this soon or sooner: a person wouldn't act sooner. Later ones wait for `wait`. */
 export const SETTLE_LIMIT_MS = 2000;
@@ -52,8 +52,7 @@ export function startFrameTimers(doc: ProtoDoc, s: TraceState, frameId: string, 
 
 /** Starts an interactive component's AFTER_TIMEOUT timers again, its nested components' too, for the variant it shows now. */
 export function restartInstanceTimers(doc: ProtoDoc, s: TraceState, frameId: string, instanceKey: string): void {
-  const nested = `${instanceKey};`;
-  const inside = (key: string) => key === instanceKey || key.startsWith(nested);
+  const inside = (key: string) => key === instanceKey || isInside(instanceKey, key);
   s.timers = s.timers.filter((t) => t.triggerType !== 'AFTER_TIMEOUT' || !inside(t.layerKey));
   for (const key of instancesIn(doc, frameId)) if (inside(key)) schedule(doc, s, frameId, key, null);
 }

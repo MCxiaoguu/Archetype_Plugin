@@ -6,7 +6,7 @@ import { activeMode } from '../src/lib/proto/expr';
 import type { OpenOverlay, ProtoDoc, RawLayer, TraceState, VariableCollection } from '../src/lib/proto/model';
 import { readProto } from '../src/main/protoReader';
 import { createRenderer } from '../src/main/renderer';
-import { SCRATCH_KEY, SCRATCH_VALUE, scratchContainerIds } from '../src/main/scratch';
+import { SCRATCH_KEY, SCRATCH_VALUE, scratchNodeIds } from '../src/main/scratch';
 import { FakeNode, fakeFromFixture, type ProtoFixture } from './fake-figma';
 
 const COLL = 'VariableCollectionId:10:0';
@@ -69,7 +69,7 @@ describe('render', () => {
       expect(made.getPluginData(SCRATCH_KEY)).toBe(SCRATCH_VALUE);
       expect(made.removed).toBe(true);
       expect((fake.pages[0] as FakeNode).children.map((c) => c.id)).not.toContain(made.id);
-      expect(scratchContainerIds().has(made.id)).toBe(true);
+      expect(scratchNodeIds().has(made.id)).toBe(true);
     });
 
     it('is removed, and the undo step committed after, also when the export throws', async () => {
@@ -80,6 +80,58 @@ describe('render', () => {
       expect(made.removed).toBe(true);
       const log = fake.world.log as string[];
       expect(log.indexOf('commitUndo')).toBeGreaterThan(log.indexOf(`remove ${made.id}`));
+    });
+
+    it('fills the container with the page\'s prototype background', async () => {
+      const fake = await setup();
+      const { image } = await fake.renderer.render(fake.doc, state(fake.doc, '2:20'));
+      expect(drawn(image).fills).toEqual((fake.pages[0] as FakeNode).prototypeBackgrounds);
+    });
+
+    it('records the copies, backdrops and detached frames for the change watchers, not only the container', async () => {
+      const fake = await setup();
+      const error: OpenOverlay = { frameId: '3:1', position: 'CENTER', origin: { x: 400, y: 330 }, closeOnOutsideClick: true };
+      await fake.renderer.render(fake.doc, state(fake.doc, '2:20', { overlays: [error] }));
+      await fake.renderer.render(fake.doc, state(fake.doc, '4:5', { scroll: { '4:5': { x: 0, y: 100, areas: {} } } }));
+      const made = (fake.world.log as string[]).filter((l) => /^(create|clone) /.test(l)).map((l) => l.split(' ')[1] as string);
+      // Two containers, a backdrop, three copies.
+      expect(made).toHaveLength(6);
+      for (const id of made) expect(scratchNodeIds().has(id)).toBe(true);
+      const detached = (fake.world.log as string[]).filter((l) => l.startsWith('detach ')).map((l) => l.split(' ')[2] as string);
+      expect(detached).toHaveLength(1);
+      expect(scratchNodeIds().has(detached[0] as string)).toBe(true);
+    });
+
+    it('refuses a frame open twice on one screen: its layers would share keys', async () => {
+      const fake = await setup();
+      const twice: OpenOverlay = { frameId: '2:20', position: 'CENTER', origin: { x: 0, y: 0 }, closeOnOutsideClick: false };
+      await expect(fake.renderer.render(fake.doc, state(fake.doc, '2:20', { overlays: [twice] }))).rejects.toThrow(/2:20.*twice/);
+    });
+
+    it("refuses a screenshot larger than a turn can carry, saying how large", async () => {
+      const fake = await setup();
+      fake.world.exportFails = 'huge';
+      await expect(fake.renderer.render(fake.doc, state(fake.doc, '2:20'))).rejects.toThrow(/1677722 bytes.*1\.5 MiB/);
+    });
+
+    it('never runs at the same time as a read: they share one queue', async () => {
+      const fake = await setup();
+      let open = (): void => {};
+      const gate = new Promise<void>((resolve) => (open = resolve));
+      const real = fake.api.variables.getLocalVariableCollectionsAsync.getMockImplementation();
+      if (!real) throw new Error('The fake has no variables to read');
+      fake.api.variables.getLocalVariableCollectionsAsync.mockImplementationOnce(async () => {
+        await gate;
+        return real();
+      });
+      const reading = readProto(fake.api, fake.api.currentPage, { importLibraryVariants: true });
+      const rendering = fake.renderer.render(fake.doc, state(fake.doc, '2:20'));
+      await new Promise((r) => setTimeout(r, 10));
+      expect(fake.api.createFrame).not.toHaveBeenCalled();
+      open();
+      await Promise.all([reading, rendering]);
+      expect(fake.api.createFrame).toHaveBeenCalledTimes(1);
+      expect(fake.api.skipInvisibleInstanceChildren).toBe(true);
     });
 
     it('refuses an empty export', async () => {
@@ -177,11 +229,11 @@ describe('render', () => {
       expect(layers.filter((l) => l.parentKey === '2:33;8:6').map((l) => l.key)).toEqual(['2:33;8:6;6:14']);
     });
 
-    it('swaps to a library variant through the component its import gave', async () => {
+    it('swaps to a library variant the file holds, in place', async () => {
       const fake = await setup();
-      fake.doc.variantSets['3:6']?.variants.forEach((v) => (v.componentId = v.id === '9:2' ? 'L:2' : v.componentId));
-      await fake.renderer.render(fake.doc, state(fake.doc, '3:5', { variants: { '3:5': { '3:6': '9:2' } } }));
-      expect(fake.world.log?.some((l) => /^swap .* L:2$/.test(l))).toBe(true);
+      const { layers } = await fake.renderer.render(fake.doc, state(fake.doc, '3:5', { variants: { '3:5': { '3:6': '9:2' } } }));
+      expect(fake.world.log?.some((l) => /^swap .* 9:2$/.test(l))).toBe(true);
+      expect(layerOf(layers, '3:6;9:4').text).toBe('Basic');
     });
 
     it.each<{ what: string; frameId: string; modes: Record<string, string>; mode: string }>([
@@ -229,6 +281,43 @@ describe('render', () => {
       expect(find(drawn(image), 'Greeting').visible).toBe(shown);
     });
 
+    it.each([
+      { field: 'minWidth', value: 120 },
+      { field: 'strokeTopWeight', value: 2 },
+      { field: 'gridRowGap', value: 8 },
+    ])('writes a number into the bound $field', async ({ field, value }) => {
+      const fake = await setup((f) => (node(f, '2:52').boundVariables = { [field]: { type: 'VARIABLE_ALIAS', id: 'VariableID:10:2' } }));
+      const variables = { [COLL]: { [LIGHT]: { 'VariableID:10:2': value } } };
+      const badge = find(drawn((await fake.renderer.render(fake.doc, state(fake.doc, '2:50', { variables }))).image), 'Linked badge');
+      expect((badge as unknown as Record<string, unknown>)[field]).toBe(value);
+    });
+
+    it("writes a value bound to a component property through the instance's properties", async () => {
+      const alias = { type: 'VARIABLE_ALIAS', id: 'VariableID:10:4' };
+      const fake = await setup((f) => {
+        node(f, '2:11').componentProperties = { 'Label#1:2': { type: 'TEXT', value: 'Connect a bank', boundVariables: { value: alias } } };
+        node(f, '2:11').boundVariables = { componentProperties: { 'Label#1:2': alias } };
+      });
+      const variables = { [COLL]: { [LIGHT]: { 'VariableID:10:4': 'Link your bank' } } };
+      const { image } = await fake.renderer.render(fake.doc, state(fake.doc, '2:10', { variables }));
+      const props = (find(drawn(image), 'Connect a bank') as unknown as { componentProperties: Record<string, { value: string; boundVariables?: unknown }> }).componentProperties;
+      expect(props['Label#1:2']).toEqual({ type: 'TEXT', value: 'Link your bank' });
+    });
+
+    it.each([
+      { what: 'a typography field', bound: { fontSize: [{ type: 'VARIABLE_ALIAS', id: 'VariableID:10:2' }] }, field: 'fontSize' },
+      { what: 'an effect', bound: { effects: [{ type: 'VARIABLE_ALIAS', id: 'VariableID:10:2' }] }, field: 'effects' },
+      { what: 'a layout grid', bound: { layoutGrids: [{ type: 'VARIABLE_ALIAS', id: 'VariableID:10:2' }] }, field: 'layoutGrids' },
+      { what: 'a text range fill', bound: { textRangeFills: [{ type: 'VARIABLE_ALIAS', id: 'VariableID:10:2' }] }, field: 'textRangeFills' },
+      { what: 'a value of the wrong type', bound: { visible: { type: 'VARIABLE_ALIAS', id: 'VariableID:10:2' } }, field: 'visible' },
+    ])("refuses to render $what it can't show the assigned value of, naming the field and the layer", async ({ bound, field }) => {
+      const fake = await setup((f) => (node(f, '1:5').boundVariables = bound));
+      const variables = { [COLL]: { [LIGHT]: { 'VariableID:10:2': 3 } } };
+      await expect(fake.renderer.render(fake.doc, state(fake.doc, '1:2', { variables }))).rejects.toThrow(new RegExp(`${field}.*1:5`));
+      // Bound but not assigned, it is drawn as designed.
+      await expect(fake.renderer.render(fake.doc, state(fake.doc, '1:2'))).resolves.toBeDefined();
+    });
+
     it('writes a number into a bound numeric property', async () => {
       const fake = await setup((f) => (node(f, '2:52').boundVariables = { opacity: { type: 'VARIABLE_ALIAS', id: 'VariableID:10:2' } }));
       const variables = { [COLL]: { [LIGHT]: { 'VariableID:10:2': 0.5 } } };
@@ -252,6 +341,41 @@ describe('render', () => {
   });
 
   describe('measured layers', () => {
+    it("keep a nested component's type, though its copy is an instance of it", async () => {
+      const fake = await setup((f) => {
+        const promo = new FakeNode('1:20', 'Promo', 'COMPONENT');
+        promo.world = f.world;
+        promo.width = 200;
+        promo.height = 40;
+        const label = new FakeNode('1:21', 'Label', 'TEXT');
+        label.world = f.world;
+        label.characters = 'New';
+        promo.add(label);
+        f.nodes.set('1:20', promo);
+        f.nodes.set('1:21', label);
+        node(f, '1:2').add(promo);
+      });
+      const { layers } = await fake.renderer.render(fake.doc, state(fake.doc, '1:2'));
+      expect(layerOf(layers, '1:20').type).toBe('COMPONENT');
+      expect(layerOf(layers, '1:21').parentKey).toBe('1:20');
+    });
+
+    it('follow itemReverseZIndex: the first child is drawn on top', async () => {
+      const fake = await setup((f) => (node(f, '2:10').itemReverseZIndex = true));
+      const { layers } = await fake.renderer.render(fake.doc, state(fake.doc, '2:10'));
+      const order = layers.filter((l) => l.parentKey === '2:10').map((l) => l.key);
+      expect(order).toEqual(['2:13', '2:12', '2:11']);
+    });
+
+    it('count a stroke of mixed weights as drawn', async () => {
+      const fake = await setup((f) => {
+        node(f, '1:8').strokes = [{ type: 'SOLID', color: { r: 0, g: 0, b: 0 }, opacity: 1, visible: true }];
+        node(f, '1:8').strokeWeight = Symbol('mixed');
+      });
+      const { layers } = await fake.renderer.render(fake.doc, state(fake.doc, '1:2'));
+      expect(layerOf(layers, '1:8').paints).toBe(true);
+    });
+
     it('come from the copies in paint order, keyed by the original ids', async () => {
       const fake = await setup();
       const { layers } = await fake.renderer.render(fake.doc, state(fake.doc, '2:20'));
@@ -335,6 +459,27 @@ describe('render', () => {
   });
 
   describe('scroll', () => {
+    it('scrolls an area inside an instance by detaching that instance on the copy, keeping its layers\' keys and types', async () => {
+      const fake = await setup();
+      const s = state(fake.doc, '3:5', { scroll: { '3:5': { x: 0, y: 0, areas: { 'I3:8;6:21': { x: 150, y: 0 } } } } });
+      const { layers } = await fake.renderer.render(fake.doc, s);
+      expect(fake.world.log?.some((l) => l.startsWith('detach '))).toBe(true);
+      expect(layerOf(layers, '3:8').type).toBe('INSTANCE');
+      expect(layerOf(layers, 'I3:8;6:21')).toMatchObject({ type: 'FRAME', scroll: { direction: 'HORIZONTAL', maxX: 196, maxY: 0 } });
+      // The first chip moved 150 left, from x = 40.
+      expect(layerOf(layers, 'I3:8;6:22').unclippedBox.x).toBe(-110);
+      expect(layerOf(layers, 'I3:8;6:33').parentKey).toBe('I3:8;6:22');
+    });
+
+    it('pins the fixed children of a top level instance screen by detaching it on the copy', async () => {
+      const fake = await setup();
+      const s = state(fake.doc, '4:5', { scroll: { '4:5': { x: 0, y: 300, areas: {} } } });
+      const { layers } = await fake.renderer.render(fake.doc, s);
+      expect(layerOf(layers, '4:5')).toMatchObject({ type: 'INSTANCE', box: { x: 0, y: -300, width: 1280, height: 1400 } });
+      expect(layerOf(layers, 'I4:5;6:42')).toMatchObject({ fixed: true, box: { x: 0, y: 0, width: 1280, height: 80 } });
+      expect(layerOf(layers, 'I4:5;6:41').box.y).toBe(-180);
+    });
+
     it("keeps a scroll area's own fixed children in place while its content moves", async () => {
       const fake = await setup((f) => (node(f, '2:25').numberOfFixedChildren = 1));
       const s = state(fake.doc, '2:20', { scroll: { '2:20': { x: 0, y: 0, areas: { '2:25': { x: 0, y: 160 } } } } });
