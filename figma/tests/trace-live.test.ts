@@ -393,36 +393,33 @@ describe.skipIf(!LIVE.url)('a live trace study against the local backend', () =>
     expect(plugin.failures).toEqual([]);
   });
 
-  it('has the server refuse no turn post, and ask the model again only for a give-up review or a model error', () => {
+  it('has the server refuse no turn post, and record why the model was asked again, never for a missing action_text', () => {
     const lines = serverLines();
     const ids = [...runs.keys()];
     const refused = lines.filter((l) => ids.some((id) => l.includes(`/api/plugin/runs/${id}/turn`)) && / HTTP\/1\.1"? (400|413) /.test(l.replace(/\x1b\[[0-9;]*m/g, '')));
-    // Every model call of a turn counts in its attempts: the first ask, a
-    // re-ask for an unusable answer (decide.action_text missing among them),
-    // the give-up review asked again with its note, and model errors retried.
-    // The server logs no line for a re-ask, so it is what is left over.
+    // Every model call after a turn's first is recorded with its reason
+    // (an unusable answer's message, give_up_review or model_error), and so
+    // is every debrief call after the first, on the turn that ended the run.
     const turns = (state['Archetype_Test.trace_turns'] ?? []).filter((t) => runs.has(t.run_id as string));
-    const stateOf = (t: Doc | undefined) => ((t?.result as Doc | undefined)?.state ?? {}) as Doc;
-    let extra = 0;
-    let reviews = 0;
-    const asked: Array<{ runId: string; turn: number; attempts: number; review: boolean }> = [];
+    const reasks: Array<{ runId: string; turn: number; attempt: number; call: string; reason: string }> = [];
+    const unrecorded: Array<{ runId: string; turn: number; attempts: number; turnReasks: number }> = [];
     for (const t of turns) {
-      const attempts = t.attempts as number;
-      const before = turns.find((p) => p.run_id === t.run_id && p.turn === (t.turn as number) - 1);
-      // Asked again when step n-1 newly raised the review, unless patience ended the run there.
-      const review = stateOf(t).reviewGiveUp === true && stateOf(before).reviewGiveUp !== true && stateOf(t).ended !== true;
-      extra += attempts - 1;
-      if (review) reviews += 1;
-      if (attempts > 1) asked.push({ runId: t.run_id as string, turn: t.turn as number, attempts, review });
+      const entries = ((t.reasks as Doc[] | undefined) ?? []).map((r) => ({
+        runId: t.run_id as string, turn: t.turn as number, attempt: r.attempt as number, call: r.call as string, reason: r.reason as string,
+      }));
+      reasks.push(...entries);
+      const turnReasks = entries.filter((r) => r.call === 'turn').length;
+      if ((t.attempts as number) - 1 !== turnReasks) unrecorded.push({ runId: t.run_id as string, turn: t.turn as number, attempts: t.attempts as number, turnReasks });
     }
-    // The debrief retries model errors with the same log line, so retries bound what they explain.
-    const retries = lines.filter((l) => l.includes('trace model unavailable')).length;
-    log.reasks = { turns: turns.length, extraCalls: extra, reviews, modelRetries: retries, asked };
+    const missingActionText = reasks.filter((r) => r.reason.startsWith('decide.action_text is required'));
+    const logged = lines.filter((l) => / is asked again: /.test(l) && ids.some((id) => l.includes(`trace run ${id} `)));
+    log.reasks = { turns: turns.length, reasks, missingActionText: missingActionText.length, loggedLines: logged.length };
     saveFile(folder, 'log.json', JSON.stringify(log, null, 2));
     expect(refused).toEqual([]);
     expect(turns.length).toBe([...runs.values()].reduce((n, r) => n + r.turns.length, 0));
-    if (retries === 0) expect(extra - reviews).toBe(0);
-    else expect(extra - reviews).toBeLessThanOrEqual(retries);
+    expect(unrecorded).toEqual([]);
+    expect(logged).toHaveLength(reasks.length);
+    expect(missingActionText).toEqual([]);
   });
 
   it('finalizes each run inside its last turn, as the eager server does', () => {
