@@ -3692,6 +3692,15 @@ def handle_dispatch_study(arguments: dict[str, Any]) -> dict[str, Any]:
     bad = _bad_study_id(study_id)
     if bad:
         return bad
+    study_out = _study_call(lambda t: backend_get(f"/api/studies/{study_id}", auth_token=t))
+    if isinstance(study_out, dict):
+        return study_out
+    if study_out[1].get("execution") == "plugin":
+        return tool_text(
+            f"Study {study_id} can't be dispatched: this study runs inside Figma, and only "
+            "the plugin panel can run it. Open the panel in Figma and launch the test from there.",
+            is_error=True,
+        )
     plugin_data = os.environ.get("CLAUDE_PLUGIN_DATA")
     if not plugin_data:
         return tool_text("CLAUDE_PLUGIN_DATA is not set; the runner needs it for the login and logs.", is_error=True)

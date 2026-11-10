@@ -75,27 +75,26 @@ files).
 
 ## How runs execute
 
-The plugin never drives a browser. It creates a study with `execution: "remote"`
-and `source: "figma"`, asks the backend to identify factors and build personas,
-queues the first wave, and then only watches. A runner claims queued runs and
-drives the prototype with the Archetype actor (Playwright, with the viewer's
-screen reader mode on so hotspots read as named links). Success is a required
-`frame_reached` check on the goal frame's node id: met when a step URL's
-`node-id` names that frame, whatever else the URL carries.
+The plugin never drives a browser. A Figma study runs inside the panel itself:
+the panel creates a study with `execution: "plugin"` and `source: "figma"`,
+asks the backend to identify factors and build personas, and queues the first
+wave. For every queued run, the panel then walks the prototype on its own —
+reading reactions, variants, variables and overlays the way the Figma
+prototype viewer would — and posts each screen it reaches to the backend. The
+backend's model looks at that screen (a screenshot, the visible text and the
+actionable elements) and decides the persona's next action; the panel applies
+that action, renders the next screen and posts again. This repeats, one turn
+at a time, until the persona finishes, gives up, or patience runs out. No
+runner is needed, and none watches a Figma study: `study_runner.py --watch`
+still exists for other `execution: "remote"` studies, but it never claims a
+Figma study's runs.
 
-Until the hosted runner ships, someone runs the runner from this repository,
-signed in (through the Claude Code plugin) to the same Archetype account as the
-designer, since a study is only visible to its owner:
-
-```sh
-python3 scripts/study_runner.py --watch --data-dir <folder with the plugin's auth.json> \
-  --backend http://localhost:5013
-```
-
-It polls for the account's running remote studies, claims their queued runs and
-asks for the next wave until the backend says the study is complete. While
-nobody is running it, the panel says "Waiting for a runner" rather than showing
-an error, and you can close Figma: the tests are queued on the backend.
+The panel must stay open while a test runs, because it is doing the walking.
+Closing it pauses every session it owns until it reopens; on the web, keep the
+tab visible — browsers slow or stop timers in a background tab, and the panel
+warns you when it notices itself running late. All queued runs of a wave run
+in parallel in the same panel, and the panel asks for the next wave itself
+once every run of the current one has ended.
 
 ## Privacy: what leaves the file
 
