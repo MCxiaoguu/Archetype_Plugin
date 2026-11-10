@@ -696,6 +696,7 @@ describe('a whole study through the runner', () => {
       lastOutcome: null,
       timerEffects: [],
       loopFrames: [],
+      version: 1,
     };
     await plugin.bridge.call('trace-save', { studyId: 'study-shared', runId: 'run-theirs', session: theirs });
     const clock = panelClock();

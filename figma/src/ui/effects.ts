@@ -297,6 +297,10 @@ export function createEffects(store: Store, deps: EffectsDeps = {}) {
     trace.goToPage();
   }
 
+  async function forgetProgress() {
+    await trace.forgetProgress();
+  }
+
   function newTest() {
     watchGen++;
     toMain({ type: 'forget-last' });
@@ -363,6 +367,7 @@ export function createEffects(store: Store, deps: EffectsDeps = {}) {
     cancelImport,
     closePanel,
     goToTestPage,
+    forgetProgress,
     retry,
     openStudy,
     newTest,

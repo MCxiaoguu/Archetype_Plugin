@@ -11,7 +11,7 @@
  */
 
 import { ApiError, type ApiClient, type ClaimBody, type NextWave, type RunRowApi, type StudyRuns } from '../../lib/api';
-import type { SavedSession } from '../../lib/messages';
+import { SAVED_SESSION_VERSION, type SavedSession } from '../../lib/messages';
 import { start } from '../../lib/proto/engine';
 import type { ProtoDoc } from '../../lib/proto/model';
 import { isTerminalRun } from '../../lib/poll';
@@ -177,7 +177,7 @@ async function run(study: StudyTrace, deps: RunnerDeps, results: SessionResult[]
   }
 
   async function saveTurn0(runId: string): Promise<void> {
-    const session: SavedSession = { owner, runId, turn: 0, state: startState, lastOutcome: null, timerEffects: [], loopFrames: [] };
+    const session: SavedSession = { owner, runId, turn: 0, state: startState, lastOutcome: null, timerEffects: [], loopFrames: [], version: SAVED_SESSION_VERSION };
     let failure: unknown;
     for (let attempt = 0; attempt < 2; attempt++) {
       try {

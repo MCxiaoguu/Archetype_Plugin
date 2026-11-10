@@ -205,7 +205,8 @@ describe('one persona session', () => {
 });
 
 describe('what timers did', () => {
-  // A link that opens on its own half a second after the Dashboard shows.
+  // A link that opens on its own as soon as the Dashboard shows: the reader reads Figma's timeout in
+  // milliseconds, so 0.5 is half a millisecond.
   const autoLink = (fake: Fake) => {
     (fake.nodes.get('1:2') as FakeNode).reactions = [
       { trigger: { type: 'AFTER_TIMEOUT', timeout: 0.5 }, actions: [{ type: 'URL', url: 'https://help.example.com/bank' }] },
@@ -298,6 +299,7 @@ describe('resuming a run this panel owns', () => {
       lastOutcome: { action: { type: 'click', element: 'e1' }, outcome: 'nothing_happened', target: 'Back (e1)' },
       timerEffects: [],
       loopFrames: [],
+      version: 1,
     };
   }
 
@@ -345,7 +347,7 @@ describe('resuming a run this panel owns', () => {
     const wait = (b: TurnBody): Decision => (b.turn === 1 ? { action: { type: 'wait', seconds: 6 } } : DONE);
     const whole = await play(wait, { edit: waitLink });
     const afterWait = whole.saves[0] as SavedSession;
-    expect(afterWait).toMatchObject({ turn: 1, timerEffects: [{ type: 'left_prototype', detail: 'https://help.example.com/late' }], loopFrames: [] });
+    expect(afterWait).toMatchObject({ turn: 1, timerEffects: [{ type: 'left_prototype', detail: 'https://help.example.com/late' }], loopFrames: [], version: 1 });
     const reopened = await play(wait, { main: await mainThread(waitLink), run: () => ({ resume: afterWait }) });
     expect(reopened.posted[0]!.last).toEqual(whole.posted[1]!.last);
   });
@@ -423,6 +425,7 @@ describe('when things go wrong', () => {
       lastOutcome: { action: { type: 'click', element: billing.id }, outcome: 'navigated', target: `Billing (${billing.id})` },
       timerEffects: [],
       loopFrames: [],
+      version: 1,
     };
     const server = backend((b) => (b.turn === 3 ? DONE : { action: null }));
     server.decisions.set(2, { action: { type: 'click', element: 'e2' } }); // "Connect a bank", decided before the panel closed

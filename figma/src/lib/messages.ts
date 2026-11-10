@@ -104,6 +104,9 @@ export interface TraceRenderReply {
   notes: RenderNote[];
 }
 
+/** The shape of SavedSession (and the TraceState in it) this plugin saves and can resume from. */
+export const SAVED_SESSION_VERSION = 1;
+
 /** What resuming a persona needs (spec, Data flow 7 and 10). */
 export interface SavedSession {
   owner: string;
@@ -118,6 +121,8 @@ export interface SavedSession {
   timerEffects: TimerEffect[];
   /** Frames a loop of timers ran through since that turn, for the next turn's `timer_loop` flag. */
   loopFrames: string[];
+  /** SAVED_SESSION_VERSION when it was saved: another version's saved state isn't resumed. */
+  version: number;
 }
 
 export interface TraceSaveRequest {
@@ -128,6 +133,11 @@ export interface TraceSaveRequest {
 }
 
 export interface TraceLoadRequest {
+  studyId: string;
+}
+
+/** Forgets every saved session of a study: the designer's way out of saved progress the plugin can't read. */
+export interface TraceForgetRequest {
   studyId: string;
 }
 
@@ -151,6 +161,7 @@ export interface TraceCalls {
   'trace-load': { request: TraceLoadRequest; reply: TraceLoadReply };
   'trace-scratch-check': { request: Record<string, never>; reply: ScratchCheckReply };
   'trace-cleanup': { request: Record<string, never>; reply: TraceCleanupReply };
+  'trace-forget': { request: TraceForgetRequest; reply: null };
 }
 
 export type TraceCallType = keyof TraceCalls;
@@ -159,11 +170,14 @@ export type TraceRequestMessage = {
   [K in TraceCallType]: { type: K; requestId: string } & TraceCalls[K]['request'];
 }[TraceCallType];
 
+/** Why a trace request failed, when the panel acts on the reason: `saved_progress_unreadable` offers to forget it. */
+export type TraceErrorCode = 'saved_progress_unreadable';
+
 export type TraceReplyMessage =
   | { type: 'trace-result'; requestId: string; result: unknown }
-  | { type: 'trace-error'; requestId: string; message: string };
+  | { type: 'trace-error'; requestId: string; message: string; code?: TraceErrorCode };
 
-export const TRACE_CALLS: readonly TraceCallType[] = ['trace-read', 'trace-render', 'trace-save', 'trace-load', 'trace-scratch-check', 'trace-cleanup'];
+export const TRACE_CALLS: readonly TraceCallType[] = ['trace-read', 'trace-render', 'trace-save', 'trace-load', 'trace-scratch-check', 'trace-cleanup', 'trace-forget'];
 
 export function isTraceRequest(msg: { type: string }): msg is TraceRequestMessage {
   return (TRACE_CALLS as readonly string[]).includes(msg.type);

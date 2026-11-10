@@ -172,6 +172,9 @@ export function createTraceMain(api: PluginAPI, post: (msg: MainToUi) => void): 
       }
       case 'trace-load':
         return { sessions: await store.loadTraceSessions(api, checkId(msg.studyId, 'study')) };
+      case 'trace-forget':
+        await store.forgetTraceSessions(api, checkId(msg.studyId, 'study'));
+        return null;
       case 'trace-scratch-check':
         return scratchCheck();
       case 'trace-cleanup':
@@ -189,7 +192,9 @@ export function createTraceMain(api: PluginAPI, post: (msg: MainToUi) => void): 
     try {
       post({ type: 'trace-result', requestId, result: await answer(msg) });
     } catch (err) {
-      post({ type: 'trace-error', requestId, message: messageOf(err) });
+      // Saved progress it can't read carries its code: the panel offers to forget it.
+      if (err instanceof store.SavedProgressError) post({ type: 'trace-error', requestId, message: err.message, code: err.code });
+      else post({ type: 'trace-error', requestId, message: messageOf(err) });
     }
   }
 

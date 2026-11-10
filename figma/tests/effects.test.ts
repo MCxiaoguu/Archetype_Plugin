@@ -372,6 +372,33 @@ describe('panel effects', () => {
     expect(store.get()).toMatchObject({ gate: null, notice: { kind: 'error', text: expect.stringMatching(/second.*first/) } });
   });
 
+  it('offers to forget saved progress it cannot read, and then runs the test on without it', async () => {
+    const main = await mainThread();
+    main.loads.error = { message: "This test's saved progress was made by another version of the plugin.", code: 'saved_progress_unreadable' };
+    const run = { runId: 'r1', archetypeId: 'a', archetypeName: 'Baseline founder', role: 'baseline', status: 'queued' };
+    // The run whose saved progress that was: running, with nothing saved once it is forgotten.
+    const theirs = { runId: 'r0', archetypeId: 'b', archetypeName: 'Low trust founder', role: 'variant', status: 'running' };
+    const calls = installFetch((_m, path) => {
+      if (path === '/api/studies/s14/status') return [200, { studyId: 's14', status: 'running' }];
+      if (path === '/api/studies/s14/runs') return [200, { studyId: 's14', status: 'running', runs: [theirs, run] }];
+      if (path === '/api/plugin/runs/r1/claim') return (run.status = 'running'), [200, { runId: 'r1', ...BRIEFING }];
+      return [404, { error: 'x', message: path }];
+    });
+    const { store, fx } = initStore('tok', main, { studies: [traceStudy('s14', 'running')], lastStudyId: 's14' });
+    await until(() => store.get().study?.runner?.phase === 'progress_unreadable');
+    expect(store.get().study?.runner).toEqual({ phase: 'progress_unreadable', notice: "This test's saved progress was made by another version of the plugin." });
+    // Its own banner, with the way out: not a Try again that would fail the same way.
+    expect(store.get().study?.error).toBeNull();
+    expect(calls).not.toContain('POST /api/plugin/runs/r1/claim');
+
+    await fx.forgetProgress();
+    await until(() => calls.includes('POST /api/plugin/runs/r1/claim'));
+    expect(main.log).toContain('forget s14');
+    // Left to the backend's watchdog, as runs with no saved state are.
+    expect(calls.filter((c) => c.includes('/runs/r0/'))).toEqual([]);
+    fx.newTest();
+  });
+
   it('blocks the launch where the file cannot be edited', async () => {
     const main = await mainThread();
     main.gate.scratch = { ok: false, reason: 'Duplicate to your drafts to test', detail: 'Cannot create nodes in a read-only document' };
@@ -423,6 +450,7 @@ describe('panel effects', () => {
       lastOutcome: { action: { type: 'click' as const, element: 'e1' }, outcome: 'nothing_happened' as const, target: 'Welcome back, Mara (e1)' },
       timerEffects: [],
       loopFrames: [],
+      version: 1,
     };
     main.stored.set('s5', new Map([['r1', saved]]));
     const run = { runId: 'r1', archetypeId: 'a', archetypeName: 'Baseline founder', role: 'baseline', status: 'running' };

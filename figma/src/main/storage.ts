@@ -1,4 +1,4 @@
-import { DEFAULT_SETTINGS, type Draft, type SavedSession, type Settings, type StudyRecord } from '../lib/messages';
+import { DEFAULT_SETTINGS, SAVED_SESSION_VERSION, type Draft, type SavedSession, type Settings, type StudyRecord } from '../lib/messages';
 
 export const KEYS = {
   settings: 'archetype.settings',
@@ -107,17 +107,38 @@ export async function saveDraft(api: PluginAPI, draft: Partial<Draft>): Promise<
 const isObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 const isText = (v: unknown): v is string => typeof v === 'string';
 
-/** What is wrong with a trace state, or null: the fields rendering and resuming rely on. */
+/**
+ * What is wrong with a trace state, or null: the fields rendering and the
+ * engine rely on, so a state a resume can't settle is refused when it is
+ * loaded, not partway through a turn.
+ */
 export function traceStateProblem(state: unknown): string | null {
-  const ok =
-    isObject(state) && isText(state.frameId) && isText(state.docHash) && Array.isArray(state.overlays) &&
-    isObject(state.viewport) && Number.isFinite(state.viewport.width) && Number.isFinite(state.viewport.height);
-  return ok ? null : 'it needs frameId, docHash, overlays and viewport';
+  if (!isObject(state)) return 'it is not an object';
+  const bad: string[] = [];
+  if (!isText(state.frameId)) bad.push('frameId');
+  if (!Array.isArray(state.overlays) || !state.overlays.every(isObject)) bad.push('overlays');
+  if (!Array.isArray(state.history) || !state.history.every(isText)) bad.push('history');
+  for (const field of ['scroll', 'variants', 'variables', 'modes'] as const) if (!isObject(state[field])) bad.push(field);
+  if (!Number.isFinite(state.clockMs)) bad.push('clockMs');
+  if (!Array.isArray(state.timers) || !state.timers.every(isObject)) bad.push('timers');
+  const pointer = state.pointer;
+  const pointerOk =
+    isObject(pointer) && (pointer.point === null || isObject(pointer.point)) && Array.isArray(pointer.over) &&
+    (pointer.pressing === null || isText(pointer.pressing)) && Array.isArray(pointer.held);
+  if (!pointerOk) bad.push('pointer');
+  if (!isText(state.docHash)) bad.push('docHash');
+  if (!isObject(state.viewport) || !Number.isFinite(state.viewport.width) || !Number.isFinite(state.viewport.height)) bad.push('viewport');
+  if (state.focus !== null && !isObject(state.focus)) bad.push('focus');
+  return bad.length ? `its ${bad.join(', ')} ${bad.length === 1 ? 'is' : 'are'} missing or malformed` : null;
 }
+
+/** Saved progress made by a version of the plugin whose sessions this one doesn't read. */
+export const OTHER_VERSION = "This test's saved progress was made by another version of the plugin.";
 
 /** What is wrong with a saved session of `runId`, or null. */
 export function savedSessionProblem(session: unknown, runId: string): string | null {
   if (!isObject(session)) return 'it is not an object';
+  if (session.version !== SAVED_SESSION_VERSION) return `it was made by another version of the plugin (version ${String(session.version)}, not ${SAVED_SESSION_VERSION})`;
   if (!isText(session.owner) || !session.owner) return 'it has no owner';
   if (session.runId !== runId) return `its runId is not the run it is saved under (${runId})`;
   if (!Number.isInteger(session.turn) || (session.turn as number) < 0) return 'its turn is not a whole number from 0';
@@ -131,14 +152,25 @@ export function savedSessionProblem(session: unknown, runId: string): string | n
   return null;
 }
 
+/** Saved progress of a study this plugin can't read. The panel offers to forget it (trace-forget). */
+export class SavedProgressError extends Error {
+  readonly code = 'saved_progress_unreadable' as const;
+
+  constructor(message: string) {
+    super(message);
+    this.name = 'SavedProgressError';
+  }
+}
+
 /** A study's stored sessions. Stored data the plugin can't read is refused, never written over. */
 async function traceSessions(api: PluginAPI, key: string): Promise<Record<string, SavedSession>> {
   const stored: unknown = await api.clientStorage.getAsync(key);
   if (stored === undefined) return {};
-  if (!isObject(stored)) throw new Error(`The trace sessions stored under ${key} are not an object, so the plugin leaves them as they are.`);
+  if (!isObject(stored)) throw new SavedProgressError(`The trace sessions stored under ${key} are not an object, so the plugin leaves them as they are.`);
   for (const [runId, session] of Object.entries(stored)) {
+    if (isObject(session) && session.version !== SAVED_SESSION_VERSION) throw new SavedProgressError(OTHER_VERSION);
     const problem = savedSessionProblem(session, runId);
-    if (problem) throw new Error(`The trace session of run ${runId} stored under ${key} can't be read: ${problem}.`);
+    if (problem) throw new SavedProgressError(`The trace session of run ${runId} stored under ${key} can't be read: ${problem}.`);
   }
   return stored as Record<string, SavedSession>;
 }
@@ -161,21 +193,32 @@ export async function loadTraceSessions(api: PluginAPI, studyId: string): Promis
   return Object.values(await traceSessions(api, key));
 }
 
-/** Saves a run's session, or forgets the run when `session` is null (it ended), after the saves of the study sent before it. */
-export async function saveTraceSession(api: PluginAPI, studyId: string, runId: string, session: SavedSession | null): Promise<void> {
-  const key = KEYS.trace(fileId(api, true) as string, studyId);
-  const save = afterSaves(key).then(async () => {
-    const sessions = await traceSessions(api, key);
-    if (session) sessions[runId] = session;
-    else delete sessions[runId];
-    if (Object.keys(sessions).length) await api.clientStorage.setAsync(key, sessions);
-    else await api.clientStorage.deleteAsync(key);
-  });
-  // The queue only orders the saves; each save's own failure reaches its caller through `save`.
+/** Runs `write` on a study's key after the writes sent before it. */
+function queued(key: string, write: () => Promise<void>): Promise<void> {
+  const save = afterSaves(key).then(write);
+  // The queue only orders the writes; each one's own failure reaches its caller through `save`.
   const done = save.catch(() => undefined);
   traceSaves.set(key, done);
   void done.then(() => {
     if (traceSaves.get(key) === done) traceSaves.delete(key);
   });
   return save;
+}
+
+/** Saves a run's session, or forgets the run when `session` is null (it ended), after the saves of the study sent before it. */
+export async function saveTraceSession(api: PluginAPI, studyId: string, runId: string, session: SavedSession | null): Promise<void> {
+  const key = KEYS.trace(fileId(api, true) as string, studyId);
+  return queued(key, async () => {
+    const sessions = await traceSessions(api, key);
+    if (session) sessions[runId] = session;
+    else delete sessions[runId];
+    if (Object.keys(sessions).length) await api.clientStorage.setAsync(key, sessions);
+    else await api.clientStorage.deleteAsync(key);
+  });
+}
+
+/** Forgets all of a study's saved sessions, readable or not, after the saves sent before. Its runs are left to the backend's watchdog. */
+export async function forgetTraceSessions(api: PluginAPI, studyId: string): Promise<void> {
+  const key = KEYS.trace(readId(api), studyId);
+  return queued(key, () => api.clientStorage.deleteAsync(key));
 }

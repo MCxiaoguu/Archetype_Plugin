@@ -29,6 +29,8 @@ export async function mainThread(edit: (fake: Fake) => void = () => {}, log: str
   const renders = { failures: 0, errors: [] as string[], notes: null as RenderNote[] | null, change: null as ((r: TraceRenderReply) => TraceRenderReply) | null };
   /** Saves fail with these messages, one per save, before they succeed again. */
   const saveErrors: string[] = [];
+  /** Loads fail with this, as the main thread answers progress it can't read, until the study is forgotten. */
+  const loads = { error: null as { message: string; code: 'saved_progress_unreadable' } | null };
   /** The launch gate's view of the file, and each read's importLibraryVariants. */
   /** `readErrors`: reads that fail with these messages first. */
   const gate = { scratch: { ok: true, reason: null } as ScratchCheckReply, reads: [] as boolean[], readErrors: [] as string[], readAs: null as ((importLibraryVariants: boolean) => ProtoDoc) | null };
@@ -67,7 +69,16 @@ export async function mainThread(edit: (fake: Fake) => void = () => {}, log: str
       log.push(`save ${payload.runId as string} ${session ? session.turn : 'null'}`);
       return null;
     }
-    if (type === 'trace-load') return { sessions: [...(stored.get(payload.studyId as string)?.values() ?? [])] };
+    if (type === 'trace-load') {
+      if (loads.error) throw new BridgeError('trace-load', loads.error.message, loads.error.code);
+      return { sessions: [...(stored.get(payload.studyId as string)?.values() ?? [])] };
+    }
+    if (type === 'trace-forget') {
+      stored.delete(payload.studyId as string);
+      loads.error = null;
+      log.push(`forget ${payload.studyId as string}`);
+      return null;
+    }
     if (type === 'trace-cleanup') {
       log.push('cleanup');
       return { removed: 0 };
@@ -76,7 +87,7 @@ export async function mainThread(edit: (fake: Fake) => void = () => {}, log: str
   });
   // The in-process main thread answers the bridge's calls, whatever their type.
   const bridge = { call: call as unknown as Bridge['call'], close: vi.fn() };
-  return { fake, doc, bridge, call, saves, saveErrors, stored, renders, gate, log };
+  return { fake, doc, bridge, call, saves, saveErrors, loads, stored, renders, gate, log };
 }
 
 export type MainThread = Awaited<ReturnType<typeof mainThread>>;

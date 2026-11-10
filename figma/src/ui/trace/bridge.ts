@@ -14,6 +14,7 @@ import type {
   MainToUi,
   TraceCalls,
   TraceCallType,
+  TraceErrorCode,
   TraceReplyMessage,
   TraceRequestMessage,
   UiToMain,
@@ -46,8 +47,9 @@ export interface BridgeTransport {
 
 function isReply(msg: MainToUi): msg is TraceReplyMessage {
   if (msg.type !== 'trace-result' && msg.type !== 'trace-error') return false;
-  const reply = msg as { requestId?: unknown; message?: unknown };
-  return typeof reply.requestId === 'string' && (msg.type === 'trace-result' || typeof reply.message === 'string');
+  const reply = msg as { requestId?: unknown; message?: unknown; code?: unknown };
+  if (typeof reply.requestId !== 'string') return false;
+  return msg.type === 'trace-result' || (typeof reply.message === 'string' && (reply.code === undefined || typeof reply.code === 'string'));
 }
 
 /** The panel's typed channel to the main thread (ui/bridge.ts), passing on only trace replies. */
@@ -68,11 +70,14 @@ export function panelTransport(
 /** The main thread answered the call with an error, or the bridge was closed. */
 export class BridgeError extends Error {
   readonly type: TraceCallType;
+  /** The main thread's reason, when the panel acts on it. */
+  readonly code: TraceErrorCode | null;
 
-  constructor(type: TraceCallType, message: string) {
+  constructor(type: TraceCallType, message: string, code: TraceErrorCode | null = null) {
     super(message);
     this.name = 'BridgeError';
     this.type = type;
+    this.code = code;
   }
 }
 
@@ -118,7 +123,7 @@ export function createBridge(transport: BridgeTransport): Bridge {
     waiting.delete(msg.requestId);
     clearTimeout(call.timer);
     if (msg.type === 'trace-result') call.resolve(msg.result);
-    else call.reject(new BridgeError(call.type, msg.message));
+    else call.reject(new BridgeError(call.type, msg.message, msg.code ?? null));
   });
 
   return {

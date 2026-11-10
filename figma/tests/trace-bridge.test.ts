@@ -69,7 +69,15 @@ describe('trace bridge', () => {
     main.reply({ type: 'trace-error', requestId: main.sent[0]!.requestId, message: 'exportAsync failed: node was removed' });
     const err = await pending.catch((e: unknown) => e);
     expect(err).toBeInstanceOf(BridgeError);
-    expect(err).toMatchObject({ type: 'trace-render', message: 'exportAsync failed: node was removed' });
+    expect(err).toMatchObject({ type: 'trace-render', message: 'exportAsync failed: node was removed', code: null });
+  });
+
+  it('keeps the code of a trace-error that has one', async () => {
+    const main = fakeMain();
+    const bridge = createBridge(main.transport);
+    const pending = bridge.call('trace-load', { studyId: 's1' });
+    main.reply({ type: 'trace-error', requestId: main.sent[0]!.requestId, message: "This test's saved progress was made by another version of the plugin.", code: 'saved_progress_unreadable' });
+    expect(await pending.catch((e: unknown) => e)).toMatchObject({ type: 'trace-load', code: 'saved_progress_unreadable' });
   });
 
   it('times out after 30 s by default with a BridgeTimeout, and ignores the late reply', async () => {

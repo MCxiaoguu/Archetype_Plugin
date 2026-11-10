@@ -11,7 +11,7 @@ import type { ProtoDoc } from '../../lib/proto/model';
 import type { RunnerStatus } from '../../lib/runs';
 import { toMain } from '../bridge';
 import type { Store } from '../store';
-import { createBridge, panelTransport, type Bridge } from './bridge';
+import { BridgeError, createBridge, panelTransport, type Bridge } from './bridge';
 import { runStudy } from './runner';
 
 /** A read that imports library components can take longer than the bridge's 30 s. */
@@ -177,8 +177,30 @@ export function createTracePanel(deps: TracePanelDeps) {
       .then((result) => {
         if (result?.stop === 'stuck') stop('stuck', result.message);
       })
-      .catch((err: unknown) => stop('failed', deps.message(err)))
+      .catch((err: unknown) => {
+        // Try again would fail the same way: the way out is to forget that progress.
+        if (err instanceof BridgeError && err.code === 'saved_progress_unreadable' && store.get().study?.id === studyId) report({ phase: 'progress_unreadable', notice: err.message });
+        else stop('failed', deps.message(err));
+      })
       .finally(() => runners.delete(studyId));
+  }
+
+  /**
+   * Forgets the saved progress of the study on screen, which this plugin
+   * can't read, and runs it on without: its runs with saved state are left
+   * to the backend's watchdog, as runs with no saved state are.
+   */
+  async function forgetProgress() {
+    const st = store.get().study;
+    if (!st?.id || st.runner?.phase !== 'progress_unreadable') return;
+    try {
+      await bridge().call('trace-forget', { studyId: st.id });
+    } catch (err) {
+      store.dispatch({ type: 'runner', studyId: st.id, status: { phase: 'failed', notice: deps.message(err) } });
+      store.dispatch({ type: 'launch-failed', message: deps.message(err) });
+      return;
+    }
+    start();
   }
 
   /** The page's doc changed: a test waiting for its page starts once the designer is there. */
@@ -207,7 +229,7 @@ export function createTracePanel(deps: TracePanelDeps) {
     line?.close?.();
   }
 
-  return { gate, launchAnyway, cancel, lastRead, launchedOn, start, pageChanged, goToPage, fileChanged, close };
+  return { gate, launchAnyway, cancel, lastRead, launchedOn, start, forgetProgress, pageChanged, goToPage, fileChanged, close };
 }
 
 export type TracePanel = ReturnType<typeof createTracePanel>;

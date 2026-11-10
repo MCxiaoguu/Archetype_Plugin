@@ -13,7 +13,7 @@
  */
 
 import { ApiError, TURN_TIMEOUT_MS, type AbortCode, type ApiClient, type TimerEffect, type TurnBody, type TurnEnded, type TurnFlag, type TurnLast, type TurnView } from '../../lib/api';
-import type { SavedSession, TraceRenderReply } from '../../lib/messages';
+import { SAVED_SESSION_VERSION, type SavedSession, type TraceRenderReply } from '../../lib/messages';
 import { listElements } from '../../lib/proto/elements';
 import { apply, settle, start, type EngineEffect } from '../../lib/proto/engine';
 import { EngineError, type EngineErrorCode } from '../../lib/proto/errors';
@@ -529,7 +529,7 @@ export async function runSession(run: SessionRun, deps: SessionDeps): Promise<Se
       target: targetOf(action, listed.elements),
       ...(applied.outcome === 'unsupported' ? { unsupported: unsupportedDetail(applied.effects) } : {}),
     };
-    await save({ owner: run.owner, runId: run.runId, turn, state, lastOutcome: last, timerEffects: [...pendingEffects], loopFrames: [...loopFrames] });
+    await save({ owner: run.owner, runId: run.runId, turn, state, lastOutcome: last, timerEffects: [...pendingEffects], loopFrames: [...loopFrames], version: SAVED_SESSION_VERSION });
     turn += 1;
     status();
   }

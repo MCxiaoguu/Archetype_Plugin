@@ -127,6 +127,18 @@ export function Progress({ state, fx }: { state: AppState; fx: Effects }) {
                 {st.runner.notice}
               </Banner>
             )}
+            {st.runner?.phase === 'progress_unreadable' && (
+              <Banner
+                kind="error"
+                action={
+                  <button type="button" class="btn btn-small btn-secondary" onClick={() => void fx.forgetProgress()}>
+                    Forget saved progress for this test
+                  </button>
+                }
+              >
+                {st.runner.notice} Forgetting it runs the test on; tries this panel was in the middle of end on their own.
+              </Banner>
+            )}
             {notices.map((n) => (
               <Banner key={n} kind="warn">
                 {n}

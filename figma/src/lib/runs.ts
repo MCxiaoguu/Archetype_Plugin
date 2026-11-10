@@ -15,11 +15,12 @@ export interface LiveRun {
 
 /**
  * Where the panel's runner is with a study (ui/trace/runner.ts). The last
- * three are where it stopped: the next wave didn't come (stuck), it failed,
- * or it waits for the designer to open the test's page.
+ * four are where it stopped: the next wave didn't come (stuck), it failed,
+ * it waits for the designer to open the test's page, or the study's saved
+ * progress can't be read and the designer can forget it.
  */
 export interface RunnerStatus {
-  phase: 'running' | 'next_wave' | 'paused' | 'done' | 'stuck' | 'failed' | 'other_page';
+  phase: 'running' | 'next_wave' | 'paused' | 'done' | 'stuck' | 'failed' | 'other_page' | 'progress_unreadable';
   notice: string | null;
 }
 
@@ -128,7 +129,7 @@ export function panelNotices(live: Readonly<Record<string, LiveRun>>, runner: Ru
 
 /** The line under the persona list in plugin mode: what this panel's runner and sessions are doing. */
 export function panelRunText(rows: readonly PersonaRow[], runner: RunnerStatus | null, state: RunnerState): string {
-  if (runner && (runner.phase === 'stuck' || runner.phase === 'failed' || runner.phase === 'other_page')) return '';
+  if (runner && (runner.phase === 'stuck' || runner.phase === 'failed' || runner.phase === 'other_page' || runner.phase === 'progress_unreadable')) return '';
   if (rows.some((r) => r.here)) return 'Personas are clicking through your prototype here in the panel.';
   if (runner?.phase === 'next_wave') return 'Starting the next round of tries.';
   if (runner?.phase === 'done' || state === 'finishing') return 'All tries are in. Putting the results together.';
