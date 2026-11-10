@@ -109,17 +109,39 @@ async function traceSessions(api: PluginAPI, key: string): Promise<Record<string
   return stored && typeof stored === 'object' ? (stored as Record<string, SavedSession>) : {};
 }
 
-/** The sessions saved for a study, in the order they were first saved. */
-export async function loadTraceSessions(api: PluginAPI, studyId: string): Promise<SavedSession[]> {
-  return Object.values(await traceSessions(api, KEYS.trace(readId(api), studyId)));
+/**
+ * The saves of each study's sessions, newest last. The runs of a study save
+ * into one key, and each save reads, changes and writes it: two saves at once
+ * would each write what they read, and one run's session would be lost.
+ */
+const traceSaves = new Map<string, Promise<void>>();
+
+function afterSaves(key: string): Promise<void> {
+  return traceSaves.get(key) ?? Promise.resolve();
 }
 
-/** Saves a run's session, or forgets the run when `session` is null (it ended). */
+/** The sessions saved for a study, in the order they were first saved, once the saves sent before this load are done. */
+export async function loadTraceSessions(api: PluginAPI, studyId: string): Promise<SavedSession[]> {
+  const key = KEYS.trace(readId(api), studyId);
+  await afterSaves(key);
+  return Object.values(await traceSessions(api, key));
+}
+
+/** Saves a run's session, or forgets the run when `session` is null (it ended), after the saves of the study sent before it. */
 export async function saveTraceSession(api: PluginAPI, studyId: string, runId: string, session: SavedSession | null): Promise<void> {
   const key = KEYS.trace(fileId(api, true) as string, studyId);
-  const sessions = await traceSessions(api, key);
-  if (session) sessions[runId] = session;
-  else delete sessions[runId];
-  if (Object.keys(sessions).length) await api.clientStorage.setAsync(key, sessions);
-  else await api.clientStorage.deleteAsync(key);
+  const save = afterSaves(key).then(async () => {
+    const sessions = await traceSessions(api, key);
+    if (session) sessions[runId] = session;
+    else delete sessions[runId];
+    if (Object.keys(sessions).length) await api.clientStorage.setAsync(key, sessions);
+    else await api.clientStorage.deleteAsync(key);
+  });
+  // The queue only orders the saves; each save's own failure reaches its caller through `save`.
+  const done = save.catch(() => undefined);
+  traceSaves.set(key, done);
+  void done.then(() => {
+    if (traceSaves.get(key) === done) traceSaves.delete(key);
+  });
+  return save;
 }

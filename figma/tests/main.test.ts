@@ -385,6 +385,41 @@ describe('trace requests on the main thread', () => {
     expect(keys[0]).toMatch(/^archetype\.file\.[^.]+\.trace\.s1$/);
   });
 
+  it('keeps every session when the runs of a study save at once, and a load reads what was saved before it', async () => {
+    const t = traceMain();
+    const doc = (await t.ask({ type: 'trace-read', requestId: 'a', importLibraryVariants: false })).result as ProtoDoc;
+    const state = start(doc, '1:2');
+    const session = (runId: string, turn: number) => ({ owner: 'p_1', runId, turn, state, lastOutcome: null });
+    // Parallel personas: their saves reach the main thread together.
+    await Promise.all([
+      t.ask({ type: 'trace-save', requestId: 'b', studyId: 's1', runId: 'r1', session: session('r1', 1) }),
+      t.ask({ type: 'trace-save', requestId: 'c', studyId: 's1', runId: 'r2', session: session('r2', 1) }),
+      t.ask({ type: 'trace-save', requestId: 'd', studyId: 's1', runId: 'r3', session: session('r3', 1) }),
+    ]);
+    expect((await t.ask({ type: 'trace-load', requestId: 'e', studyId: 's1' })).result).toEqual({ sessions: [session('r1', 1), session('r2', 1), session('r3', 1)] });
+    const [, , loaded] = await Promise.all([
+      t.ask({ type: 'trace-save', requestId: 'f', studyId: 's1', runId: 'r1', session: null }),
+      t.ask({ type: 'trace-save', requestId: 'g', studyId: 's1', runId: 'r2', session: session('r2', 2) }),
+      t.ask({ type: 'trace-load', requestId: 'h', studyId: 's1' }),
+    ]);
+    expect(loaded.result).toEqual({ sessions: [session('r2', 2), session('r3', 1)] });
+  });
+
+  it('answers a save the storage refuses with trace-error, and the next save of the study still runs', async () => {
+    const t = traceMain();
+    const doc = (await t.ask({ type: 'trace-read', requestId: 'a', importLibraryVariants: false })).result as ProtoDoc;
+    const state = start(doc, '1:2');
+    const one = { owner: 'p_1', runId: 'r1', turn: 1, state, lastOutcome: null };
+    (t.api.clientStorage.setAsync as unknown as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('The storage quota is full'));
+    const [refused, saved] = await Promise.all([
+      t.ask({ type: 'trace-save', requestId: 'b', studyId: 's1', runId: 'r1', session: one }),
+      t.ask({ type: 'trace-save', requestId: 'c', studyId: 's1', runId: 'r1', session: one }),
+    ]);
+    expect(refused).toEqual({ type: 'trace-error', requestId: 'b', message: 'The storage quota is full' });
+    expect(saved).toEqual({ type: 'trace-result', requestId: 'c', result: null });
+    expect((await t.ask({ type: 'trace-load', requestId: 'd', studyId: 's1' })).result).toEqual({ sessions: [one] });
+  });
+
   it('answers a malformed request with trace-error naming what is wrong, not an exception', async () => {
     const t = traceMain();
     const doc = (await t.ask({ type: 'trace-read', requestId: 'ok', importLibraryVariants: false })).result as ProtoDoc;
