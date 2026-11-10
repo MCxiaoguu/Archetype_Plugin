@@ -13,29 +13,37 @@
 
 import { classifyElements } from './elements';
 import { indexLayers, type LayerIndex } from './hitTest';
-import type { ProtoAction, ProtoReaction, ProtoTrigger, RawLayer, RoleHint } from './model';
+import type { ProtoAction, ProtoReaction, ProtoTrigger, RawLayer, ReadingLookup, RoleHint } from './model';
 
 type TriggerType = ProtoTrigger['type'];
 
 export interface FlowNode {
   id: string;
-  /** An overlay is a frame a drawn reaction opens as an overlay. */
+  /** An overlay is a frame every drawn edge into it opens as an overlay. */
   kind: 'frame' | 'overlay';
   name: string;
+  /** The page the frame is on. */
+  pageId: string;
   /** Its largest visible text, at most 120 characters; '' when it shows none. */
   heading: string;
   /** Its visible text in reading order, at most 1,500 characters. */
   text: string;
 }
 
+export type EdgeAction = 'NAVIGATE' | 'SWAP' | 'OVERLAY' | 'SCROLL_TO';
+
+/** A drawn NODE action with a destination. */
 export interface FlowEdge {
   id: string;
   from: string;
+  /** The frame it shows; for SCROLL_TO, the layer it scrolls to. */
   to: string;
   layerKey: string;
   label: string;
   trigger: TriggerType;
-  by: 'designer';
+  action: EdgeAction;
+  /** Inside a variant, or a CONDITIONAL branch: it fires only in some states. */
+  conditional: boolean;
 }
 
 export type CandidateRole = RoleHint;
@@ -60,27 +68,60 @@ export interface FlowCandidate {
 
 export type ReadingKind = 'edge' | 'control' | 'gap';
 
+/**
+ * The backend's reading of one share key, in one version of the study's
+ * flow map: every place its candidates appear, `nodes[i]` with `layerKeys[i]`.
+ */
 export interface FlowReading {
+  /** Stable across versions: `r1`, `r2` and so on. */
   id: string;
-  node: string;
-  layerKey: string;
+  shareKey: string;
+  nodes: string[];
+  layerKeys: string[];
   label: string;
   role: CandidateRole;
   kind: ReadingKind;
-  /** The node an edge goes to; its own node means "already here". */
-  to?: string;
-  by: 'model' | 'designer';
+  /** The frame an edge goes to (the screen's own frame means "already here"); null for a control or a gap. */
+  to: string | null;
+  /** `bulk_gap`: launched with drawn connections only, and read again by the next build. */
+  by: 'model' | 'designer' | 'bulk_gap';
   reason: string;
 }
 
+/** One immutable version of a study's flow map, as the backend stores it. */
 export interface FlowMap {
+  studyId: string;
   version: number;
+  /** Null for version 1. */
+  baseVersion: number | null;
+  inputHash: string;
   docHash: string;
-  nodes: Array<Omit<FlowNode, 'text'> & Partial<Pick<FlowNode, 'text'>>>;
+  nodes: Array<Omit<FlowNode, 'text'>>;
   edges: FlowEdge[];
   readings: FlowReading[];
+  /** The designer's readings a build couldn't carry over: their frame or their element is gone. */
+  dropped: Array<{ id: string; shareKey: string; label: string; reason: string }>;
   completedAt: string;
+  /** Null when no model read anything in this version. */
   model: string | null;
+  /** The build that wrote it; null for an edit or a drawn connections only version. */
+  buildId: string | null;
+}
+
+/** A map's readings by each place they are of, for the engine (model.ts ReadingLookup), and by id. */
+export function readingLookup(map: FlowMap): { lookup: ReadingLookup; byId: Map<string, FlowReading> } {
+  const byPlace = new Map<string, FlowReading>();
+  const byId = new Map<string, FlowReading>();
+  for (const r of map.readings) {
+    if (r.nodes.length !== r.layerKeys.length) throw new Error(`Flow map version ${map.version}'s reading ${r.id} has ${r.nodes.length} nodes for ${r.layerKeys.length} layers`);
+    r.nodes.forEach((node, i) => byPlace.set(`${node} ${r.layerKeys[i] as string}`, r));
+    byId.set(r.id, r);
+  }
+  const lookup: ReadingLookup = (node, layerKey) => {
+    const r = byPlace.get(`${node} ${layerKey}`);
+    return r ? { id: r.id, kind: r.kind, to: r.to } : null;
+  };
+  return { lookup, byId };
 }
 
 export const MAX_HEADING = 120;
@@ -152,19 +193,21 @@ export function candidatesOf(node: string, layers: RawLayer[], shareOf: (key: st
   return out;
 }
 
-/** Every drawn connection that changes the screen: NAVIGATE, SWAP and OVERLAY to a set destination. */
-export function edgeActions(reactions: ProtoReaction[]): Array<{ trigger: TriggerType; to: string; navigation: string }> {
-  const out: Array<{ trigger: TriggerType; to: string; navigation: string }> = [];
-  const walk = (trigger: TriggerType, actions: ProtoAction[]) => {
+const EDGE_ACTIONS: ReadonlySet<string> = new Set<EdgeAction>(['NAVIGATE', 'SWAP', 'OVERLAY', 'SCROLL_TO']);
+
+/** Every drawn NODE action with a destination (CHANGE_TO is a variant's, not an edge), those in CONDITIONAL branches marked. */
+export function edgeActions(reactions: ProtoReaction[]): Array<{ trigger: TriggerType; to: string; action: EdgeAction; conditional: boolean }> {
+  const out: Array<{ trigger: TriggerType; to: string; action: EdgeAction; conditional: boolean }> = [];
+  const walk = (trigger: TriggerType, actions: ProtoAction[], conditional: boolean) => {
     for (const a of actions) {
-      if (a.type === 'NODE' && a.destinationId !== null && (a.navigation === 'NAVIGATE' || a.navigation === 'SWAP' || a.navigation === 'OVERLAY')) {
-        out.push({ trigger, to: a.destinationId, navigation: a.navigation });
+      if (a.type === 'NODE' && a.destinationId !== null && EDGE_ACTIONS.has(a.navigation)) {
+        out.push({ trigger, to: a.destinationId, action: a.navigation as EdgeAction, conditional });
       } else if (a.type === 'CONDITIONAL') {
-        for (const block of a.blocks) walk(trigger, block.actions);
+        for (const block of a.blocks) walk(trigger, block.actions, true);
       }
     }
   };
-  for (const r of reactions) walk(r.trigger.type, r.actions);
+  for (const r of reactions) walk(r.trigger.type, r.actions, false);
   return out;
 }
 

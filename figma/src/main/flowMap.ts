@@ -182,7 +182,7 @@ export async function readFlow(api: PluginAPI, doc: ProtoDoc, frameOf: ReadonlyM
     await measureOriginal(original, frameKeying, origin, { x: 0, y: 0 }, null, (key) => reactionsFor(doc, base, key).length > 0, own);
     const heading = headingOf(own);
     const text = cutText(visibleTexts(own.layers).map((t) => flatText(t.text ?? '')).join(' · '), MAX_NODE_TEXT);
-    nodes.push({ id: frame.id, kind: 'frame', name: frame.name, heading, text });
+    nodes.push({ id: frame.id, kind: 'frame', name: frame.name, pageId: frame.pageId, heading, text });
 
     const listed = new Set<string>();
     const add = (list: FlowCandidate[]) => {
@@ -243,13 +243,13 @@ export async function readFlow(api: PluginAPI, doc: ProtoDoc, frameOf: ReadonlyM
     scenes.set(frame.id, frameScenes);
   }
 
-  // The drawn edges: of the frames' own layers, then of the variants', in the order the doc lists them.
+  // The drawn edges: of the frames' own layers, then of the variants' (which fire only while shown), in the order the doc lists them.
   const edges: FlowEdge[] = [];
   const incoming = new Map<string, string[]>();
-  const addEdges = (from: string, layerKey: string, reactions: Parameters<typeof edgeActions>[0], scene: RawLayer[]) => {
+  const addEdges = (from: string, layerKey: string, reactions: Parameters<typeof edgeActions>[0], scene: RawLayer[], inVariant: boolean) => {
     for (const e of edgeActions(reactions)) {
-      edges.push({ id: `d${edges.length + 1}`, from, to: e.to, layerKey, label: labelOf(scene, layerKey), trigger: e.trigger, by: 'designer' });
-      incoming.set(e.to, [...(incoming.get(e.to) ?? []), e.navigation]);
+      edges.push({ id: `d${edges.length + 1}`, from, to: e.to, layerKey, label: labelOf(scene, layerKey), trigger: e.trigger, action: e.action, conditional: inVariant || e.conditional });
+      if (e.action !== 'SCROLL_TO') incoming.set(e.to, [...(incoming.get(e.to) ?? []), e.action]);
     }
   };
   for (const [key, reactions] of Object.entries(doc.reactions)) {
@@ -257,7 +257,7 @@ export async function readFlow(api: PluginAPI, doc: ProtoDoc, frameOf: ReadonlyM
     if (from === undefined) throw new Error(`The read of the prototype left out which frame its layer ${key} is in`);
     const frameScenes = scenes.get(from);
     if (!frameScenes) throw new Error(`The layer ${key} is in ${from}, which isn't one of the prototype's frames`);
-    addEdges(from, key, reactions, (frameScenes[0] as Scene).scene);
+    addEdges(from, key, reactions, (frameScenes[0] as Scene).scene, false);
   }
   for (const [instanceKey, set] of Object.entries(doc.variantSets)) {
     for (const variant of set.variants) {
@@ -265,7 +265,7 @@ export async function readFlow(api: PluginAPI, doc: ProtoDoc, frameOf: ReadonlyM
       const shown = (scenes.get(set.frameId) as Scene[]).find((f) => f.overrides[instanceKey] === variant.id);
       if (!shown) continue;
       for (const [path, reactions] of Object.entries(variant.reactions)) {
-        addEdges(set.frameId, path === '' ? instanceKey : `${instanceKey};${path}`, reactions, shown.scene);
+        addEdges(set.frameId, path === '' ? instanceKey : `${instanceKey};${path}`, reactions, shown.scene, true);
       }
     }
   }

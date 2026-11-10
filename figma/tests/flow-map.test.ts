@@ -35,7 +35,8 @@ const text = (id: string, characters: string, extra: Record<string, unknown> = {
  * The fake Farside page, with unwired elements where the renderer keys
  * layers its own ways: inside a variant (`2:33;8:7`) and inside a variant
  * of an instance inside a variant (`2:33;8:6;6:15`); on the Dashboard a
- * hidden text, a seven word line and a line break; and on Bank connected
+ * hidden text, a seven word line, a line break and a link back to the top;
+ * and on Bank connected
  * a second Chip row (`2:90`), its first chip's text overridden to Weekly.
  */
 function fixture(): ProtoFixture {
@@ -69,6 +70,11 @@ function fixture(): ProtoFixture {
     '2:50': [chips],
     '1:2': [
       text('1:12', 'See what changed since your last visit', { x: 280, y: 400, width: 400 }),
+      text('1:15', 'Back to top', {
+        x: 280,
+        y: 520,
+        reactions: [{ trigger: { type: 'ON_CLICK' }, actions: [{ type: 'NODE', destinationId: '1:5', navigation: 'SCROLL_TO', transition: null }] }],
+      }),
       text('1:13', 'Beta', { x: 280, y: 440, visible: false }),
       text('1:14', 'Monthly\nstatement', { x: 280, y: 480, height: 40 }),
     ],
@@ -175,9 +181,10 @@ describe('flow map candidates', () => {
 describe('flow map nodes and edges', () => {
   it("name each frame with its largest visible text as heading, and its visible text", async () => {
     const t = await setup();
-    expect(t.flow.nodes.find((n) => n.id === '2:20')).toMatchObject({ kind: 'frame', name: 'Connect bank', heading: 'Connect your bank' });
+    expect(t.flow.nodes.find((n) => n.id === '2:20')).toMatchObject({ kind: 'frame', name: 'Connect bank', pageId: '0:1', heading: 'Connect your bank' });
+    expect(t.flow.nodes.find((n) => n.id === '7:1')?.pageId).toBe('0:2');
     expect(t.flow.nodes.find((n) => n.id === '1:2')?.text).toBe(
-      "Welcome back, Mara · Dark mode · Billing · What's new · See what changed since your last visit · Monthly statement",
+      "Welcome back, Mara · Dark mode · Billing · What's new · See what changed since your last visit · Monthly statement · Back to top",
     );
     // A frame that shows no text has an empty heading.
     expect(t.flow.nodes.find((n) => n.id === '7:5')).toMatchObject({ heading: '', text: '' });
@@ -190,25 +197,25 @@ describe('flow map nodes and edges', () => {
     expect(kinds).toMatchObject({ '3:1': 'overlay', '3:3': 'overlay', '2:20': 'frame', '1:2': 'frame' });
   });
 
-  it('list every drawn connection that changes the screen, the variants\' and conditional branches included', async () => {
+  it("list every drawn NODE action with a destination, those of variants and conditional branches marked conditional", async () => {
     const t = await setup();
-    const edges = t.flow.edges.map((e) => `${e.from} ${e.layerKey} ${e.trigger} ${e.to} ${e.label}`);
+    const edges = t.flow.edges.map((e) => `${e.from} ${e.layerKey} ${e.trigger} ${e.action} ${e.to} ${e.label}${e.conditional ? ' (conditional)' : ''}`);
     expect(edges).toEqual(
       expect.arrayContaining([
-        '1:2 1:7 ON_CLICK 2:10 Billing',
+        '1:2 1:7 ON_CLICK NAVIGATE 2:10 Billing',
+        '1:2 1:15 ON_CLICK SCROLL_TO 1:5 Back to top',
         // Both branches of the conditional.
-        '2:10 2:11 ON_CLICK 2:50 Connect a bank',
-        '2:10 2:11 ON_CLICK 2:20 Connect a bank',
-        '2:20 2:21 ON_CLICK 3:1 Sign in with your bank',
-        '2:30 2:30 ON_KEY_DOWN 2:50 Verify phone',
+        '2:10 2:11 ON_CLICK NAVIGATE 2:50 Connect a bank (conditional)',
+        '2:10 2:11 ON_CLICK NAVIGATE 2:20 Connect a bank (conditional)',
+        '2:20 2:21 ON_CLICK OVERLAY 3:1 Sign in with your bank',
+        '2:30 2:30 ON_KEY_DOWN NAVIGATE 2:50 Verify phone',
         // In a variant, and in a variant of an instance inside a variant.
-        '2:30 2:33;8:5 ON_HOVER 3:3 Knob',
-        '2:30 2:33;8:6;6:14 ON_CLICK 7:5 Saved',
+        '2:30 2:33;8:5 ON_HOVER OVERLAY 3:3 Knob (conditional)',
+        '2:30 2:33;8:6;6:14 ON_CLICK NAVIGATE 7:5 Saved (conditional)',
       ]),
     );
     // A connection without a destination, a CHANGE_TO and BACK are no edges.
     expect(t.flow.edges.some((e) => e.layerKey === '2:23' || e.layerKey === '2:33' || e.layerKey === '2:32')).toBe(false);
     expect(t.flow.edges.map((e) => e.id)).toEqual(t.flow.edges.map((_, i) => `d${i + 1}`));
-    expect(new Set(t.flow.edges.map((e) => e.by))).toEqual(new Set(['designer']));
   });
 });
