@@ -72,7 +72,7 @@ Each version is an immutable row in `Archetype_Test.study_flow_maps`, keyed `(st
   - `NAVIGATE`, `SWAP`, `OVERLAY` and `SCROLL_TO`.
   - Those inside variants, and inside `CONDITIONAL` branches, with `conditional: true`.
 - **Readings:** one per **share key**. Candidates inside instances of one main component share one reading:
-  - inside an instance: `shareKey` is `C:<mainComponentId>;<path inside it>`
+  - inside an instance: `shareKey` is `C:<mainComponentId>;<path inside it>|<label>`. The label is lowercased and trimmed, so instances whose text was overridden ("Choose Breathe" and "Choose Deep Breath") get separate readings
   - otherwise: `L:<node>:<layerKey>`
 
   So a header repeated across 30 frames has one reading per item, and one edit changes it everywhere.
@@ -145,7 +145,8 @@ There is no silent fallback.
 The engine applies drawn reactions exactly as today. The map changes only what happens when a **click** or a **`type`** reaches a layer that no reaction handles.
 
 - **`handled`:** `click()` returns `handled`: whether any of `MOUSE_DOWN`, `ON_PRESS`, `MOUSE_UP` or `ON_CLICK` bubbled to a layer that has that reaction (`reactionsFor`, current state).
-  - It is true even when the reaction changed nothing visible, for example a null destination, a `CHANGE_TO` to the variant already shown, a false `CONDITIONAL`, or a delayed mouse reaction that only set a timer.
+  - It is true even when the reaction changed nothing visible, for example a `CHANGE_TO` to the variant already shown, a false `CONDITIONAL`, or a delayed mouse reaction that only set a timer.
+  - **Unfinished wires don't count.** A `NODE` action whose destination is null, or isn't in the prototype, does not make a click `handled`. It is a connection the designer started and didn't finish, and preflight already reports it as broken.
 - **Lookup:** a reading applies only when the hit is not null, `handled` is false, and the action named an element. It is the reading for **that element's own layer** (`targets[e].layerKey`, through its share key) in the run's map version.
   - No other ancestor is consulted.
   - Its outcome replaces any `changed_state` or `opened_overlay` the pointer move produced.
@@ -247,9 +248,9 @@ This section applies to `execution: "plugin"` studies. Remote Figma studies run 
 ## Testing
 
 - **Unit, plugin:**
-  - **`handled`:** a null destination, a `CHANGE_TO` to the current variant and a delayed `MOUSE_UP` are all `handled`, and get no reading.
+  - **`handled`:** a `CHANGE_TO` to the current variant and a delayed `MOUSE_UP` are `handled`, and get no reading. A `NODE` action with a null destination is not handled, and gets its reading.
   - **Lookup:** a paragraph inside a header instance gets no reading.
-  - **Candidates:** hidden and variant layers are listed, a 7-word line is not, and share keys are equal across frames.
+  - **Candidates:** hidden and variant layers are listed, a 7-word line is not, share keys are equal across frames, and overridden labels split them.
   - **Outcomes:** each reading's outcome, `type` on a control, and hover never uses readings.
   - **Follow persona:** sends only viewport moves.
 - **Unit, backend:**
