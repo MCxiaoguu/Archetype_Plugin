@@ -24,7 +24,7 @@ studies API. The account is the product; the listing is free.
 | Sign in | One button. Archetype opens in your browser with a short code; approve it there and the panel carries on by itself. |
 | New test | Start and goal screens (from your selection or a list), the goal, who your user is, an optional product line, an optional share link, and how deep: Single persona (one typical user from your description, one try), Quick or Thorough. A preflight runs on every change. |
 | Running | Three stages (understanding your users, building personas, running), then one row per persona with its status, the screen it is on and its turn, while the panel itself walks each persona through the prototype. It says when it starts the next round of tries, when it lost touch with Archetype, and, for a test reopened on another page, which page the test runs on, with a button to go there. |
-| Report | How many tries reached the goal, the headline, each persona with the report's own confidence words ("99% likely lower completion"), the top findings with severity and the frames they happened on, where people gave up by screen, and what to change first. |
+| Report | How many tries reached the goal, the headline, each persona with the report's own confidence words ("99% likely lower completion"), where people gave up by screen, and what to change first. A test run in the panel reports its flow instead of usability findings: what the personas looked for that has no page yet (in their own words), the links they took that the prototype doesn't draw yet, so you can wire them, and each persona's path. Other tests show the top findings with severity and the frames they happened on. |
 | Past tests | Every test launched from this file, newest first. Reopening the plugin returns to the last one. |
 
 **Preflight, instant and free.** Before anything leaves the file the plugin walks
@@ -41,9 +41,10 @@ the prototype's connections from your start screen:
   users both hear "link Rectangle 12". The plugin suggests a name from the text inside the layer when it can.
 
 **Results on the canvas.** Every frame chip in the panel selects and zooms to its
-frame. **Pin findings** writes one annotation per affected frame (labels start
-with `Archetype:`), and **Clear pins** removes only those, never yours. When
-Figma refuses annotations (view only access), the findings stay in the panel.
+frame. **Pin findings** (**Pin to frames** for a flow report) writes one
+annotation per affected frame (labels start with `Archetype:`), and **Clear
+pins** removes only those, never yours. When Figma refuses annotations (view
+only access), the results stay in the panel.
 
 ## Install it in the Figma desktop app
 

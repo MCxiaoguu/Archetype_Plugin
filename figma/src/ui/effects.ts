@@ -269,6 +269,8 @@ export function createEffects(store: Store, deps: EffectsDeps = {}) {
     try {
       const report = await api().getReport<StudyReport>(st.id);
       if (gen !== watchGen) return;
+      // A report whose parts don't fit together fails here, as a failed load, not on screen.
+      buildReportView(report, indexFrames(store.get().doc));
       store.dispatch({ type: 'report', report, now: Date.now() });
       const rec = store.get().study?.record;
       if (rec) toMain({ type: 'save-study', record: rec });
@@ -322,7 +324,8 @@ export function createEffects(store: Store, deps: EffectsDeps = {}) {
     if (!s.study?.report) return;
     const view = buildReportView(s.study.report, indexFrames(s.doc));
     if (view.pins.length === 0) {
-      store.dispatch({ type: 'notice', notice: { kind: 'info', text: 'No findings point at frames on this page, so there is nothing to pin.' } });
+      const what = s.study.report.flow ? 'Nothing in this report points' : 'No findings point';
+      store.dispatch({ type: 'notice', notice: { kind: 'info', text: `${what} at frames on this page, so there is nothing to pin.` } });
       return;
     }
     toMain({ type: 'pin', pins: view.pins });

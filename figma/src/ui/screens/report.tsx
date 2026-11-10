@@ -86,35 +86,119 @@ export function Report({ state, fx }: { state: AppState; fx: Effects }) {
           </ul>
         </Section>
 
-        <Section title="Top findings" id="findings">
-          {view.findings.length === 0 ? (
-            <p class="muted">No problems came up in {plural(view.runsScored, 'try', 'tries')}.</p>
-          ) : (
-            <ul class="findings">
-              {view.findings.map((f) => (
-                <li class="finding">
-                  <div class="finding-top">
-                    <span class={`sev ${SEVERITY_CLASS[f.severity] ?? 'sev-2'}`}>{f.severityLabel}</span>
-                    <span class="finding-id">{f.id}</span>
-                  </div>
-                  <p class="finding-title">{f.title}</p>
-                  <p class="muted small">
-                    {plural(f.hitBy.length, 'persona')}, {f.hitCount} of {plural(f.runCount, 'try', 'tries')}
-                  </p>
-                  {f.frames.length > 0 ? (
-                    <div class="chips">
-                      {f.frames.map((fr) => (
-                        <FrameChip id={fr.id} name={fr.name} />
-                      ))}
-                    </div>
-                  ) : (
-                    <p class="muted small">Happened on a screen that is not on this page.</p>
-                  )}
-                </li>
+        {view.flow ? (
+          <>
+            <Section title="What they looked for" id="needs">
+              {view.flow.needs.length === 0 ? (
+                <p class="muted">Nobody looked for something the prototype has no page for.</p>
+              ) : (
+                <ul class="findings">
+                  {view.flow.needs.map((need) => (
+                    <li class="finding">
+                      <p class="finding-title">No page behind "{need.label}" yet</p>
+                      <p class="muted small">
+                        {plural(need.personas, 'persona')}, {plural(need.tries, 'try', 'tries')}
+                      </p>
+                      <div class="chips">
+                        {need.frames.map((fr) => (
+                          <FrameChip id={fr.id} name={fr.name} />
+                        ))}
+                      </div>
+                      {need.quote && <blockquote class="quote">{need.quote}</blockquote>}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {view.flow.otherNeeds.map((o) => (
+                <div class="other-needs">
+                  <FrameChip id={o.frame.id} name={o.frame.name} />
+                  {o.texts.map((t) => (
+                    <blockquote class="quote">{t}</blockquote>
+                  ))}
+                </div>
               ))}
-            </ul>
-          )}
-        </Section>
+              {view.flow.mapMisses && (
+                <p class="muted small">
+                  {plural(view.flow.mapMisses.count, 'click')} hit something the flow map hadn't read ({view.flow.mapMisses.labels.join(', ')}).
+                </p>
+              )}
+            </Section>
+
+            {view.flow.transitions.length > 0 && (
+              <Section title="Links to wire" id="transitions">
+                <ul class="findings">
+                  {view.flow.transitions.map((t) => (
+                    <li class="finding">
+                      <p class="finding-title">
+                        "{t.label}" to {t.to.name}
+                      </p>
+                      <p class="muted small">
+                        Used {plural(t.uses, 'time')} by {plural(t.personas, 'persona')}, read as a link the prototype doesn't draw
+                      </p>
+                      <div class="chips">
+                        {t.from.map((fr) => (
+                          <FrameChip id={fr.id} name={fr.name} />
+                        ))}
+                        <FrameChip id={t.to.id} name={t.to.name} />
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </Section>
+            )}
+
+            <Section title="Paths" id="paths">
+              <ul class="flow-paths">
+                {view.flow.paths.map((p) => (
+                  <li class="flow-path">
+                    <div class="result-top">
+                      <span class="result-name">{p.persona}</span>
+                      <span class={`result-k ${p.reachedGoal ? 'ok' : 'bad'}`}>{p.reachedGoal ? 'reached the goal' : 'stopped'}</span>
+                    </div>
+                    <ol class="flow-steps">
+                      {p.steps.map((step) => (
+                        <li class={step.gap ? 'flow-step gap' : 'flow-step'}>
+                          <span class="flow-frame">{step.frame.name}</span>
+                          {step.action && <span class="muted small"> {step.action}{step.gap ? ' (no page yet)' : ''}</span>}
+                        </li>
+                      ))}
+                    </ol>
+                  </li>
+                ))}
+              </ul>
+            </Section>
+          </>
+        ) : (
+          <Section title="Top findings" id="findings">
+            {view.findings.length === 0 ? (
+              <p class="muted">No problems came up in {plural(view.runsScored, 'try', 'tries')}.</p>
+            ) : (
+              <ul class="findings">
+                {view.findings.map((f) => (
+                  <li class="finding">
+                    <div class="finding-top">
+                      <span class={`sev ${SEVERITY_CLASS[f.severity] ?? 'sev-2'}`}>{f.severityLabel}</span>
+                      <span class="finding-id">{f.id}</span>
+                    </div>
+                    <p class="finding-title">{f.title}</p>
+                    <p class="muted small">
+                      {plural(f.hitBy.length, 'persona')}, {f.hitCount} of {plural(f.runCount, 'try', 'tries')}
+                    </p>
+                    {f.frames.length > 0 ? (
+                      <div class="chips">
+                        {f.frames.map((fr) => (
+                          <FrameChip id={fr.id} name={fr.name} />
+                        ))}
+                      </div>
+                    ) : (
+                      <p class="muted small">Happened on a screen that is not on this page.</p>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Section>
+        )}
 
         <Section title="Where they gave up" id="dropoff">
           {view.dropOff.length === 0 ? (
@@ -160,7 +244,7 @@ export function Report({ state, fx }: { state: AppState; fx: Effects }) {
       <footer class="actionbar actionbar-split">
         <div class="row gap-s">
           <button type="button" class="btn btn-secondary" onClick={() => fx.pin()} title="Add one annotation per affected frame">
-            <IconPin size={12} /> Pin findings
+            <IconPin size={12} /> {view.flow ? 'Pin to frames' : 'Pin findings'}
           </button>
           <button type="button" class="btn btn-ghost" onClick={() => toMain({ type: 'clear-pins' })}>
             Clear pins

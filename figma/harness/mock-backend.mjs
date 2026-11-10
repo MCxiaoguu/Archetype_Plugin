@@ -19,6 +19,35 @@ const iso = (t = Date.now()) => new Date(t).toISOString();
 
 const ARCHETYPES = REPORT.archetypes.map((a) => ({ archetypeId: a.archetypeId, archetypeName: a.name, role: a.role }));
 
+/** The flow of the fixture report's runs, as a plugin-mode study reports it (study_report_service's flow). */
+const FLOW_REPORT = (() => {
+  const nodes = [['1:2', 'Dashboard'], ['2:10', 'Billing settings'], ['2:20', 'Connect bank'], ['3:1', 'Bank sign in error'], ['2:30', 'Verify phone'], ['2:50', 'Bank connected']].map(([id, name]) => ({ id, name }));
+  const step = (seq, node, actionText, outcome, reading = null) => ({ seq, node, target: null, actionText, outcome, reading });
+  const golden = [
+    step(1, '1:2', 'Click Billing', 'navigated'), step(2, '2:10', 'Click Connect a bank', 'navigated'),
+    step(3, '2:20', 'Click Use routing number instead', 'missing', 'r4'), step(4, '2:20', 'Click Continue', 'navigated'),
+    step(5, '2:30', 'Click Send code', 'navigated'), step(6, '2:50', 'Done', null),
+  ];
+  const stuck = [step(1, '1:2', 'Click Billing', 'navigated'), step(2, '2:10', 'Click Connect a bank', 'navigated'), step(3, '2:20', 'Click Sign in with your bank', 'opened_overlay'), step(4, '3:1', 'Give up', null)];
+  const paths = ARCHETYPES.slice(0, 4).map((a, i) => ({
+    runId: `run-${a.archetypeId.slice(0, 8)}-0`, archetypeId: a.archetypeId, archetypeName: a.archetypeName, status: i % 2 ? 'abandoned' : 'completed',
+    flowMapVersion: 1, endNode: i % 2 ? '3:1' : '2:50', steps: i % 2 ? stuck : golden, reachedGoal: !(i % 2),
+  }));
+  return {
+    versionsPlayed: [1], currentVersion: 1, startNode: '1:2', goalNode: '2:50', nodes, paths,
+    completion: { runs: paths.length, reachedGoal: 2 },
+    dropOffs: [{ node: '3:1', nodeName: 'Bank sign in error', count: 2, runIds: [paths[1].runId, paths[3].runId], reasons: [{ reason: 'give_up', count: 2 }] }],
+    featureNeeds: [{
+      id: 'N1', reading: 'r4', label: 'Use routing number instead', nodes: ['2:20'], nodeNames: ['Connect bank'], personas: 2, tries: 2, runIds: [paths[0].runId, paths[2].runId],
+      quotes: [{ runId: paths[0].runId, seq: 3, text: 'I wanted to type my routing number instead of signing in to my bank.' }],
+      needs: [{ runId: paths[0].runId, seq: 3, text: 'A way to connect by routing and account number, for banks I do not sign in to online.' }],
+    }],
+    otherNeeds: [{ node: '3:1', nodeName: 'Bank sign in error', needs: [{ runId: paths[1].runId, seq: 4, text: 'Some other way forward when my bank will not connect.' }] }],
+    inferredTransitions: [{ id: 'T1', reading: 'r7', label: 'Connect your bank', from: ['2:20'], to: '1:2', toName: 'Dashboard', uses: 1, personas: 1, runIds: [paths[2].runId] }],
+    mapMisses: { count: 0, runIds: [], labels: [] },
+  };
+})();
+
 function runRow(a, i, status, extra = {}) {
   const done = ['completed', 'abandoned', 'failed', 'aborted'].includes(status);
   const report = REPORT.runs.find((r) => r.archetypeId === a.archetypeId);
@@ -55,6 +84,8 @@ const PRESETS = {
     runs: () => ARCHETYPES.map((a, i) => runRow(a, i, 'queued')),
   },
   'study-done': { status: 'complete', title: REPORT.title, runs: () => ARCHETYPES.map((a, i) => runRow(a, i, i % 2 ? 'abandoned' : 'completed')) },
+  // A plugin-mode study's report: its flow, no findings.
+  'study-flow': { status: 'complete', title: REPORT.title, runs: () => ARCHETYPES.map((a, i) => runRow(a, i, i % 2 ? 'abandoned' : 'completed')), flow: true },
   'study-archetypes': { status: 'factors_ready', title: 'Connect a business bank account so invoices can be paid by bank transfer', runs: () => [], slowArchetypes: true },
   'study-fail': { status: 'draft', title: 'Connect a business bank account so invoices can be paid by bank transfer', runs: () => [], failFactors: true },
 };
@@ -193,7 +224,10 @@ export function createMockBackend({ log = () => {}, clock = () => Date.now(), th
         const { status, runs } = simulated(s);
         return [200, { studyId: s.id, status, currentWave: 1, runs }];
       }
-      if (sub === '/report' && method === 'GET') return [200, s.traced ? tracedReport(s) : s.body?.design?.mode === 'single' ? singleReport(s) : { ...REPORT, studyId: s.id, title: s.title, cached: false }];
+      if (sub === '/report' && method === 'GET') {
+        if (s.flow) return [200, { ...REPORT, studyId: s.id, title: s.title, findings: null, flow: FLOW_REPORT, cached: false }];
+        return [200, s.traced ? tracedReport(s) : s.body?.design?.mode === 'single' ? singleReport(s) : { ...REPORT, studyId: s.id, title: s.title, cached: false }];
+      }
       if (sub === '' && method === 'GET') return [200, { studyId: s.id, title: s.title, status: simulated(s).status }];
     }
     return [404, { error: 'not_found', message: `${method} ${path} is not part of the mock.` }];
@@ -213,7 +247,64 @@ export function createMockBackend({ log = () => {}, clock = () => Date.now(), th
       runsTotal: runs.length, runsScored: scored.length, runsPending: runs.length - scored.length,
       icp: s.body.icp, design: s.body.design, archetypes,
       runs: runs.map((r) => ({ runId: r.runId, archetypeId: r.archetypeId, archetypeName: r.archetypeName, wave: r.wave, status: r.status, completed: r.status === 'completed' })),
-      factorImpact: [], headline: null, findings: { clusters: [] }, recommendations: [], cached: false,
+      factorImpact: [], headline: null, findings: null, flow: flowOf(s), recommendations: [], cached: false,
+    };
+  }
+
+  /** study_report_service's flow, from the runs' paths and the map versions they played. */
+  function flowOf(s) {
+    const goal = s.body.figma?.targetNodeId ?? null;
+    const study = trace.maps.studies.get(s.id);
+    const versions = study?.versions ?? [];
+    const played = [...new Set(trace.paths(s.id).map((p) => p.flowMapVersion).filter((v) => v !== null))].sort((a, b) => a - b);
+    const names = new Map(versions.flatMap((v) => v.nodes.map((n) => [n.id, n.name])));
+    const readingOf = (run, id) => versions.find((v) => v.version === run.flowMapVersion)?.readings.find((r) => r.id === id) ?? null;
+    const scored = trace.paths(s.id).filter((p) => p.status === 'completed' || p.status === 'abandoned');
+    const paths = scored.map((p) => ({ ...p, reachedGoal: p.steps.some((st) => st.node === goal) }));
+    const dropOffs = new Map();
+    for (const p of paths.filter((x) => !x.reachedGoal)) {
+      const d = dropOffs.get(p.endNode) ?? { node: p.endNode, nodeName: names.get(p.endNode) ?? p.endNode, count: 0, runIds: [], reasons: [] };
+      d.count += 1;
+      d.runIds.push(p.runId);
+      const reason = p.status === 'abandoned' ? 'give_up' : p.status;
+      const r = d.reasons.find((x) => x.reason === reason) ?? (d.reasons.push({ reason, count: 0 }), d.reasons.at(-1));
+      r.count += 1;
+      dropOffs.set(p.endNode, d);
+    }
+    const needs = new Map();
+    const transitions = new Map();
+    for (const p of paths) {
+      for (const st of p.steps) {
+        if (!st.reading) continue;
+        const reading = readingOf(p, st.reading);
+        if (st.outcome === 'missing') {
+          const n = needs.get(reading.id) ?? { id: `N${needs.size + 1}`, reading: reading.id, label: reading.label, nodes: [], nodeNames: [], personas: 0, tries: 0, runIds: [], quotes: [], needs: [] };
+          n.tries += 1;
+          if (!n.runIds.includes(p.runId)) n.runIds.push(p.runId);
+          n.personas = n.runIds.length;
+          if (!n.nodes.includes(st.node)) n.nodes.push(st.node), n.nodeNames.push(names.get(st.node) ?? st.node);
+          needs.set(reading.id, n);
+        }
+        if (st.outcome === 'navigated') {
+          const t = transitions.get(reading.id) ?? { id: `T${transitions.size + 1}`, reading: reading.id, label: reading.label, from: [], to: reading.to, toName: names.get(reading.to) ?? reading.to, uses: 0, personas: 0, runIds: [] };
+          t.uses += 1;
+          if (!t.runIds.includes(p.runId)) t.runIds.push(p.runId);
+          t.personas = t.runIds.length;
+          if (!t.from.includes(st.node)) t.from.push(st.node);
+          transitions.set(reading.id, t);
+        }
+      }
+    }
+    const missed = trace.paths(s.id).filter((p) => p.misses.length > 0);
+    return {
+      versionsPlayed: played, currentVersion: versions.at(-1)?.version ?? null,
+      startNode: s.body.figma?.startNodeId ?? null, goalNode: goal,
+      nodes: [...names].map(([id, name]) => ({ id, name })),
+      paths: paths.map(({ misses, ...p }) => p),
+      completion: { runs: paths.length, reachedGoal: paths.filter((p) => p.reachedGoal).length },
+      dropOffs: [...dropOffs.values()], featureNeeds: [...needs.values()], otherNeeds: [],
+      inferredTransitions: [...transitions.values()],
+      mapMisses: { count: missed.reduce((n, p) => n + p.misses.length, 0), runIds: missed.map((p) => p.runId), labels: [...new Set(missed.flatMap((p) => p.misses))] },
     };
   }
 
@@ -1030,6 +1121,39 @@ function createTraceRuns({ clock, thinkingPolls }) {
     }];
   }
 
+  /**
+   * flow_map_service.study_paths: each run's steps (a turn's screen and the
+   * action chosen there), with what that action did as the next turn
+   * reported it. A step's node is the topmost overlay of its screen, else
+   * its frame; the step the run ended on has no outcome.
+   */
+  function paths(studyId) {
+    const mine = [...runs.values()].filter((r) => r.studyId === studyId && r.turns.size > 0).sort((a, b) => a.wave - b.wave);
+    return mine.map((run) => {
+      const turns = run.turnList();
+      const steps = turns.map((t, i) => {
+        const screen = t.observation.screen;
+        const action = t.result?.action ?? null;
+        const element = action && 'element' in action ? t.observation.elements.find((e) => e.id === action.element) : null;
+        const next = turns[i + 1]?.observation.last ?? null;
+        return {
+          seq: t.turn,
+          node: (screen.overlays ?? []).at(-1) ?? screen.frameId,
+          target: element ? element.label : null,
+          actionText: action ? `${action.type[0].toUpperCase()}${action.type.slice(1).replace('_', ' ')}${element ? ` ${element.label}` : ''}` : 'No action',
+          outcome: next ? next.outcome : null,
+          reading: next?.reading ?? null,
+          missed: turns[i + 1]?.observation.flag_details?.map_miss?.labels ?? [],
+        };
+      });
+      return {
+        runId: run.runId, archetypeId: run.archetypeId, archetypeName: run.archetypeName, status: run.status,
+        flowMapVersion: run.flowMapVersion ?? null, endNode: steps.at(-1)?.node ?? null,
+        steps: steps.map(({ missed, ...step }) => step), misses: steps.flatMap((st) => st.missed),
+      };
+    });
+  }
+
   /** Lets a script step `{hold: name}` decide, or a final step's `{debrief: name}` end its run. */
   function release(runId, name) {
     runOf(runId).released.add(name);
@@ -1052,6 +1176,10 @@ function createTraceRuns({ clock, thinkingPolls }) {
         if (method === 'GET') return maps.get(decodeURIComponent(mapPath[1]), request.query ?? new URLSearchParams());
       }
       if (buildPath && method === 'GET' && studies.has(decodeURIComponent(buildPath[1]))) return maps.build(decodeURIComponent(buildPath[1]), decodeURIComponent(buildPath[2]));
+      const pathsPath = /^\/api\/studies\/([^/]+)\/paths$/.exec(path);
+      if (pathsPath && method === 'GET' && studies.has(decodeURIComponent(pathsPath[1]))) {
+        return [200, { runs: paths(decodeURIComponent(pathsPath[1])).map(({ misses, ...run }) => run) }];
+      }
       if (claimPath && method === 'POST') return claim(decodeURIComponent(claimPath[1]), body);
       if (turnPath && method === 'POST') {
         // routes_plugin reads a turn body only up to its limit, as Flask's max_content_length does.
@@ -1079,7 +1207,7 @@ function createTraceRuns({ clock, thinkingPolls }) {
     return null;
   }
 
-  return { handle, addStudy, release, runs, studies, posts, refusals, maps };
+  return { handle, addStudy, release, runs, studies, posts, refusals, maps, paths };
 }
 
 /** Serves a mock backend over HTTP on 127.0.0.1, on a free port unless given one. */

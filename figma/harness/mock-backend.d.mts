@@ -97,6 +97,8 @@ export interface TraceRuns {
   refusals: TraceRefusal[];
   /** Each plugin-mode study's flow map versions and builds. */
   maps: MockFlowMaps;
+  /** GET /paths: each run's steps, with what each step's action did. */
+  paths(studyId: string): Array<{ runId: string; archetypeName: string; status: string; flowMapVersion: number | null; endNode: string | null; steps: Array<{ seq: number; node: string; target: string | null; actionText: string; outcome: string | null; reading: string | null }> }>;
 }
 
 export interface MockBackend {

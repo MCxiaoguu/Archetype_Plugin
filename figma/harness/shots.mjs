@@ -42,6 +42,7 @@ const SCENARIOS = [
   { name: '14-waiting-for-runner', q: 'token=mock&study=study-queued&queuedAgo=5', wait: 'text=Waiting for a runner.' },
   { name: '15-report', q: 'token=mock&study=study-done', wait: '.score' },
   { name: '16-report-full', q: 'token=mock&study=study-done', wait: '.score', height: 1200 },
+  { name: '16b-report-flow', q: 'token=mock&study=study-flow', wait: '.score', height: 1700 },
   { name: '17-history', q: 'token=mock&history=1&study=study-done', wait: '.score', act: async (f) => f.getByRole('button', { name: 'Past tests for this file' }).click(), after: '.history-item' },
   { name: '18-history-empty', q: 'token=mock', wait: '#pick-start', act: async (f) => f.getByRole('button', { name: 'Past tests for this file' }).click(), after: 'text=No tests from this file yet' },
   { name: '19-settings', q: 'token=mock', wait: '#pick-start', act: async (f) => f.getByRole('button', { name: 'Settings' }).click(), after: '#api' },

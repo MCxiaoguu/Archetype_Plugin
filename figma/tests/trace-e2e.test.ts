@@ -987,6 +987,15 @@ describe('a Single persona study', () => {
       expect(report.runs).toEqual([expect.objectContaining({ runId, status: 'completed', completed: true })]);
       const view = buildReportView(report, indexFrames(page));
       expect(view).toMatchObject({ headline: '1 of 1 try reached the goal.', personas: [{ roleLabel: 'Typical user', k: 1, n: 1, confidenceWords: null }] });
+      // A plugin-mode study reports its flow, not findings: the routing link (a gap) is what the persona looked for.
+      expect(report.findings).toBeNull();
+      expect(view.findings).toEqual([]);
+      expect(view.flow?.needs).toEqual([expect.objectContaining({ label: 'Use routing number instead', frames: [{ id: '2:20', name: 'Connect bank' }], personas: 1, tries: 1 })]);
+      expect(view.flow?.paths).toEqual([expect.objectContaining({ runId, reachedGoal: true })]);
+      expect(view.flow?.paths[0]?.steps.map((st) => st.frame.name)).toEqual([
+        'Dashboard', 'Billing settings', 'Connect bank', 'Connect bank', 'Bank sign in error', 'Connect bank', 'Connect bank', 'Verify phone', 'Bank connected',
+      ]);
+      expect(await api.getPaths(studyId)).toEqual({ runs: [expect.objectContaining({ runId, flowMapVersion: 1, endNode: '2:50' })] });
     } finally {
       await served.close();
     }

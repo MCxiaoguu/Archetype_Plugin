@@ -365,6 +365,15 @@ details[open] > :not(summary) { margin-top: 8px; }
 .sev-0, .sev-1 { background: var(--bg-2); color: var(--text-2); }
 .sev-2 { background: var(--warn-bg); color: var(--warn); }
 .sev-3, .sev-4 { background: var(--danger-bg); color: var(--danger); }
+.other-needs { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; align-items: flex-start; }
+.flow-paths { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: var(--radius); }
+.flow-path { padding: 9px 10px; display: flex; flex-direction: column; gap: 6px; }
+.flow-path + .flow-path { border-top: 1px solid var(--border); }
+.flow-steps { list-style: decimal; display: flex; flex-direction: column; gap: 2px; padding-left: 18px; margin: 0; }
+.flow-step { line-height: 16px; }
+.flow-step::marker { color: var(--text-3); font-variant-numeric: tabular-nums; }
+.flow-step.gap .flow-frame { color: var(--warn); }
+.flow-frame { font-weight: 500; }
 .drops { display: flex; flex-direction: column; gap: 10px; }
 .drop { display: flex; flex-direction: column; gap: 3px; }
 .drop-label { display: flex; justify-content: space-between; gap: 8px; }
