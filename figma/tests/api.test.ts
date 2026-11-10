@@ -268,7 +268,7 @@ describe('trace runs', () => {
     ]);
     const api = new ApiClient({ baseUrl: 'https://api.x.com', getToken: () => 't', fetch });
     const browser = { engine: 'figma-trace' as const, version: '0.7.0', viewport: [390, 844] as [number, number] };
-    expect(await api.claimRun('r 1', { browser, owner: 'p_7f3a' })).toMatchObject({ runId: 'r 1', sessionId: 'plugin-abc' });
+    expect(await api.claimRun('r 1', { browser, owner: 'p_7f3a', flowMapVersion: 3 })).toMatchObject({ runId: 'r 1', sessionId: 'plugin-abc' });
     expect(await api.postTurn('r 1', body)).toEqual({ turn: 2, status: 'thinking' });
     expect(await api.getTurn('r 1', 2)).toEqual({ turn: 2, status: 'thinking' });
     expect(await api.abortRun('r 1', { owner: 'p_7f3a', code: 'render_failed', detail: 'The export was empty twice.' })).toEqual({ runId: 'r 1', status: 'aborted', abortReason: 'render_failed' });
@@ -280,7 +280,7 @@ describe('trace runs', () => {
       'POST /api/plugin/runs/r%201/abort',
       'POST /api/studies/s1/runs/next',
     ]);
-    expect(JSON.parse(calls[0]!.init.body as string)).toEqual({ browser: { engine: 'figma-trace', version: '0.7.0', viewport: [390, 844] }, owner: 'p_7f3a' });
+    expect(JSON.parse(calls[0]!.init.body as string)).toEqual({ browser: { engine: 'figma-trace', version: '0.7.0', viewport: [390, 844] }, owner: 'p_7f3a', flowMapVersion: 3 });
     expect(JSON.parse(calls[1]!.init.body as string)).toEqual(body);
     expect(calls[2]!.init.body).toBeUndefined();
     expect(JSON.parse(calls[3]!.init.body as string)).toEqual({ owner: 'p_7f3a', code: 'render_failed', detail: 'The export was empty twice.' });

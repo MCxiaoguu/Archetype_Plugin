@@ -130,7 +130,7 @@ export interface TraceRenderReply {
 }
 
 /** The shape of SavedSession (and the TraceState in it) this plugin saves and can resume from. */
-export const SAVED_SESSION_VERSION = 1;
+export const SAVED_SESSION_VERSION = 2;
 
 /** What resuming a persona needs (spec, Data flow 7 and 10). */
 export interface SavedSession {
@@ -146,6 +146,8 @@ export interface SavedSession {
   timerEffects: TimerEffect[];
   /** Frames a loop of timers ran through since that turn, for the next turn's `timer_loop` flag. */
   loopFrames: string[];
+  /** The flow map version the run plays (its claim's); null for a run claimed with no map. */
+  flowMapVersion: number | null;
   /** SAVED_SESSION_VERSION when it was saved: another version's saved state isn't resumed. */
   version: number;
 }

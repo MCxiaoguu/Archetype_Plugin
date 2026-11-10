@@ -9,8 +9,10 @@ import fixtureJson from '../harness/fixtures/farside-proto.json';
 import type { TurnBody, TurnEnded } from '../src/lib/api';
 import type { RenderNote, SavedSession, ScratchCheckReply, TraceRenderReply } from '../src/lib/messages';
 import type { ProtoDoc, TraceAction, TraceState } from '../src/lib/proto/model';
-import { readProto } from '../src/main/protoReader';
+import { readFlow } from '../src/main/flowMap';
+import { readProtoWithKeys } from '../src/main/protoReader';
 import { createRenderer } from '../src/main/renderer';
+import { exclusive } from '../src/main/scratch';
 import { BridgeError, BridgeTimeout, type Bridge } from '../src/ui/trace/bridge';
 import { fakeFromFixture, type ProtoFixture } from './fake-figma';
 
@@ -20,7 +22,7 @@ export type Fake = ReturnType<typeof fakeFromFixture>;
 export async function mainThread(edit: (fake: Fake) => void = () => {}, log: string[] = []) {
   const fake = fakeFromFixture(structuredClone(fixtureJson) as unknown as ProtoFixture);
   edit(fake);
-  const doc = await readProto(fake.api, fake.api.currentPage, { importLibraryVariants: true });
+  const { doc, frameOf } = await readProtoWithKeys(fake.api, fake.api.currentPage, { importLibraryVariants: true });
   const renderer = createRenderer(fake.api);
   /** The docs the main thread read, by hash: the launch's read, and every trace-read it answered. */
   const docs = new Map<string, ProtoDoc>([[doc.docHash, doc]]);
@@ -94,6 +96,12 @@ export async function mainThread(edit: (fake: Fake) => void = () => {}, log: str
     if (type === 'trace-cleanup') {
       log.push('cleanup');
       return { removed: 0 };
+    }
+    if (type === 'trace-candidates') {
+      const known = docs.get(payload.docHash as string);
+      if (!known) throw new BridgeError('trace-candidates', `The panel sent a read of the flow of prototype ${String(payload.docHash)}, which this plugin has not read`);
+      log.push('candidates');
+      return exclusive(fake.api, () => readFlow(fake.api, known, frameOf));
     }
     throw new Error(`The panel should not ask for ${type}`);
   });

@@ -141,6 +141,9 @@ describe.skipIf(!LIVE.url)('a live trace study against the local backend', () =>
       run.briefing = briefing;
       return briefing;
     },
+    commitFlowMap: (id, body) => client.commitFlowMap(id, body),
+    getFlowBuild: (id, buildId) => client.getFlowBuild(id, buildId),
+    getFlowMap: (id, version) => client.getFlowMap(id, version),
     async nextWave(id: string) {
       const at = new Date().toISOString();
       try {
@@ -302,7 +305,7 @@ describe.skipIf(!LIVE.url)('a live trace study against the local backend', () =>
       const sessionsAt = Date.now();
       const result = await runStudy(
         // The doc was read just above, and nothing edits the fake file during the run.
-        { studyId, owner: OWNER, read: { doc, changed: () => false }, shareKey: null, startFrameId: START },
+        { studyId, owner: OWNER, read: { doc, changed: () => false }, shareKey: null, startFrameId: START, drawnOnly: false },
         {
           bridge: plugin.bridge,
           api: recordingApi,

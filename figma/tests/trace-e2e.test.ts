@@ -55,7 +55,7 @@ afterAll(async () => {
 });
 
 function claim(runId: string) {
-  return client.claimRun(runId, { browser: { engine: 'figma-trace', version: '0.1.0', viewport: [1280, 800] }, owner: OWNER });
+  return client.claimRun(runId, { browser: { engine: 'figma-trace', version: '0.1.0', viewport: [1280, 800] }, owner: OWNER, flowMapVersion: null });
 }
 
 function persona(
@@ -65,7 +65,7 @@ function persona(
   opts: { startFrameId?: string; resume?: SavedSession | null; sleep?: (ms: number) => Promise<void>; statuses?: SessionStatus[] } = {},
 ): Promise<SessionResult> {
   return runSession(
-    { runId, studyId: STUDY, owner: OWNER, doc, shareKey: null, startFrameId: opts.startFrameId ?? '1:2', resume: opts.resume ?? null, fileChanged: false },
+    { runId, studyId: STUDY, owner: OWNER, doc, shareKey: null, startFrameId: opts.startFrameId ?? '1:2', resume: opts.resume ?? null, fileChanged: false, map: null },
     {
       bridge: plugin.bridge,
       api: client,
@@ -258,7 +258,7 @@ describe('closing the plugin mid-run', () => {
     // The designer closes the plugin while turn 3 is thinking.
     await expect(
       runSession(
-        { runId: 'run-resume', studyId: RESUME, owner: OWNER, doc, shareKey: null, startFrameId: '1:2', resume: null, fileChanged: false },
+        { runId: 'run-resume', studyId: RESUME, owner: OWNER, doc, shareKey: null, startFrameId: '1:2', resume: null, fileChanged: false, map: null },
         {
           bridge: first.bridge, api: client, now: () => Date.now(), onStatus: () => {}, watchFile: first.watchFile, signal: first.signal,
           sleep: closeWhen(first, () => !!mock.trace.runs.get('run-resume')?.turns.has(3)),
@@ -279,7 +279,7 @@ describe('closing the plugin mid-run', () => {
 
     mock.trace.release('run-resume', 'reopened');
     const result = await runSession(
-      { runId: 'run-resume', studyId: RESUME, owner: OWNER, doc: reread, shareKey: null, startFrameId: '1:2', resume: saved, fileChanged: false },
+      { runId: 'run-resume', studyId: RESUME, owner: OWNER, doc: reread, shareKey: null, startFrameId: '1:2', resume: saved, fileChanged: false, map: null },
       { bridge: second.bridge, api: client, now: () => Date.now(), sleep: tick, onStatus: () => {}, watchFile: second.watchFile },
     );
     expect(result).toEqual({ runId: 'run-resume', ended: { status: 'finalizing', reason: 'done' }, stop: 'ended', message: null });
@@ -369,7 +369,7 @@ describe('a wave whose sessions save at once', () => {
     const closing = (runId: string) => closeWhen(first, () => ['run-a', 'run-b'].every((id) => mock.trace.runs.get(id)?.turns.has(2)));
     const started = ['run-a', 'run-b'].map((runId) =>
       runSession(
-        { runId, studyId: 'study-together', owner: OWNER, doc, shareKey: null, startFrameId: '1:2', resume: null, fileChanged: false },
+        { runId, studyId: 'study-together', owner: OWNER, doc, shareKey: null, startFrameId: '1:2', resume: null, fileChanged: false, map: null },
         { bridge: first.bridge, api: client, now: () => Date.now(), sleep: closing(runId), onStatus: () => {}, watchFile: first.watchFile, signal: first.signal },
       ),
     );
@@ -382,7 +382,7 @@ describe('a wave whose sessions save at once', () => {
     for (const runId of ['run-a', 'run-b']) mock.trace.release(runId, 'reopened');
     const results = await Promise.all(sessions.map((saved) =>
       runSession(
-        { runId: saved.runId, studyId: 'study-together', owner: OWNER, doc: reread, shareKey: null, startFrameId: '1:2', resume: saved, fileChanged: false },
+        { runId: saved.runId, studyId: 'study-together', owner: OWNER, doc: reread, shareKey: null, startFrameId: '1:2', resume: saved, fileChanged: false, map: null },
         { bridge: second.bridge, api: client, now: () => Date.now(), sleep: tick, onStatus: () => {}, watchFile: second.watchFile },
       )));
     expect(results.map((r) => r.ended)).toEqual([{ status: 'finalizing', reason: 'done' }, { status: 'finalizing', reason: 'done' }]);
@@ -424,7 +424,7 @@ describe('a backend ahead of the saved session', () => {
     const statuses: SessionStatus[] = [];
     await expect(
       runSession(
-        { runId: 'run-ahead', studyId: 'study-ahead', owner: OWNER, doc, shareKey: null, startFrameId: '1:2', resume: null, fileChanged: false },
+        { runId: 'run-ahead', studyId: 'study-ahead', owner: OWNER, doc, shareKey: null, startFrameId: '1:2', resume: null, fileChanged: false, map: null },
         {
           bridge: first.bridge, api: client, now: () => Date.now(), onStatus: (st) => statuses.push(st), watchFile: first.watchFile, signal: first.signal,
           sleep: closeWhen(first, () => !!mock.trace.runs.get('run-ahead')?.turns.has(4)),
@@ -439,7 +439,7 @@ describe('a backend ahead of the saved session', () => {
     expect(sessions.map((s) => s.turn)).toEqual([2]);
     mock.trace.release('run-ahead', 'reopened');
     const result = await runSession(
-      { runId: 'run-ahead', studyId: 'study-ahead', owner: OWNER, doc: reread, shareKey: null, startFrameId: '1:2', resume: sessions[0] as SavedSession, fileChanged: false },
+      { runId: 'run-ahead', studyId: 'study-ahead', owner: OWNER, doc: reread, shareKey: null, startFrameId: '1:2', resume: sessions[0] as SavedSession, fileChanged: false, map: null },
       { bridge: second.bridge, api: client, now: () => Date.now(), sleep: tick, onStatus: () => {}, watchFile: second.watchFile },
     );
     expect(result).toEqual({ runId: 'run-ahead', ended: { status: 'finalizing', reason: 'done' }, stop: 'ended', message: null });
@@ -581,11 +581,11 @@ function study(
   plugin: Plugin,
   doc: ProtoDoc,
   studyId: string,
-  opts: { sleep?: (ms: number) => Promise<void>; runner?: RunnerStatus[]; read?: DocRead } = {},
+  opts: { sleep?: (ms: number) => Promise<void>; runner?: RunnerStatus[]; read?: DocRead; drawnOnly?: boolean } = {},
 ): Promise<RunnerResult> {
   const clock = panelClock();
   return runStudy(
-    { studyId, owner: OWNER, read: opts.read ?? { doc, changed: () => false }, shareKey: null, startFrameId: '1:2' },
+    { studyId, owner: OWNER, read: opts.read ?? { doc, changed: () => false }, shareKey: null, startFrameId: '1:2', drawnOnly: opts.drawnOnly ?? false },
     {
       bridge: plugin.bridge,
       api: client,
@@ -735,7 +735,7 @@ describe('a whole study through the runner', () => {
         { runId: 'run-theirs', script: GOLDEN },
       ]],
     });
-    await client.claimRun('run-theirs', { browser: { engine: 'figma-trace', version: '0.1.0', viewport: [1280, 800] }, owner: 'panel-other' });
+    await client.claimRun('run-theirs', { browser: { engine: 'figma-trace', version: '0.1.0', viewport: [1280, 800] }, owner: 'panel-other', flowMapVersion: null });
     const fake = fakeFile();
     const plugin = openPlugin(fake);
     const doc = await plugin.bridge.call('trace-read', { importLibraryVariants: true });
@@ -748,7 +748,8 @@ describe('a whole study through the runner', () => {
       lastOutcome: null,
       timerEffects: [],
       loopFrames: [],
-      version: 1,
+      flowMapVersion: null,
+      version: 2,
     };
     await plugin.bridge.call('trace-save', { studyId: 'study-shared', runId: 'run-theirs', session: theirs });
     const clock = panelClock();
@@ -908,7 +909,8 @@ describe('a whole study through the runner', () => {
     const second = openPlugin(fake);
     const reread = await second.bridge.call('trace-read', { importLibraryVariants: true });
     const { sessions } = await second.bridge.call('trace-load', { studyId: 'study-turn0' });
-    const turn0 = (runId: string): SavedSession => ({ owner: OWNER, runId, turn: 0, state: start(doc, '1:2'), lastOutcome: null, timerEffects: [], loopFrames: [], version: 1 });
+    // Saved on the flow map version the panel committed before claiming them.
+    const turn0 = (runId: string): SavedSession => ({ owner: OWNER, runId, turn: 0, state: start(doc, '1:2'), lastOutcome: null, timerEffects: [], loopFrames: [], flowMapVersion: 1, version: 2 });
     expect([...sessions].sort((a, b) => a.runId.localeCompare(b.runId))).toEqual([turn0('run-z-one'), turn0('run-z-two')]);
 
     for (const runId of ['run-z-one', 'run-z-two']) mock.trace.release(runId, 'reopened');
@@ -960,7 +962,7 @@ describe('a Single persona study', () => {
       const clock = panelClock();
       const runner: RunnerStatus[] = [];
       const result = await runStudy(
-        { studyId, owner: OWNER, read: await plugin.readDoc(), shareKey: null, startFrameId: '1:2' },
+        { studyId, owner: OWNER, read: await plugin.readDoc(), shareKey: null, startFrameId: '1:2', drawnOnly: false },
         {
           bridge: plugin.bridge, api, now: clock.now, sleep: clock.sleep, pluginVersion: '0.1.0', onSession: () => {}, onRunner: (st) => runner.push(st),
           watchFile: plugin.watchFile, readDoc: plugin.readDoc, postTurnTimeoutMs: 10_000, signal: plugin.signal,
@@ -976,7 +978,8 @@ describe('a Single persona study', () => {
       expect(posts.map((b) => b.screen.title)).toEqual([
         'Dashboard', 'Billing settings', 'Connect bank', 'Connect bank', 'Connect bank', 'Connect bank', 'Connect bank', 'Verify phone', 'Bank connected',
       ]);
-      expect(backend.trace.refusals).toEqual([]);
+      // Only the first commit's look for a flow map the new study doesn't have yet.
+      expect(backend.trace.refusals.map((r) => `${r.status} ${r.error}`)).toEqual(['404 flow_map_not_found']);
 
       const report = await api.getReport<StudyReport & { runs: unknown[] }>(studyId);
       expect(report).toMatchObject({ status: 'complete', partial: false, runsTotal: 1, runsScored: 1, archetypes: [{ role: 'baseline', completion: { k: 1, n: 1 } }] });
@@ -1059,19 +1062,19 @@ describe('the mock backend', () => {
   async function claimed(script: ScriptStep[]) {
     const runId = `run-mock-${++n}`;
     own.trace.addStudy({ studyId: `study-mock-${n}`, waves: [[{ runId, script }]] });
-    await api.claimRun(runId, { browser, owner: OWNER });
+    await api.claimRun(runId, { browser, owner: OWNER, flowMapVersion: null });
     return runId;
   }
 
   it("claims a queued run once, answers its own owner's repeat claim again, and refuses another's, an unknown run and a bad owner", async () => {
     own.trace.addStudy({ studyId: 'study-claim', waves: [[{ runId: 'run-claim', script: [] }]] });
-    expect(await refused(api.claimRun('run-claim', { browser, owner: 'not an owner!' }))).toMatchObject({ status: 400, code: 'bad_request' });
-    const briefing = await api.claimRun('run-claim', { browser, owner: OWNER });
+    expect(await refused(api.claimRun('run-claim', { browser, owner: 'not an owner!', flowMapVersion: null }))).toMatchObject({ status: 400, code: 'bad_request' });
+    const briefing = await api.claimRun('run-claim', { browser, owner: OWNER, flowMapVersion: null });
     expect(briefing).toMatchObject({ runId: 'run-claim', persona: { name: 'run-claim' }, claimedAt: expect.any(String) });
     // The panel retries a claim whose answer it lost: the backend's own owner gets the same briefing (plugin_run_service.claim_run).
     clock += 5_000;
-    expect(await api.claimRun('run-claim', { browser, owner: OWNER })).toEqual(briefing);
-    expect(await refused(api.claimRun('run-claim', { browser, owner: 'panel-other' }))).toMatchObject({ status: 409, code: 'already_claimed' });
+    expect(await api.claimRun('run-claim', { browser, owner: OWNER, flowMapVersion: null })).toEqual(briefing);
+    expect(await refused(api.claimRun('run-claim', { browser, owner: 'panel-other', flowMapVersion: null }))).toMatchObject({ status: 409, code: 'already_claimed' });
     // The rest of 2f16ec9's rule: an owner is needed; and since e9c955a an owner comes only with the figma-trace engine.
     expect(await refused(api.request('POST', '/api/plugin/runs/run-claim/claim', { browser }))).toMatchObject({ status: 409, code: 'already_claimed' });
     for (const claimBody of [{ browser: { ...browser, engine: 'chrome' }, owner: OWNER }, { owner: OWNER }]) {
@@ -1079,12 +1082,12 @@ describe('the mock backend', () => {
       expect(err).toMatchObject({ status: 400, code: 'bad_request' });
       expect(err.message).toBe("owner is only for a Figma panel's claim: browser.engine must be figma-trace.");
     }
-    expect(await refused(api.claimRun('run-nobody', { browser, owner: OWNER }))).toMatchObject({ status: 404, code: 'run_not_found' });
+    expect(await refused(api.claimRun('run-nobody', { browser, owner: OWNER, flowMapVersion: null }))).toMatchObject({ status: 404, code: 'run_not_found' });
   });
 
   it('claims with an owner only the runs of a plugin-mode study', async () => {
     own.trace.addStudy({ studyId: 'study-remote', execution: 'remote', waves: [[{ runId: 'run-remote', script: [] }]] });
-    const err = await refused(api.claimRun('run-remote', { browser, owner: OWNER }));
+    const err = await refused(api.claimRun('run-remote', { browser, owner: OWNER, flowMapVersion: null }));
     expect(err).toMatchObject({ status: 400, code: 'bad_request', message: 'run run-remote is not a run of a plugin-mode study: only those are claimed with an owner.' });
     // An actor that names no owner (a remote runner) still claims it.
     expect(await api.request('POST', '/api/plugin/runs/run-remote/claim', { browser: { engine: 'chrome' } })).toMatchObject({ runId: 'run-remote' });
@@ -1146,7 +1149,7 @@ describe('the mock backend', () => {
   it('refuses a repeat claim of a run that ended, even from its own owner', async () => {
     const runId = await claimed([]);
     await api.abortRun(runId, { owner: OWNER, code: 'render_failed', detail: 'x' });
-    expect(await refused(api.claimRun(runId, { browser, owner: OWNER }))).toMatchObject({ status: 409, code: 'already_claimed' });
+    expect(await refused(api.claimRun(runId, { browser, owner: OWNER, flowMapVersion: null }))).toMatchObject({ status: 409, code: 'already_claimed' });
   });
 
   it('refuses a repeat claim of a run that is finalizing, even from its own owner', async () => {
@@ -1155,7 +1158,7 @@ describe('the mock backend', () => {
     let view = await api.getTurn(runId, 1);
     for (let i = 0; i < 5 && view.status === 'thinking'; i++) view = await api.getTurn(runId, 1);
     expect(view).toMatchObject({ status: 'ready', ended: { status: 'finalizing' } });
-    expect(await refused(api.claimRun(runId, { browser, owner: OWNER }))).toMatchObject({ status: 409, code: 'already_claimed' });
+    expect(await refused(api.claimRun(runId, { browser, owner: OWNER, flowMapVersion: null }))).toMatchObject({ status: 409, code: 'already_claimed' });
   });
 
   it('takes the claim of a start frame of fractional size, in the whole pixels the panel claims with', async () => {
@@ -1163,8 +1166,8 @@ describe('the mock backend', () => {
     const cut = frame('S', 1280, 818.4);
     const { width, height } = start(protoDoc([cut]), 'S').viewport;
     own.trace.addStudy({ studyId: 'study-pixels', waves: [[{ runId: 'run-pixels', script: [] }, { runId: 'run-fraction', script: [] }]] });
-    expect(await api.claimRun('run-pixels', { browser: { ...browser, viewport: [width, height] }, owner: OWNER })).toMatchObject({ runId: 'run-pixels' });
-    expect(await refused(api.claimRun('run-fraction', { browser: { ...browser, viewport: [cut.width, cut.height] }, owner: OWNER }))).toMatchObject({ status: 400, code: 'bad_request' });
+    expect(await api.claimRun('run-pixels', { browser: { ...browser, viewport: [width, height] }, owner: OWNER, flowMapVersion: null })).toMatchObject({ runId: 'run-pixels' });
+    expect(await refused(api.claimRun('run-fraction', { browser: { ...browser, viewport: [cut.width, cut.height] }, owner: OWNER, flowMapVersion: null }))).toMatchObject({ status: 400, code: 'bad_request' });
   });
 
   it('takes turns in order: 202 thinking, then the poll decides; expected names the turn it takes next', async () => {
@@ -1279,7 +1282,7 @@ describe('the mock backend', () => {
       ],
     });
     expect(await refused(api.nextWave('study-waves'))).toMatchObject({ status: 409, code: 'wave_in_progress' });
-    await api.claimRun('run-w1', { browser, owner: OWNER });
+    await api.claimRun('run-w1', { browser, owner: OWNER, flowMapVersion: null });
     await api.postTurn('run-w1', body(1));
     expect(await api.getTurn('run-w1', 1)).toMatchObject({ ended: { status: 'finalizing', reason: 'give_up' } });
     // The wave is open until the debrief ends the run; the next request sees it ended.
@@ -1295,8 +1298,49 @@ describe('the mock backend', () => {
       runs: [{ runId: 'run-w1', wave: 1, status: 'abandoned', lastStep: { seq: 1 } }, { runId: 'run-w2', wave: 2, repeatIndex: 1, status: 'queued', lastStep: null }],
     });
     expect(await refused(api.nextWave('study-waves'))).toMatchObject({ status: 409, code: 'wave_in_progress' });
-    await api.claimRun('run-w2', { browser, owner: OWNER });
+    await api.claimRun('run-w2', { browser, owner: OWNER, flowMapVersion: null });
     await api.abortRun('run-w2', { owner: OWNER, code: 'render_failed', detail: 'x' });
     expect(await api.nextWave('study-waves')).toMatchObject({ studyId: 'study-waves', done: true, wave: 2 });
   });
+});
+
+// --- The flow map ------------------------------------------------------------------
+
+describe('the flow map of the fake Farside page', () => {
+  it('is committed before the claims, built from every candidate, and played by the runs claimed on it', async () => {
+    mock.trace.addStudy({ studyId: 'study-map', waves: [[{ runId: 'run-map', script: GOLDEN }]], flowMap: { buildPolls: 2 } });
+    const fake = fakeFile();
+    const plugin = openPlugin(fake);
+    const doc = await plugin.bridge.call('trace-read', { importLibraryVariants: true });
+    const result = await study(plugin, doc, 'study-map');
+    expect(result).toMatchObject({ stop: 'done' });
+    const map = mock.trace.maps.latest('study-map');
+    expect(map).toMatchObject({ version: 1, baseVersion: null, docHash: doc.docHash, model: 'mock:reader' });
+    expect(map?.readings).toEqual(expect.arrayContaining([
+      expect.objectContaining({ shareKey: 'L:2:20:2:27', nodes: ['2:20'], layerKeys: ['2:27'], label: 'Use routing number instead', kind: 'gap', by: 'model' }),
+      // The spinner hidden in every button: one reading, wherever the button is.
+      expect.objectContaining({ shareKey: 'C:6:2;6:4|spinner', nodes: expect.arrayContaining(['2:10', '2:20', '2:30']) }),
+    ]));
+    expect(mock.trace.runs.get('run-map')).toMatchObject({ status: 'completed', flowMapVersion: 1 });
+    // Nothing the panel sent was refused; it only looked for the map the new study didn't have yet.
+    expect(mock.trace.refusals.filter((r) => r.path.includes('study-map')).map((r) => `${r.method} ${r.status} ${r.error}`)).toEqual(['GET 404 flow_map_not_found']);
+  }, 30_000);
+
+  it("stops before any claim when the model couldn't read a screen, and launches with drawn connections only when the designer chooses", async () => {
+    mock.trace.addStudy({ studyId: 'study-map-fails', waves: [[{ runId: 'run-map-fails', script: GOLDEN }]], flowMap: { buildFailures: [{ node: '2:20', reason: 'k2 has no reading' }] } });
+    const fake = fakeFile();
+    const plugin = openPlugin(fake);
+    const doc = await plugin.bridge.call('trace-read', { importLibraryVariants: true });
+    const failed = await study(plugin, doc, 'study-map-fails');
+    expect(failed).toEqual({ stop: 'map_failed', message: "Couldn't read the flow of 'Connect bank': k2 has no reading.", sessions: [] });
+    expect(mock.trace.runs.get('run-map-fails')?.status).toBe('queued');
+    expect(mock.trace.maps.latest('study-map-fails')).toBeNull();
+
+    const drawn = await study(plugin, doc, 'study-map-fails', { drawnOnly: true });
+    expect(drawn).toMatchObject({ stop: 'done' });
+    const map = mock.trace.maps.latest('study-map-fails');
+    expect(map).toMatchObject({ version: 1, model: null, buildId: null });
+    expect(new Set(map?.readings.map((r) => `${r.kind} ${String(r.by)}`))).toEqual(new Set(['gap bulk_gap']));
+    expect(mock.trace.runs.get('run-map-fails')).toMatchObject({ status: 'completed', flowMapVersion: 1 });
+  }, 30_000);
 });

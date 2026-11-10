@@ -133,6 +133,23 @@ export function Progress({ state, fx }: { state: AppState; fx: Effects }) {
                 {st.runner.notice} Forgetting it lets each try start over where Archetype has nothing yet; tries that had already started are ended.
               </Banner>
             )}
+            {st.runner?.phase === 'map_failed' && (
+              <Banner
+                kind="error"
+                action={
+                  <span class="banner-actions">
+                    <button type="button" class="btn btn-small btn-secondary" onClick={() => fx.retryMap(false)}>
+                      Try again
+                    </button>
+                    <button type="button" class="btn btn-small btn-ghost" onClick={() => fx.retryMap(true)}>
+                      Launch with drawn connections only
+                    </button>
+                  </span>
+                }
+              >
+                {st.runner.notice}
+              </Banner>
+            )}
             {notices.map((n) => (
               <Banner key={n} kind="warn">
                 {n}

@@ -16,6 +16,8 @@ export interface ClaimBody {
   browser: TraceBrowser;
   /** This panel's id; every turn and abort of the run must carry it. */
   owner: string;
+  /** The study's current flow map version, which the run will play; null when it has none. 409 flow_map_stale otherwise. */
+  flowMapVersion: number | null;
 }
 
 /** The claim's briefing (only the fields the panel uses). */
@@ -26,6 +28,8 @@ export interface RunBriefing {
   brief: string;
   persona: { name: string };
   instructions: { targetUrl: string; goal: string };
+  /** The flow map version the run plays for its whole life: its first claim's; null when it had none. */
+  flowMapVersion: number | null;
 }
 
 export type TurnFlag = 'file_changed' | 'timer_loop' | 'missing_font';

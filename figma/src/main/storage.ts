@@ -149,6 +149,8 @@ export function savedSessionProblem(session: unknown, runId: string): string | n
     return 'its timerEffects are not a list of {type, detail}';
   }
   if (!Array.isArray(session.loopFrames) || !session.loopFrames.every(isText)) return 'its loopFrames are not a list of frame ids';
+  const v = session.flowMapVersion;
+  if (v !== null && !(Number.isInteger(v) && (v as number) >= 1)) return 'its flowMapVersion is not a version number or null';
   return null;
 }
 

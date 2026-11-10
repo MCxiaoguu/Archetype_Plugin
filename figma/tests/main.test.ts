@@ -349,7 +349,7 @@ describe('trace requests on the main thread', () => {
     expect(drawn.layers.map((l) => l.key)).toContain('1:7');
     expect(drawn.viewport).toEqual(state.viewport);
 
-    const session = { owner: 'p_7f3a', runId: 'r1', turn: 3, state, lastOutcome: { action: { type: 'click', element: 'e1' }, outcome: 'navigated', target: 'Billing (e1)' }, timerEffects: [], loopFrames: [], version: 1 };
+    const session = { owner: 'p_7f3a', runId: 'r1', turn: 3, state, lastOutcome: { action: { type: 'click', element: 'e1' }, outcome: 'navigated', target: 'Billing (e1)' }, timerEffects: [], loopFrames: [], flowMapVersion: null, version: 2 };
     expect(await t.ask({ type: 'trace-save', requestId: 'q3', studyId: 's1', runId: 'r1', session })).toEqual({ type: 'trace-result', requestId: 'q3', result: null });
     expect(await t.ask({ type: 'trace-load', requestId: 'q4', studyId: 's1' })).toEqual({ type: 'trace-result', requestId: 'q4', result: { sessions: [session] } });
     expect((await t.ask({ type: 'trace-load', requestId: 'q5', studyId: 's2' })).result).toEqual({ sessions: [] });
@@ -389,8 +389,8 @@ describe('trace requests on the main thread', () => {
     const t = traceMain();
     const doc = (await t.ask({ type: 'trace-read', requestId: 'a', importLibraryVariants: false })).result as ProtoDoc;
     const state = start(doc, '1:2');
-    const one = { owner: 'p_1', runId: 'r1', turn: 1, state, lastOutcome: null, timerEffects: [], loopFrames: [], version: 1 };
-    const two = { owner: 'p_1', runId: 'r2', turn: 4, state, lastOutcome: null, timerEffects: [], loopFrames: [], version: 1 };
+    const one = { owner: 'p_1', runId: 'r1', turn: 1, state, lastOutcome: null, timerEffects: [], loopFrames: [], flowMapVersion: null, version: 2 };
+    const two = { owner: 'p_1', runId: 'r2', turn: 4, state, lastOutcome: null, timerEffects: [], loopFrames: [], flowMapVersion: null, version: 2 };
     await t.ask({ type: 'trace-save', requestId: 'b', studyId: 's1', runId: 'r1', session: one });
     await t.ask({ type: 'trace-save', requestId: 'c', studyId: 's1', runId: 'r2', session: two });
     expect((await t.ask({ type: 'trace-load', requestId: 'd', studyId: 's1' })).result).toEqual({ sessions: [one, two] });
@@ -403,7 +403,7 @@ describe('trace requests on the main thread', () => {
     const t = traceMain();
     const doc = (await t.ask({ type: 'trace-read', requestId: 'a', importLibraryVariants: false })).result as ProtoDoc;
     const state = start(doc, '1:2');
-    const session = (runId: string, turn: number) => ({ owner: 'p_1', runId, turn, state, lastOutcome: null, timerEffects: [], loopFrames: [], version: 1 });
+    const session = (runId: string, turn: number) => ({ owner: 'p_1', runId, turn, state, lastOutcome: null, timerEffects: [], loopFrames: [], flowMapVersion: null, version: 2 });
     // Parallel personas: their saves reach the main thread together.
     await Promise.all([
       t.ask({ type: 'trace-save', requestId: 'b', studyId: 's1', runId: 'r1', session: session('r1', 1) }),
@@ -423,7 +423,7 @@ describe('trace requests on the main thread', () => {
     const t = traceMain();
     const doc = (await t.ask({ type: 'trace-read', requestId: 'a', importLibraryVariants: false })).result as ProtoDoc;
     const state = start(doc, '1:2');
-    const one = { owner: 'p_1', runId: 'r1', turn: 1, state, lastOutcome: null, timerEffects: [], loopFrames: [], version: 1 };
+    const one = { owner: 'p_1', runId: 'r1', turn: 1, state, lastOutcome: null, timerEffects: [], loopFrames: [], flowMapVersion: null, version: 2 };
     (t.api.clientStorage.setAsync as unknown as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('The storage quota is full'));
     const [refused, saved] = await Promise.all([
       t.ask({ type: 'trace-save', requestId: 'b', studyId: 's1', runId: 'r1', session: one }),
@@ -445,20 +445,20 @@ describe('trace requests on the main thread', () => {
       [{ type: 'trace-candidates', requestId: 'm20', docHash: 'f00' }, 'not read since it opened'],
       [{ type: 'trace-render', requestId: 'm3', docHash: doc.docHash, state: { ...state, frameId: 7 } }, 'state'],
       [{ type: 'trace-render', requestId: 'm4', docHash: doc.docHash, state: { ...state, viewport: null } }, 'state'],
-      [{ type: 'trace-save', requestId: 'm5', studyId: 's1', runId: 'r1', session: { owner: 'p', runId: 'r2', turn: 1, state, lastOutcome: null, timerEffects: [], loopFrames: [], version: 1 } }, 'runId'],
-      [{ type: 'trace-save', requestId: 'm6', studyId: 's1', runId: 'r1', session: { owner: '', runId: 'r1', turn: 1, state, lastOutcome: null, timerEffects: [], loopFrames: [], version: 1 } }, 'owner'],
-      [{ type: 'trace-save', requestId: 'm7', studyId: 's1', runId: 'r1', session: { owner: 'p', runId: 'r1', turn: -1, state, lastOutcome: null, timerEffects: [], loopFrames: [], version: 1 } }, 'turn'],
-      [{ type: 'trace-save', requestId: 'm8', studyId: 's1', runId: 'r1', session: { owner: 'p', runId: 'r1', turn: 1, state: {}, lastOutcome: null, timerEffects: [], loopFrames: [], version: 1 } }, 'state'],
-      [{ type: 'trace-save', requestId: 'm9', studyId: 's1', runId: 'r1', session: { owner: 'p', runId: 'r1', turn: 1, state, lastOutcome: 'clicked', timerEffects: [], loopFrames: [], version: 1 } }, 'lastOutcome'],
+      [{ type: 'trace-save', requestId: 'm5', studyId: 's1', runId: 'r1', session: { owner: 'p', runId: 'r2', turn: 1, state, lastOutcome: null, timerEffects: [], loopFrames: [], flowMapVersion: null, version: 2 } }, 'runId'],
+      [{ type: 'trace-save', requestId: 'm6', studyId: 's1', runId: 'r1', session: { owner: '', runId: 'r1', turn: 1, state, lastOutcome: null, timerEffects: [], loopFrames: [], flowMapVersion: null, version: 2 } }, 'owner'],
+      [{ type: 'trace-save', requestId: 'm7', studyId: 's1', runId: 'r1', session: { owner: 'p', runId: 'r1', turn: -1, state, lastOutcome: null, timerEffects: [], loopFrames: [], flowMapVersion: null, version: 2 } }, 'turn'],
+      [{ type: 'trace-save', requestId: 'm8', studyId: 's1', runId: 'r1', session: { owner: 'p', runId: 'r1', turn: 1, state: {}, lastOutcome: null, timerEffects: [], loopFrames: [], flowMapVersion: null, version: 2 } }, 'state'],
+      [{ type: 'trace-save', requestId: 'm9', studyId: 's1', runId: 'r1', session: { owner: 'p', runId: 'r1', turn: 1, state, lastOutcome: 'clicked', timerEffects: [], loopFrames: [], flowMapVersion: null, version: 2 } }, 'lastOutcome'],
       [{ type: 'trace-save', requestId: 'm10', studyId: '', runId: 'r1', session: null }, 'study'],
       [{ type: 'trace-save', requestId: 'm11', studyId: 's1', session: null }, 'run'],
       [{ type: 'trace-load', requestId: 'm12' }, 'study'],
-      [{ type: 'trace-save', requestId: 'm13', studyId: 's1', runId: 'r1', session: { owner: 'p', runId: 'r1', turn: 1, state, lastOutcome: null, loopFrames: [], version: 1 } }, 'timerEffects'],
-      [{ type: 'trace-save', requestId: 'm14', studyId: 's1', runId: 'r1', session: { owner: 'p', runId: 'r1', turn: 1, state, lastOutcome: null, timerEffects: [{ type: 'left_prototype' }], loopFrames: [], version: 1 } }, 'timerEffects'],
-      [{ type: 'trace-save', requestId: 'm15', studyId: 's1', runId: 'r1', session: { owner: 'p', runId: 'r1', turn: 1, state, lastOutcome: null, timerEffects: [], loopFrames: [7], version: 1 } }, 'loopFrames'],
-      [{ type: 'trace-save', requestId: 'm16', studyId: 's1', runId: 'r1', session: { owner: 'p', runId: 'r1', turn: 1, state: { ...state, timers: undefined }, lastOutcome: null, timerEffects: [], loopFrames: [], version: 1 } }, 'timers'],
+      [{ type: 'trace-save', requestId: 'm13', studyId: 's1', runId: 'r1', session: { owner: 'p', runId: 'r1', turn: 1, state, lastOutcome: null, loopFrames: [], flowMapVersion: null, version: 2 } }, 'timerEffects'],
+      [{ type: 'trace-save', requestId: 'm14', studyId: 's1', runId: 'r1', session: { owner: 'p', runId: 'r1', turn: 1, state, lastOutcome: null, timerEffects: [{ type: 'left_prototype' }], loopFrames: [], flowMapVersion: null, version: 2 } }, 'timerEffects'],
+      [{ type: 'trace-save', requestId: 'm15', studyId: 's1', runId: 'r1', session: { owner: 'p', runId: 'r1', turn: 1, state, lastOutcome: null, timerEffects: [], loopFrames: [7], flowMapVersion: null, version: 2 } }, 'loopFrames'],
+      [{ type: 'trace-save', requestId: 'm16', studyId: 's1', runId: 'r1', session: { owner: 'p', runId: 'r1', turn: 1, state: { ...state, timers: undefined }, lastOutcome: null, timerEffects: [], loopFrames: [], flowMapVersion: null, version: 2 } }, 'timers'],
       [{ type: 'trace-save', requestId: 'm18', studyId: 's1', runId: 'r1', session: { owner: 'p', runId: 'r1', turn: 1, state, lastOutcome: null, timerEffects: [], loopFrames: [] } }, 'another version'],
-      [{ type: 'trace-save', requestId: 'm17', studyId: 's1', runId: 'r1', session: { owner: 'p', runId: 'r1', turn: 1, state: { ...state, pointer: { point: null } }, lastOutcome: null, timerEffects: [], loopFrames: [], version: 1 } }, 'pointer'],
+      [{ type: 'trace-save', requestId: 'm17', studyId: 's1', runId: 'r1', session: { owner: 'p', runId: 'r1', turn: 1, state: { ...state, pointer: { point: null } }, lastOutcome: null, timerEffects: [], loopFrames: [], flowMapVersion: null, version: 2 } }, 'pointer'],
     ];
     for (const [msg, words] of cases) {
       const reply = await t.ask(msg);
@@ -602,7 +602,7 @@ describe('trace requests on the main thread', () => {
   it('refuses stored sessions it cannot read instead of writing over them', async () => {
     const t = traceMain();
     const doc = (await t.ask({ type: 'trace-read', requestId: 'a', importLibraryVariants: false })).result as ProtoDoc;
-    const one = { owner: 'p_1', runId: 'r1', turn: 1, state: start(doc, '1:2'), lastOutcome: null, timerEffects: [], loopFrames: [], version: 1 };
+    const one = { owner: 'p_1', runId: 'r1', turn: 1, state: start(doc, '1:2'), lastOutcome: null, timerEffects: [], loopFrames: [], flowMapVersion: null, version: 2 };
     await t.ask({ type: 'trace-save', requestId: 'b', studyId: 's1', runId: 'r1', session: one });
     const key = (t.api.clientStorage.setAsync as unknown as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as string;
 
@@ -625,7 +625,7 @@ describe('trace requests on the main thread', () => {
   it("refuses saved progress another version of the plugin made, and forgets a study's progress when asked", async () => {
     const t = traceMain();
     const doc = (await t.ask({ type: 'trace-read', requestId: 'a', importLibraryVariants: false })).result as ProtoDoc;
-    const one = { owner: 'p_1', runId: 'r1', turn: 1, state: start(doc, '1:2'), lastOutcome: null, timerEffects: [], loopFrames: [], version: 1 };
+    const one = { owner: 'p_1', runId: 'r1', turn: 1, state: start(doc, '1:2'), lastOutcome: null, timerEffects: [], loopFrames: [], flowMapVersion: null, version: 2 };
     await t.ask({ type: 'trace-save', requestId: 'b', studyId: 's1', runId: 'r1', session: one });
     await t.ask({ type: 'trace-save', requestId: 'b2', studyId: 's2', runId: 'r1', session: one });
     const key = (t.api.clientStorage.setAsync as unknown as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as string;

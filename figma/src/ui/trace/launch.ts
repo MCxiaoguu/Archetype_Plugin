@@ -149,9 +149,10 @@ export function createTracePanel(deps: TracePanelDeps) {
    * page it was launched on; from another page, the designer goes there first.
    * The runner plays the prototype read here, as the file is now (the launch
    * gate's read can be minutes old by the time the study runs), and reads it
-   * again for each new wave.
+   * again for each new wave. `drawnOnly` is the designer's Launch with drawn
+   * connections only, after the flow map couldn't be completed.
    */
-  function start() {
+  function start({ drawnOnly = false }: { drawnOnly?: boolean } = {}) {
     const st = store.get().study;
     const trace = st?.record?.trace;
     if (!st?.id || !trace || runners.has(st.id)) return;
@@ -189,7 +190,7 @@ export function createTracePanel(deps: TracePanelDeps) {
         return null;
       }
       return runStudy(
-        { studyId, owner: trace.owner, read: first, shareKey: trace.shareKey, startFrameId: trace.startFrameId },
+        { studyId, owner: trace.owner, read: first, shareKey: trace.shareKey, startFrameId: trace.startFrameId, drawnOnly },
         {
           bridge: bridge(),
           api: deps.api(),
@@ -209,6 +210,11 @@ export function createTracePanel(deps: TracePanelDeps) {
     })()
       .then((result) => {
         if (result?.stop === 'stuck') stop('stuck', result.message);
+        // Its own banner offers the two ways on; the study on screen or not, nothing was claimed on the read.
+        if (result?.stop === 'map_failed') {
+          if (store.get().study?.id === studyId) report({ phase: 'map_failed', notice: result.message });
+          else toMain({ type: 'notify', text: result.message });
+        }
       })
       .catch((err: unknown) => {
         // Try again would fail the same way: the way out is to forget that progress.
@@ -238,6 +244,12 @@ export function createTracePanel(deps: TracePanelDeps) {
     start();
   }
 
+  /** After the flow map couldn't be completed: Try again, or launch with the drawn connections only. */
+  function afterMapFailed(drawnOnly: boolean) {
+    if (store.get().study?.runner?.phase !== 'map_failed') return;
+    start({ drawnOnly });
+  }
+
   /** The page's doc changed: a test waiting for its page starts once the designer is there. */
   function pageChanged() {
     const st = store.get().study;
@@ -265,7 +277,7 @@ export function createTracePanel(deps: TracePanelDeps) {
     line?.close?.();
   }
 
-  return { gate, launchAnyway, cancel, lastRead, launchedOn, start, forgetProgress, pageChanged, goToPage, fileChanged, close };
+  return { gate, launchAnyway, cancel, lastRead, launchedOn, start, forgetProgress, afterMapFailed, pageChanged, goToPage, fileChanged, close };
 }
 
 export type TracePanel = ReturnType<typeof createTracePanel>;

@@ -16,6 +16,7 @@ import { ApiError, TURN_TIMEOUT_MS, type AbortCode, type ApiClient, type TimerEf
 import { SAVED_SESSION_VERSION, type SavedSession, type TraceRenderReply } from '../../lib/messages';
 import { listElements } from '../../lib/proto/elements';
 import { apply, settle, start, type EngineEffect } from '../../lib/proto/engine';
+import type { FlowMap } from '../../lib/proto/flow';
 import { EngineError, type EngineErrorCode } from '../../lib/proto/errors';
 import type { Element, ElementTarget, ProtoDoc, RawLayer, TraceAction, TraceOutcome, TraceState } from '../../lib/proto/model';
 import { outcomeOf } from '../../lib/proto/outcome';
@@ -65,6 +66,8 @@ export interface SessionRun {
   resume: SavedSession | null;
   /** The main thread reported the file changed since `doc` was read: every turn is flagged from the first. */
   fileChanged: boolean;
+  /** The flow map version the run plays (its claim's); null for a run claimed with no map. */
+  map: FlowMap | null;
 }
 
 export type SessionPhase = 'acting' | 'thinking' | 'paused' | 'ended';
@@ -552,7 +555,17 @@ export async function runSession(run: SessionRun, deps: SessionDeps): Promise<Se
       target: targetOf(action, listed.elements),
       ...(applied.outcome === 'unsupported' ? { unsupported: unsupportedDetail(applied.effects) } : {}),
     };
-    await save({ owner: run.owner, runId: run.runId, turn, state, lastOutcome: last, timerEffects: [...pendingEffects], loopFrames: [...loopFrames], version: SAVED_SESSION_VERSION });
+    await save({
+      owner: run.owner,
+      runId: run.runId,
+      turn,
+      state,
+      lastOutcome: last,
+      timerEffects: [...pendingEffects],
+      loopFrames: [...loopFrames],
+      flowMapVersion: run.map?.version ?? null,
+      version: SAVED_SESSION_VERSION,
+    });
     turn += 1;
     status();
   }
@@ -590,6 +603,10 @@ export async function runSession(run: SessionRun, deps: SessionDeps): Promise<Se
         throw engineAbort(err, 'Starting the prototype failed');
       }
       return;
+    }
+    // The run plays its claim's map version for its whole life.
+    if (resume.flowMapVersion !== (run.map?.version ?? null)) {
+      throw new Error(`Run ${run.runId} was saved playing flow map version ${resume.flowMapVersion ?? 'none'}, but was resumed with ${run.map?.version ?? 'none'}.`);
     }
     state = resume.state;
     pendingEffects = [...resume.timerEffects];

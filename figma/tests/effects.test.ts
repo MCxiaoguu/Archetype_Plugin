@@ -16,14 +16,36 @@ const { createStore } = await import('../src/ui/store');
 
 type Route = (method: string, path: string, body: unknown, auth: string | null) => [number, unknown];
 
-function installFetch(route: Route) {
+/**
+ * Each study's flow map, as the backend keeps it: a commit stores version 1
+ * at once (its candidates every one a gap) and answers it again after.
+ */
+function flowMaps(): Route {
+  const maps = new Map<string, Record<string, unknown>>();
+  return (method, path, body) => {
+    const m = /^\/api\/studies\/([^/]+)\/flow-map$/.exec(path);
+    if (!m) return [0, null];
+    const held = maps.get(m[1] as string);
+    if (method === 'GET') return held ? [200, { map: held }] : [404, { error: 'flow_map_not_found', message: 'No flow map yet.' }];
+    const commit = body as { docHash: string };
+    const map = held ?? { studyId: m[1], version: 1, baseVersion: null, inputHash: 'h', docHash: commit.docHash, nodes: [], edges: [], readings: [], dropped: [], completedAt: '2026-11-10T10:00:00Z', model: null, buildId: null };
+    maps.set(m[1] as string, map);
+    return [200, { status: 'ready', map }];
+  };
+}
+
+/** `maps`: the study's flow map answers as `flowMaps` gives them; false leaves them to `route`. */
+function installFetch(route: Route, { maps: withMaps = true }: { maps?: boolean } = {}) {
   const calls: string[] = [];
+  const maps = withMaps ? flowMaps() : (): [number, unknown] => [0, null];
   vi.stubGlobal('fetch', async (url: string, init: RequestInit = {}) => {
     const path = new URL(url).pathname;
     const method = init.method ?? 'GET';
     calls.push(`${method} ${path}`);
     const headers = (init.headers ?? {}) as Record<string, string>;
-    const [status, body] = route(method, path, init.body ? JSON.parse(String(init.body)) : null, headers.Authorization ?? null);
+    const parsed = init.body ? JSON.parse(String(init.body)) : null;
+    const mapped = maps(method, path, parsed, headers.Authorization ?? null);
+    const [status, body] = mapped[0] ? mapped : route(method, path, parsed, headers.Authorization ?? null);
     return new Response(JSON.stringify(body), { status });
   });
   return calls;
@@ -61,7 +83,7 @@ function fillForm(store: ReturnType<typeof createStore>, link = `https://www.fig
 const savedStudies = () => sent.filter((m): m is Extract<UiToMain, { type: 'save-study' }> => m.type === 'save-study').map((m) => m.record);
 
 const TURN_STATE = { seq: 1, maxSteps: 22, unproductive: 0, maxUnproductiveSteps: 5, progress: 30, sentimentTrend: 'steady', reviewGiveUp: false, ended: false, endedReason: null };
-const BRIEFING = { sessionId: 'sess', claimedAt: '2026-11-10T10:00:00Z', brief: '', persona: { name: 'Baseline founder' }, instructions: { targetUrl: '', goal: '' } };
+const BRIEFING = { sessionId: 'sess', claimedAt: '2026-11-10T10:00:00Z', brief: '', persona: { name: 'Baseline founder' }, instructions: { targetUrl: '', goal: '' }, flowMapVersion: 1 };
 
 /** Fake time that runs the panel's waits (polls, retries) at once, until `cond` holds. */
 async function runUntil(cond: () => boolean, limitMs = 120_000, stepMs = 250) {
@@ -159,12 +181,14 @@ describe('panel effects', () => {
     expect(main.gate.reads).toEqual([false, false]);
     expect(traceCalls(main).filter((t) => t === 'trace-scratch-check')).toHaveLength(1);
     // The panel claims the run under that owner and runs it.
-    expect(claims).toEqual([{ owner: record.trace?.owner, browser: { engine: 'figma-trace', version: '9.9.9', viewport: [1280, 800] } }]);
+    // On the flow map version the panel committed just before.
+    expect(claims).toEqual([{ owner: record.trace?.owner, browser: { engine: 'figma-trace', version: '9.9.9', viewport: [1280, 800] }, flowMapVersion: 1 }]);
     expect(turns.map((t) => [t.turn, t.owner, t.screen.title])).toEqual([[1, record.trace?.owner, 'Dashboard']]);
     expect(turns[0]?.screen.url).toContain(`https://www.figma.com/proto/${KEY}/`);
     // The Running screen read the persona's screen and step from the session, polling nothing new for it.
     expect(store.get().study?.live.r1).toMatchObject({ phase: 'ended', frameName: 'Dashboard', turn: 1 });
-    expect(calls.filter((c) => c.startsWith('GET ') && !/\/(status|runs|report|turn\/\d+)$/.test(c))).toEqual([]);
+    // Besides one read of the study's flow map version, to commit on it.
+    expect(calls.filter((c) => c.startsWith('GET ') && !/\/(status|runs|report|turn\/\d+)$/.test(c))).toEqual(['GET /api/studies/s1/flow-map']);
     expect(main.log).toContain('cleanup');
     expect(sent.map((m) => m.type)).toContain('save-draft');
     expect(lastOf(savedStudies()).outcome).toBe('6 of 15 reached the goal');
@@ -321,6 +345,59 @@ describe('panel effects', () => {
     await runUntil(() => store.get().screen === 'report', 600_000, 1_000);
     vi.useRealTimers();
     expect(traceCalls(main).filter((t) => t === 'trace-load')).toHaveLength(2);
+    expect(calls.filter((c) => c === 'POST /api/plugin/runs/r1/claim')).toHaveLength(1);
+  });
+
+  it("says when the flow map couldn't be completed, tries again, and launches with drawn connections only when asked", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const main = await mainThread();
+    const run = { runId: 'r1', archetypeId: 'a', archetypeName: 'Baseline founder', role: 'baseline', status: 'queued' };
+    let status = 'running';
+    const failed = { status: 'failed', buildId: 'b1', error: 'flow_map_unavailable', node: '2:20', nodeName: 'Connect bank', reason: 'k2 has no reading', message: "Couldn't read the flow of 'Connect bank': k2 has no reading." };
+    const commits: Array<Record<string, unknown>> = [];
+    const claims: Array<Record<string, unknown>> = [];
+    let held: Record<string, unknown> | null = null;
+    const calls = installFetch((method, path, body) => {
+      if (path === '/api/studies/s11/status') return [200, { studyId: 's11', status }];
+      if (path === '/api/studies/s11/runs') return [200, { studyId: 's11', status, runs: [run] }];
+      if (path === '/api/studies/s11/flow-map' && method === 'GET') return held ? [200, { map: held }] : [404, { error: 'flow_map_not_found', message: 'No flow map yet.' }];
+      if (path === '/api/studies/s11/flow-map' && method === 'POST') {
+        const commit = body as Record<string, unknown>;
+        commits.push(commit);
+        if (!commit.drawnOnly) return [202, { status: 'building', buildId: 'b1' }];
+        held = { studyId: 's11', version: 1, baseVersion: null, inputHash: 'h', docHash: commit.docHash, nodes: [], edges: [], readings: [], dropped: [], completedAt: '2026-11-10T10:00:00Z', model: null, buildId: null };
+        return [200, { status: 'ready', map: held }];
+      }
+      if (path === '/api/studies/s11/flow-map/builds/b1') return [200, failed];
+      if (path === '/api/plugin/runs/r1/claim') {
+        claims.push(body as Record<string, unknown>);
+        return (run.status = 'running'), [200, { runId: 'r1', ...BRIEFING }];
+      }
+      if (method === 'POST' && path === '/api/plugin/runs/r1/turn') return [202, { turn: (body as { turn: number }).turn, status: 'thinking' }];
+      if (path === '/api/plugin/runs/r1/turn/1') {
+        run.status = 'completed';
+        return [200, { turn: 1, status: 'ready', action: { type: 'done', claim: 'Done.' }, state: TURN_STATE, ended: { status: 'completed', reason: 'done' } }];
+      }
+      if (path === '/api/studies/s11/runs/next') return (status = 'complete'), [200, { studyId: 's11', done: true, reason: 'every wave ran', wave: 1 }];
+      if (path === '/api/studies/s11/report') return [200, fixtureReport()];
+      return [404, { error: 'x', message: path }];
+    }, { maps: false });
+    const { store, fx } = initStore('tok', main, { studies: [traceStudy('s11', 'running')], lastStudyId: 's11' });
+    await runUntil(() => store.get().study?.runner?.phase === 'map_failed', 60_000, 500);
+    // The backend's words, as they are; nothing was claimed on a map it couldn't read.
+    expect(store.get().study?.runner).toEqual({ phase: 'map_failed', notice: failed.message });
+    expect(claims).toEqual([]);
+
+    // Try again: the same flow, committed again, fails the same way.
+    fx.retryMap(false);
+    await runUntil(() => commits.length === 2 && store.get().study?.runner?.phase === 'map_failed', 60_000, 500);
+    expect(claims).toEqual([]);
+
+    fx.retryMap(true);
+    await runUntil(() => store.get().screen === 'report', 600_000, 1_000);
+    vi.useRealTimers();
+    expect(commits.map((c) => c.drawnOnly ?? false)).toEqual([false, false, true]);
+    expect(claims).toEqual([expect.objectContaining({ flowMapVersion: 1 })]);
     expect(calls.filter((c) => c === 'POST /api/plugin/runs/r1/claim')).toHaveLength(1);
   });
 
@@ -511,7 +588,8 @@ describe('panel effects', () => {
       lastOutcome: { action: { type: 'click' as const, element: 'e1' }, outcome: 'nothing_happened' as const, target: 'Welcome back, Mara (e1)' },
       timerEffects: [],
       loopFrames: [],
-      version: 1,
+      flowMapVersion: null,
+      version: 2,
     };
     main.stored.set('s5', new Map([['r1', saved]]));
     const run = { runId: 'r1', archetypeId: 'a', archetypeName: 'Baseline founder', role: 'baseline', status: 'running' };

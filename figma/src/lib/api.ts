@@ -3,6 +3,7 @@
  * place with network access) and knows nothing about Figma.
  */
 
+import type { FlowCandidate, FlowEdge, FlowMap, FlowNode, ReadingKind } from './proto/flow';
 import type { AbortBody, AbortResult, ClaimBody, RunBriefing, TurnBody, TurnView } from './turn';
 
 /**
@@ -238,6 +239,38 @@ export class ApiClient {
     return this.request<T>('GET', `/api/studies/${encodeURIComponent(id)}/report`, undefined, { timeoutMs: 90_000 });
   }
 
+  // The flow map (spec, Building and completing it)
+
+  /**
+   * Commits the flow the panel read on top of `baseVersion`: 200 ready with
+   * the current version when its input is the same (and for drawnOnly), 202
+   * building otherwise, to poll with getFlowBuild. 409 flow_map_changed when
+   * `baseVersion` isn't current.
+   */
+  commitFlowMap(id: string, body: FlowMapCommit): Promise<FlowMapCommitted> {
+    return this.request<FlowMapCommitted>('POST', `/api/studies/${encodeURIComponent(id)}/flow-map`, body, { timeoutMs: 60_000 });
+  }
+
+  getFlowBuild(id: string, buildId: string): Promise<FlowMapBuild> {
+    return this.request<FlowMapBuild>('GET', `/api/studies/${encodeURIComponent(id)}/flow-map/builds/${encodeURIComponent(buildId)}`);
+  }
+
+  /** The current map, or version `version`. 404 flow_map_not_found. */
+  getFlowMap(id: string, version?: number): Promise<{ map: FlowMap }> {
+    const query = version === undefined ? '' : `?version=${version}`;
+    return this.request('GET', `/api/studies/${encodeURIComponent(id)}/flow-map${query}`);
+  }
+
+  /** Sets one reading of version `baseVersion`, writing the next. 409 flow_map_changed when that isn't current. */
+  editReading(id: string, readingId: string, body: ReadingEdit): Promise<{ map: FlowMap }> {
+    return this.request('PATCH', `/api/studies/${encodeURIComponent(id)}/flow-map/readings/${encodeURIComponent(readingId)}`, body);
+  }
+
+  /** Each run's node sequence, from its steps. */
+  getPaths(id: string): Promise<StudyPaths> {
+    return this.request<StudyPaths>('GET', `/api/studies/${encodeURIComponent(id)}/paths`);
+  }
+
   /** The next wave of runs, or done. 409 wave_in_progress while runs are still open or finalizing. */
   nextWave(id: string): Promise<NextWave> {
     return this.request<NextWave>('POST', `/api/studies/${encodeURIComponent(id)}/runs/next`, {}, { timeoutMs: 60_000 });
@@ -387,6 +420,58 @@ export interface WaveRun {
 export type NextWave =
   | { studyId: string; done: true; reason: string; wave: number }
   | { studyId: string; done?: undefined; wave: number; created: boolean; runs: WaveRun[] };
+
+/** What the panel commits of a study's flow (spec, At launch: the panel). */
+export interface FlowMapCommit {
+  /** The version the panel holds; null when the study has none. */
+  baseVersion: number | null;
+  docHash: string;
+  nodes: FlowNode[];
+  edges: FlowEdge[];
+  candidates: FlowCandidate[];
+  /** Launch with drawn connections only: written at once, every unread candidate a gap. */
+  drawnOnly?: true;
+}
+
+export type FlowMapCommitted = { status: 'ready'; map: FlowMap } | { status: 'building'; buildId: string };
+
+export type FlowMapBuild =
+  | { status: 'building'; buildId: string; nodesRead: number; nodesToRead: number }
+  | { status: 'ready'; buildId: string; map: FlowMap }
+  /** `message` is "Couldn't read the flow of '<nodeName>': <reason>." for flow_map_unavailable, to show as is. */
+  | { status: 'failed'; buildId: string; error: 'flow_map_unavailable' | 'flow_map_changed'; node: string | null; nodeName: string | null; reason: string; message: string };
+
+export interface ReadingEdit {
+  baseVersion: number;
+  kind: ReadingKind;
+  /** The frame an edge goes to; only with edge. */
+  to?: string;
+}
+
+export interface PathStep {
+  seq: number;
+  /** The topmost overlay of the step's screen, else its frame. */
+  node: string;
+  target: string | null;
+  actionText: string;
+  /** What the step's action did; null on the screen the run ended on. */
+  outcome: string | null;
+  reading: string | null;
+}
+
+export interface RunPath {
+  runId: string;
+  archetypeId: string;
+  archetypeName: string;
+  status: string;
+  flowMapVersion: number | null;
+  endNode: string | null;
+  steps: PathStep[];
+}
+
+export interface StudyPaths {
+  runs: RunPath[];
+}
 
 // The trace turn contract, for the panel's imports from here.
 export type { TraceBrowser, ClaimBody, RunBriefing, TurnFlag, TimerEffect, TurnLast, TurnScreen, TurnBody, TurnState, TurnEnded, TurnView, AbortCode, AbortBody, AbortResult } from './turn';

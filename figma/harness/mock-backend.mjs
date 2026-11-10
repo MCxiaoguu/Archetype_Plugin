@@ -479,9 +479,251 @@ function actionFor(step, observation) {
   throw new Error(`the script step ${repr(step)} is no action`);
 }
 
+// ── The flow map: a port of services/flow_map_service.py ───────────────────
+// Versions, the commit's validation, builds and what a build carries over,
+// as the backend does them. The model is a reader per study: it reads each
+// candidate as an edge to a frame, a control or a gap (every one a gap when
+// the test gives none), and `buildFailures` make builds fail as the model can.
+
+const MAP_NODES = 300;
+const MAP_EDGES = 5000;
+const MAP_CANDIDATES = 5000;
+const MAP_NAME = 200;
+const MAP_HEADING = 120;
+const MAP_TEXT = 1500;
+const MAP_NEAR = 200;
+const MAP_SHARE_KEY = 1000;
+const NODE_KINDS = ['frame', 'overlay'];
+const EDGE_ACTIONS = ['NAVIGATE', 'SWAP', 'OVERLAY', 'SCROLL_TO'];
+const READING_KINDS = ['edge', 'control', 'gap'];
+const DOC_HASH = /^[A-Za-z0-9_:-]{1,64}$/;
+const EDGE_ID = /^[A-Za-z0-9_:;-]{1,64}$/;
+const TRIGGER = /^[A-Z_]{1,40}$/;
+const COMMIT_FIELDS = ['baseVersion', 'docHash', 'nodes', 'edges', 'candidates', 'rebuild', 'drawnOnly'];
+const DESIGNER_REASON = 'Set by the designer.';
+const BULK_GAP_REASON = 'Launched with drawn connections only.';
+
+const invalidMap = (message) => new Refused(400, 'invalid_flow_map', message);
+const mapText = (v, where, lo, hi) => {
+  if (!isText(v) || chars(v) < lo || chars(v) > hi) throw invalidMap(`${where} must be ${lo} to ${hi} characters.`);
+  return v;
+};
+const mapNodeId = (v, where) => {
+  if (!isText(v) || !NODE_ID.test(v)) throw invalidMap(`${where} must be a node id such as 2:20 or I2:3;1:17 (got ${repr(v)}).`);
+  return v;
+};
+const mapList = (v, where, lo, hi) => {
+  if (!Array.isArray(v) || v.length < lo || v.length > hi) throw invalidMap(`${where} must be a list of ${lo} to ${hi} items.`);
+  return v;
+};
+
+/** _clean_commit: the commit body, checked; throws its 400 naming the field. */
+function cleanCommit(body) {
+  if (!isObject(body)) throw invalidMap('The body must be a JSON object {baseVersion, docHash, nodes, edges, candidates}.');
+  for (const key of Object.keys(body)) {
+    if (!COMMIT_FIELDS.includes(key)) throw invalidMap(`${key} is not a field of a flow map commit: send baseVersion, docHash, nodes, edges, candidates, and optionally rebuild or drawnOnly.`);
+  }
+  if (!('baseVersion' in body)) throw invalidMap('baseVersion is required: the version this panel holds, or null when it holds none.');
+  const base = body.baseVersion;
+  if (base !== null && !(Number.isInteger(base) && base >= 1)) throw invalidMap(`baseVersion must be a version number or null (got ${repr(base)}).`);
+  if (!isText(body.docHash) || !DOC_HASH.test(body.docHash)) throw invalidMap('docHash must be 1 to 64 of A-Z, a-z, 0-9, _, : and -.');
+  for (const flag of ['rebuild', 'drawnOnly']) {
+    if (body[flag] !== undefined && typeof body[flag] !== 'boolean') throw invalidMap(`${flag} must be true or false.`);
+  }
+  const nodes = [];
+  mapList(body.nodes, 'nodes', 1, MAP_NODES).forEach((node, i) => {
+    const where = `nodes[${i}]`;
+    if (!isObject(node)) throw invalidMap(`${where} must be an object {id, kind, name, pageId, heading, text}.`);
+    const id = mapNodeId(node.id, `${where}.id`);
+    if (nodes.some((n) => n.id === id)) throw invalidMap(`${where}.id ${id} is listed twice; node ids are unique.`);
+    if (!NODE_KINDS.includes(node.kind)) throw invalidMap(`${where}.kind must be frame or overlay (got ${repr(node.kind)}).`);
+    nodes.push({
+      id, kind: node.kind, name: mapText(node.name, `${where}.name`, 1, MAP_NAME), pageId: mapNodeId(node.pageId, `${where}.pageId`),
+      heading: mapText(node.heading ?? '', `${where}.heading`, 0, MAP_HEADING), text: mapText(node.text ?? '', `${where}.text`, 0, MAP_TEXT),
+    });
+  });
+  const ids = new Set(nodes.map((n) => n.id));
+  const known = (v, where) => {
+    const id = mapNodeId(v, where);
+    if (!ids.has(id)) throw invalidMap(`${where} ${id} is not one of the nodes.`);
+    return id;
+  };
+  const edges = [];
+  mapList(body.edges ?? [], 'edges', 0, MAP_EDGES).forEach((edge, i) => {
+    const where = `edges[${i}]`;
+    if (!isObject(edge)) throw invalidMap(`${where} must be an object {id, from, to, layerKey, label, trigger, action, conditional?}.`);
+    if (!isText(edge.id) || !EDGE_ID.test(edge.id)) throw invalidMap(`${where}.id must be 1 to 64 of A-Z, a-z, 0-9, _, :, ; and -.`);
+    if (edges.some((e) => e.id === edge.id)) throw invalidMap(`${where}.id ${edge.id} is listed twice; edge ids are unique.`);
+    if (!isText(edge.trigger) || !TRIGGER.test(edge.trigger)) throw invalidMap(`${where}.trigger must be 1 to 40 of A-Z and _, such as ON_CLICK (got ${repr(edge.trigger)}).`);
+    if (!EDGE_ACTIONS.includes(edge.action)) throw invalidMap(`${where}.action must be one of ${EDGE_ACTIONS.join(', ')} (got ${repr(edge.action)}).`);
+    if (edge.conditional !== undefined && typeof edge.conditional !== 'boolean') throw invalidMap(`${where}.conditional must be true or false.`);
+    edges.push({
+      id: edge.id, from: known(edge.from, `${where}.from`),
+      to: edge.action === 'SCROLL_TO' ? mapNodeId(edge.to, `${where}.to`) : known(edge.to, `${where}.to`),
+      layerKey: mapNodeId(edge.layerKey, `${where}.layerKey`), label: mapText(edge.label ?? '', `${where}.label`, 0, MAX_LABEL),
+      trigger: edge.trigger, action: edge.action, conditional: edge.conditional ?? false,
+    });
+  });
+  const candidates = [];
+  const seen = new Set();
+  mapList(body.candidates ?? [], 'candidates', 0, MAP_CANDIDATES).forEach((c, i) => {
+    const where = `candidates[${i}]`;
+    if (!isObject(c)) throw invalidMap(`${where} must be an object {node, layerKey, shareKey, label, role, box, nearText}.`);
+    const node = known(c.node, `${where}.node`);
+    const layerKey = mapNodeId(c.layerKey, `${where}.layerKey`);
+    if (seen.has(`${node} ${layerKey}`)) throw invalidMap(`${where} repeats node ${node} layerKey ${layerKey}; each candidate is listed once.`);
+    seen.add(`${node} ${layerKey}`);
+    const label = mapText(c.label ?? '', `${where}.label`, 0, MAX_LABEL);
+    const shareKey = mapText(c.shareKey, `${where}.shareKey`, 1, MAP_SHARE_KEY);
+    if (shareKey.startsWith('L:')) {
+      if (shareKey !== `L:${node}:${layerKey}`) throw invalidMap(`${where}.shareKey must be L:${node}:${layerKey} for a candidate outside an instance.`);
+    } else if (!(shareKey.startsWith('C:') && shareKey.endsWith(`|${label.trim().toLowerCase()}`))) {
+      throw invalidMap(`${where}.shareKey must be C:<main component>;<path>|${label.trim().toLowerCase()} inside an instance, or L:${node}:${layerKey}.`);
+    }
+    if (!ELEMENT_ROLES.includes(c.role)) throw invalidMap(`${where}.role must be one of ${ELEMENT_ROLES.join(', ')} (got ${repr(c.role)}).`);
+    if (!(Array.isArray(c.box) && c.box.length === 4 && c.box.every(isNumber))) throw invalidMap(`${where}.box must be [x, y, width, height] in node coordinates (got ${repr(c.box)}).`);
+    candidates.push({ node, layerKey, shareKey, label, role: c.role, box: c.box, nearText: mapText(c.nearText ?? '', `${where}.nearText`, 0, MAP_NEAR) });
+  });
+  return { baseVersion: base, docHash: body.docHash, nodes, edges, candidates, rebuild: body.rebuild ?? false, drawnOnly: body.drawnOnly ?? false };
+}
+
+/** The input hash: the nodes, edges and candidates sent. */
+const inputHashOf = (clean) => {
+  let h = 0;
+  for (const ch of stable([clean.nodes, clean.edges, clean.candidates])) h = (Math.imul(h, 31) + ch.charCodeAt(0)) >>> 0;
+  return `in${h.toString(16)}`;
+};
+
+function createFlowMaps({ clock }) {
+  /** Per study: its versions, builds, reader and scripted build failures. */
+  const studies = new Map();
+
+  function add(studyId, { read, buildFailures = [], buildPolls = 0 } = {}) {
+    studies.set(studyId, { versions: [], builds: new Map(), read: read ?? (() => ({ kind: 'gap', reason: 'No page covers it.' })), buildFailures, buildPolls });
+  }
+
+  const latest = (studyId) => studies.get(studyId)?.versions.at(-1) ?? null;
+  const versionOf = (studyId, version) => studies.get(studyId)?.versions.find((m) => m.version === version) ?? null;
+  const publicMap = (map) => structuredClone(map);
+
+  /** The candidates by share key, in candidate order: its places, label and role from the first. */
+  function groups(clean) {
+    const out = new Map();
+    for (const c of clean.candidates) {
+      const g = out.get(c.shareKey) ?? { shareKey: c.shareKey, label: c.label, role: c.role, nodes: [], layerKeys: [], first: c };
+      g.nodes.push(c.node);
+      g.layerKeys.push(c.layerKey);
+      out.set(c.shareKey, g);
+    }
+    return out;
+  }
+
+  /** _plan and _assemble: the readings a new version has, kept from `base` or read; `bulkGap` makes the unread ones gaps. */
+  function assemble(study, clean, base, bulkGap) {
+    const frames = new Set(clean.nodes.filter((n) => n.kind === 'frame').map((n) => n.id));
+    const previous = new Map((base?.readings ?? []).map((r) => [r.shareKey, r]));
+    const dropped = [];
+    let number = base?.nextReading ?? 1;
+    const readings = [];
+    const gs = groups(clean);
+    for (const [key, g] of gs) {
+      const old = previous.get(key);
+      const edgeOk = old && (old.kind !== 'edge' || frames.has(old.to));
+      const place = { shareKey: key, nodes: g.nodes, layerKeys: g.layerKeys, label: g.label, role: g.role };
+      const keep = old && ((old.by === 'designer' && edgeOk) || (old.by === 'model' && edgeOk && old.label === g.label && old.role === g.role));
+      if (old && old.by === 'designer' && !edgeOk) dropped.push({ id: old.id, shareKey: key, label: old.label, reason: `its target frame ${old.to} is no longer in the file` });
+      if (keep) {
+        readings.push({ ...place, id: old.id, kind: old.kind, to: old.to, by: old.by, reason: old.reason });
+        continue;
+      }
+      const got = bulkGap ? { kind: 'gap', reason: BULK_GAP_REASON } : study.read(g.first, clean.nodes);
+      if (!READING_KINDS.includes(got.kind) || (got.kind === 'edge' && !frames.has(got.to))) throw new Error(`The mock's reader read ${key} as ${repr(got)}, which is no reading of the flow.`);
+      readings.push({ ...place, id: `r${number++}`, kind: got.kind, to: got.kind === 'edge' ? got.to : null, by: bulkGap ? 'bulk_gap' : 'model', reason: got.reason ?? 'Read by the mock.' });
+    }
+    for (const [key, old] of previous) {
+      if (!gs.has(key) && old.by === 'designer') dropped.push({ id: old.id, shareKey: key, label: old.label, reason: 'its element is no longer in the file' });
+    }
+    return { readings, dropped, nextReading: number };
+  }
+
+  function write(studyId, clean, base, readings, extra) {
+    const study = studies.get(studyId);
+    const map = {
+      studyId, version: (base?.version ?? 0) + 1, baseVersion: base?.version ?? null, inputHash: inputHashOf(clean), docHash: clean.docHash,
+      nodes: clean.nodes.map(({ text, ...n }) => n), edges: clean.edges, readings: readings.readings, dropped: readings.dropped,
+      completedAt: new Date(clock()).toISOString(), model: extra.model, buildId: extra.buildId, nextReading: readings.nextReading,
+    };
+    study.versions.push(map);
+    return map;
+  }
+
+  const shown = (map) => {
+    const { nextReading, ...rest } = publicMap(map);
+    return rest;
+  };
+
+  /** POST /flow-map. */
+  function commit(studyId, body) {
+    const study = studies.get(studyId);
+    if (!study) throw new Refused(409, 'not_a_plugin_study', `Study ${studyId} is not a plugin-mode study (execution plugin): only the Figma panel's studies have a flow map.`);
+    const clean = cleanCommit(body);
+    const current = latest(studyId);
+    const hash = inputHashOf(clean);
+    if (current && current.inputHash === hash && !clean.rebuild && !clean.drawnOnly) return [200, { status: 'ready', map: shown(current) }];
+    if (clean.baseVersion !== (current?.version ?? null)) {
+      throw new Refused(409, 'flow_map_changed', `baseVersion ${clean.baseVersion} is not the current flow map version (${current?.version ?? null}); reload the map with GET /flow-map and commit again.`);
+    }
+    if (clean.drawnOnly) return [200, { status: 'ready', map: shown(write(studyId, clean, current, assemble(study, clean, current, true), { model: null, buildId: null })) }];
+    const buildId = `build-${inputHashOf({ nodes: [studyId], edges: [hash], candidates: [current?.version ?? null] })}`;
+    const held = study.builds.get(buildId);
+    if (held && held.status === 'failed') Object.assign(held, { status: 'building', polls: 0, error: null });
+    if (!held) study.builds.set(buildId, { buildId, status: 'building', polls: 0, clean, base: current, map: null, error: null });
+    return [202, { status: 'building', buildId }];
+  }
+
+  /** GET /flow-map/builds/<id>: building for `buildPolls` polls, then ready or failed. */
+  function build(studyId, buildId) {
+    const study = studies.get(studyId);
+    const b = study?.builds.get(buildId);
+    if (!b) throw new Refused(404, 'build_not_found', `Study ${studyId} has no flow map build ${buildId}.`);
+    const toRead = new Set(b.clean.candidates.map((c) => c.node)).size;
+    if (b.status === 'building') {
+      if (b.polls++ < study.buildPolls) return [200, { status: 'building', buildId, nodesRead: Math.min(b.polls, toRead), nodesToRead: toRead }];
+      const failure = study.buildFailures.shift();
+      if ((latest(studyId)?.version ?? null) !== (b.base?.version ?? null)) {
+        const now = latest(studyId).version;
+        b.status = 'failed';
+        b.error = { error: 'flow_map_changed', node: null, nodeName: null, reason: `version ${now} was written while this build ran`, message: 'The flow map changed while it was built; reload it and commit again.' };
+      } else if (failure) {
+        const node = b.clean.nodes.find((n) => n.id === failure.node) ?? b.clean.nodes[0];
+        b.status = 'failed';
+        b.error = { error: 'flow_map_unavailable', node: node.id, nodeName: node.name, reason: failure.reason, message: `Couldn't read the flow of '${node.name}': ${failure.reason}.` };
+      } else {
+        b.map = write(studyId, b.clean, b.base, assemble(study, b.clean, b.base, false), { model: 'mock:reader', buildId });
+        b.status = 'ready';
+      }
+    }
+    if (b.status === 'ready') return [200, { status: 'ready', buildId, map: shown(b.map) }];
+    return [200, { status: 'failed', buildId, ...b.error }];
+  }
+
+  /** GET /flow-map[?version=N]. */
+  function get(studyId, query) {
+    if (!studies.has(studyId)) throw new Refused(409, 'not_a_plugin_study', `Study ${studyId} is not a plugin-mode study (execution plugin): only the Figma panel's studies have a flow map.`);
+    const raw = query.get('version');
+    if (raw !== null && !(/^[0-9]+$/.test(raw) && Number(raw) >= 1)) throw invalidMap(`version must be a whole number from 1 (got ${repr(raw)}).`);
+    const map = raw === null ? latest(studyId) : versionOf(studyId, Number(raw));
+    if (!map) throw new Refused(404, 'flow_map_not_found', raw === null ? `Study ${studyId} has no flow map yet.` : `Study ${studyId} has no flow map version ${raw}.`);
+    return [200, { map: shown(map) }];
+  }
+
+  return { add, commit, build, get, latest, versionOf, studies };
+}
+
 function createTraceRuns({ clock, thinkingPolls }) {
   const runs = new Map();
   const studies = new Map();
+  const maps = createFlowMaps({ clock });
   const finalizing = new Set();
   /** Every turn post the mock received, and every request it refused, for the tests to read. */
   const posts = [];
@@ -607,16 +849,25 @@ function createTraceRuns({ clock, thinkingPolls }) {
     if (owned && studies.get(run.studyId)?.execution !== 'plugin') {
       throw badRequest(`run ${runId} is not a run of a plugin-mode study: only those are claimed with an owner.`);
     }
+    const asked = body.flowMapVersion ?? null;
+    if (asked !== null && !(Number.isInteger(asked) && asked >= 1)) throw badRequest(`flowMapVersion must be a version number or null (got ${repr(asked)}).`);
     // A repeat claim from the run's own panel, whose first answer it lost, gets the same briefing again.
     const engineOk = body.browser === undefined || body.browser === null || body.browser.engine === 'figma-trace';
     if (run.status === 'running' && !run.finalizing && run.owner !== null && body.owner === run.owner && engineOk) {
-      return [200, { ...structuredClone(run.briefing), claimedAt: run.claimedAt }];
+      return [200, { ...structuredClone(run.briefing), claimedAt: run.claimedAt, flowMapVersion: run.flowMapVersion }];
     }
     if (run.status !== 'queued') {
       throw new Refused(409, 'already_claimed', `run ${runId} is ${run.status}, not queued, so it cannot be claimed again. Another actor has it; take the next queued run of the study.`);
     }
-    Object.assign(run, { status: 'running', owner: body.owner ?? null, browser: body.browser ?? null, claimedAt: new Date(clock()).toISOString() });
-    return [200, { ...structuredClone(run.briefing), claimedAt: run.claimedAt }];
+    // A plugin-mode run plays the study's current flow map version, which its claim names.
+    const current = maps.latest(run.studyId)?.version ?? null;
+    if (owned && asked !== current) {
+      throw new Refused(409, 'flow_map_stale', current === null
+        ? `flow map version ${asked} is not current: study ${run.studyId} has no flow map, so claim with none.`
+        : `flow map version ${asked} is not current (${current}): commit the map again and claim with version ${current}.`);
+    }
+    Object.assign(run, { status: 'running', owner: body.owner ?? null, browser: body.browser ?? null, claimedAt: new Date(clock()).toISOString(), flowMapVersion: owned ? current : null });
+    return [200, { ...structuredClone(run.briefing), claimedAt: run.claimedAt, flowMapVersion: run.flowMapVersion }];
   }
 
   function postTurn(runId, body) {
@@ -692,9 +943,10 @@ function createTraceRuns({ clock, thinkingPolls }) {
 
   /** A plugin-mode study with its waves of runs: wave 1 is queued now, the rest come from next-wave. */
   /** A study with its waves of runs; `execution` 'remote' stands for a study no Figma panel runs. */
-  function addStudy({ studyId, goal = 'Connect a bank account', waves, execution = 'plugin', repeatPolicy = 'confirm' }) {
+  function addStudy({ studyId, goal = 'Connect a bank account', waves, execution = 'plugin', repeatPolicy = 'confirm', flowMap = {} }) {
     const study = { studyId, goal, waves, wave: 1, execution, repeatPolicy };
     studies.set(studyId, study);
+    if (execution === 'plugin') maps.add(studyId, flowMap);
     for (const spec of waves[0]) addRun(study, 1, spec);
     return study;
   }
@@ -756,8 +1008,15 @@ function createTraceRuns({ clock, thinkingPolls }) {
     const abortPath = /^\/api\/plugin\/runs\/([^/]+)\/abort$/.exec(path);
     const nextPath = /^\/api\/studies\/([^/]+)\/runs\/next$/.exec(path);
     const runsPath = /^\/api\/studies\/([^/]+)\/runs$/.exec(path);
+    const mapPath = /^\/api\/studies\/([^/]+)\/flow-map$/.exec(path);
+    const buildPath = /^\/api\/studies\/([^/]+)\/flow-map\/builds\/([^/]+)$/.exec(path);
     finishDebriefs();
     try {
+      if (mapPath && studies.has(decodeURIComponent(mapPath[1]))) {
+        if (method === 'POST') return maps.commit(decodeURIComponent(mapPath[1]), body);
+        if (method === 'GET') return maps.get(decodeURIComponent(mapPath[1]), request.query ?? new URLSearchParams());
+      }
+      if (buildPath && method === 'GET' && studies.has(decodeURIComponent(buildPath[1]))) return maps.build(decodeURIComponent(buildPath[1]), decodeURIComponent(buildPath[2]));
       if (claimPath && method === 'POST') return claim(decodeURIComponent(claimPath[1]), body);
       if (turnPath && method === 'POST') {
         // routes_plugin reads a turn body only up to its limit, as Flask's max_content_length does.
@@ -785,7 +1044,7 @@ function createTraceRuns({ clock, thinkingPolls }) {
     return null;
   }
 
-  return { handle, addStudy, release, runs, studies, posts, refusals };
+  return { handle, addStudy, release, runs, studies, posts, refusals, maps };
 }
 
 /** Serves a mock backend over HTTP on 127.0.0.1, on a free port unless given one. */
@@ -794,7 +1053,8 @@ export function serveMock(mock, { port = 0 } = {}) {
     const chunks = [];
     for await (const chunk of req) chunks.push(chunk);
     const buffer = Buffer.concat(chunks);
-    const path = new URL(req.url ?? '/', 'http://127.0.0.1').pathname;
+    const url = new URL(req.url ?? '/', 'http://127.0.0.1');
+    const path = url.pathname;
     // A turn body over the limit is refused unread, after the sign in check, as the backend does.
     const unread = req.method === 'POST' && /\/turn$/.test(path) && buffer.length > MAX_TURN_BODY_BYTES;
     let body = null;
@@ -807,7 +1067,7 @@ export function serveMock(mock, { port = 0 } = {}) {
         return;
       }
     }
-    const out = (await mock.handle(req.method, path, body, req.headers, { bytes: buffer.length })) ?? [404, { error: 'not_found', message: `${req.method} ${path} is not part of the mock.` }];
+    const out = (await mock.handle(req.method, path, body, req.headers, { bytes: buffer.length, query: url.searchParams })) ?? [404, { error: 'not_found', message: `${req.method} ${path} is not part of the mock.` }];
     res.writeHead(out[0], { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(out[1]));
   });

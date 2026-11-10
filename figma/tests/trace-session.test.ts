@@ -103,6 +103,7 @@ async function play(
     startFrameId: '1:2',
     resume: null,
     fileChanged: false,
+    map: null,
     ...options.run?.(main.doc),
   };
   let result: SessionResult | null = null;
@@ -315,7 +316,8 @@ describe('resuming a run this panel owns', () => {
       lastOutcome: { action: { type: 'click', element: 'e1' }, outcome: 'nothing_happened', target: 'Back (e1)' },
       timerEffects: [],
       loopFrames: [],
-      version: 1,
+      flowMapVersion: null,
+      version: 2,
     };
   }
 
@@ -363,7 +365,7 @@ describe('resuming a run this panel owns', () => {
     const wait = (b: TurnBody): Decision => (b.turn === 1 ? { action: { type: 'wait', seconds: 6 } } : DONE);
     const whole = await play(wait, { edit: waitLink });
     const afterWait = whole.saves[0] as SavedSession;
-    expect(afterWait).toMatchObject({ turn: 1, timerEffects: [{ type: 'left_prototype', detail: 'https://help.example.com/late' }], loopFrames: [], version: 1 });
+    expect(afterWait).toMatchObject({ turn: 1, timerEffects: [{ type: 'left_prototype', detail: 'https://help.example.com/late' }], loopFrames: [], flowMapVersion: null, version: 2 });
     const reopened = await play(wait, { main: await mainThread(waitLink), run: () => ({ resume: afterWait }) });
     expect(reopened.posted[0]!.last).toEqual(whole.posted[1]!.last);
   });
@@ -450,7 +452,8 @@ describe('when things go wrong', () => {
       lastOutcome: { action: { type: 'click', element: 'e1' }, outcome: 'opened_overlay', target: 'Help (e1)' },
       timerEffects: [],
       loopFrames: [],
-      version: 1,
+      flowMapVersion: null,
+      version: 2,
     };
     const { result, aborted, posted, call } = await play(() => DONE, { main, run: () => ({ resume }) });
     expect(aborted).toEqual([{ owner: 'p_7f3a', code: 'engine_error', detail: 'More than 20 overlays are open, more than a turn can carry.' }]);
@@ -503,7 +506,8 @@ describe('when things go wrong', () => {
       lastOutcome: { action: { type: 'click', element: billing.id }, outcome: 'navigated', target: `Billing (${billing.id})` },
       timerEffects: [],
       loopFrames: [],
-      version: 1,
+      flowMapVersion: null,
+      version: 2,
     };
     const server = backend((b) => (b.turn === 3 ? DONE : { action: null }));
     server.decisions.set(2, { action: { type: 'click', element: 'e2' } }); // "Connect a bank", decided before the panel closed
@@ -512,7 +516,7 @@ describe('when things go wrong', () => {
     });
     const time = clock();
     const result = await runSession(
-      { runId: 'r1', studyId: 's1', owner: 'p_7f3a', doc: main.doc, shareKey: null, startFrameId: '1:2', resume, fileChanged: false },
+      { runId: 'r1', studyId: 's1', owner: 'p_7f3a', doc: main.doc, shareKey: null, startFrameId: '1:2', resume, fileChanged: false, map: null },
       { bridge: main.bridge, api: server.api, now: time.now, sleep: time.sleep, onStatus: () => {}, watchFile: () => () => {} },
     );
     return { result, server };

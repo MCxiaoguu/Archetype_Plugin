@@ -103,20 +103,35 @@ prototype as the file is when the wave starts; when you edit the file while a
 test runs, the steps after the edit are flagged, so the report can tell them
 apart.
 
+**The flow map.** A wireframe is never fully wired, so before it claims any
+run (at launch, and before each later wave) the panel commits the prototype's
+flow map: every frame, its drawn connections, and every element that has no
+connection of its own but looks clickable. The backend reads each of those
+once, as a link to a frame the prototype has, a control that takes input, or
+a gap with no page behind it, and stores the map as a new version when the
+file changed. A persona's click that no drawn connection handles then plays
+that reading: it opens the frame, selects the control, or tells the persona
+there is no page behind it yet. A run plays the map version it was claimed
+on for its whole life. When the backend can't read a screen, the panel says
+which and why, with **Try again** and **Launch with drawn connections only**
+(every unread element a gap).
+
 ## Privacy: what leaves the file
 
 | Sent to Archetype | Never sent |
 | :-- | :-- |
 | The goal, the user description and the product line you type | Screens no persona reaches, other files |
-| The file and page names, the start and goal frame ids, and the names of up to 20 screens on the paths from start to goal | Comments, the layer tree, variable values, the reaction graph |
+| The file and page names, the start and goal frame ids, and the names of up to 20 screens on the paths from start to goal | Comments, the layer tree, variable values |
+| At launch and before each wave, the flow map: every frame's name, page, largest text and up to 1,500 characters of its visible text; the drawn connections (which layer leads where, on which trigger); and for every element without a connection that looks clickable, its label, role, box and the 200 characters of text nearest to it | |
 | During a test, for every step: a screenshot of the screen the persona sees, its name and step URL (page name and frame ids), its visible text, and the labels, roles and boxes of what can be clicked | Anything from your clipboard |
 | When a step's action can't be played: what it was, which can name a variable, a variable collection or a mode (for example "Can't set Bank linked, a boolean variable, to a string") | |
 | When a timer opens a link: the link's address, up to 200 characters | |
 | The share link, if you paste one | |
 
 The screenshots and text of each step go to Archetype and its AI model provider,
-which decides what the persona does next. The flow graph, the preflight, the
-prototype interpreter and mapping results back to frames all run inside Figma.
+which decides what the persona does next; the flow map goes to them too, once
+per change of the file, to read the unwired elements. The preflight, the
+prototype interpreter and mapping results back to frames run inside Figma.
 The plugin stores its settings, your Archetype token, a short history of tests
 and the progress of running tests (so a closed panel can resume them) in Figma's
 `clientStorage` on your machine, and one random id in the file's plugin data so
@@ -152,11 +167,12 @@ the history follows the file.
 | `src/main/document.ts` | Turns the current page into a plain `DocSnapshot`: top level frames (sections included), every layer with reactions mapped to its frame, destinations resolved, conditional actions flattened. |
 | `src/main/protoReader.ts` | Reads the prototype into a `ProtoDoc` for the trace engine: frames, every reaction, the variants a CHANGE_TO can show, the local variables. |
 | `src/main/renderer.ts` | Renders a trace state on scratch copies of the screens, measures every layer and exports the viewport as a JPEG, then removes the copies. |
-| `src/main/trace.ts` | Answers the panel's trace requests (read, render by doc hash, save and load sessions, the edit access check, cleanup) and reports edits to the prototype's frames. |
+| `src/main/trace.ts` | Answers the panel's trace requests (read, render by doc hash, the flow map's candidates, follow a persona, save and load sessions, the edit access check, cleanup) and reports edits to the prototype's frames. |
+| `src/main/flowMap.ts`, `measure.ts` | The flow map's nodes, drawn edges and candidates, read from the original nodes (each variant's layers and hidden ones included) and keyed as the renderer keys what it measures. |
 | `src/main/watch.ts`, `scratch.ts` | Telling the designer's edits from the renderer's own copies; the scratch marks, the containers renders hold, and the one queue reads and renders run through. |
-| `src/main/canvas.ts` | Show on canvas, pin and clear annotations. |
+| `src/main/canvas.ts` | Show on canvas, pin and clear annotations, and Follow persona (a viewport move, nothing else). |
 | `src/main/storage.ts` | Settings, token, per file history and draft, and the saved progress of running tests. |
-| `src/lib/proto/*` | The prototype engine, pure: navigation, overlays, scroll, pointer and keys, timers, variables and conditions, variants, what a persona can act on, step URLs. |
+| `src/lib/proto/*` | The prototype engine, pure: navigation, overlays, scroll, pointer and keys, timers, variables and conditions, variants, what a persona can act on, step URLs, and the flow map's readings where no reaction handles a click. |
 | `src/ui/trace/*` | The trace runner: the bridge to the main thread (one render at a time), a persona's session, the runner of a study's waves, and the launch gate and runner wiring. |
 | `src/lib/ids.ts`, `links.ts` | Colon and dash node ids, share link parsing, and the prototype URL. |
 | `src/lib/graph.ts`, `preflight.ts`, `names.ts` | The reaction graph, breadth first reachability, dead ends, broken links, generic names. |

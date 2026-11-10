@@ -16,12 +16,14 @@ export interface LiveRun {
 
 /**
  * Where the panel's runner is with a study (ui/trace/runner.ts). The last
- * four are where it stopped: the next wave didn't come (stuck), it failed,
- * it waits for the designer to open the test's page, or the study's saved
- * progress can't be read and the designer can forget it.
+ * five are where it stopped: the next wave didn't come (stuck), it failed,
+ * it waits for the designer to open the test's page, the study's saved
+ * progress can't be read and the designer can forget it, or the flow map
+ * couldn't be completed and the designer tries again or launches with the
+ * drawn connections only.
  */
 export interface RunnerStatus {
-  phase: 'running' | 'next_wave' | 'paused' | 'done' | 'stuck' | 'failed' | 'other_page' | 'progress_unreadable';
+  phase: 'running' | 'next_wave' | 'paused' | 'done' | 'stuck' | 'failed' | 'other_page' | 'progress_unreadable' | 'map_failed';
   notice: string | null;
 }
 
@@ -135,7 +137,7 @@ export function panelNotices(live: Readonly<Record<string, LiveRun>>, runner: Ru
  */
 export function panelRunText(rows: readonly PersonaRow[], runner: RunnerStatus | null, state: RunnerState): string {
   const one = rows.length === 1;
-  if (runner && (runner.phase === 'stuck' || runner.phase === 'failed' || runner.phase === 'other_page' || runner.phase === 'progress_unreadable')) return '';
+  if (runner && (runner.phase === 'stuck' || runner.phase === 'failed' || runner.phase === 'other_page' || runner.phase === 'progress_unreadable' || runner.phase === 'map_failed')) return '';
   if (rows.some((r) => r.here)) return one ? 'The persona is clicking through your prototype here in the panel.' : 'Personas are clicking through your prototype here in the panel.';
   if (runner?.phase === 'next_wave' && !one) return 'Starting the next round of tries.';
   if (runner?.phase === 'next_wave' || runner?.phase === 'done' || state === 'finishing') return 'All tries are in. Putting the results together.';

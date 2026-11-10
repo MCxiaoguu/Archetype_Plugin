@@ -301,6 +301,11 @@ export function createEffects(store: Store, deps: EffectsDeps = {}) {
     await trace.forgetProgress();
   }
 
+  /** The flow map couldn't be completed: read it again, or launch with the drawn connections only. */
+  function retryMap(drawnOnly: boolean) {
+    trace.afterMapFailed(drawnOnly);
+  }
+
   function newTest() {
     watchGen++;
     toMain({ type: 'forget-last' });
@@ -368,6 +373,7 @@ export function createEffects(store: Store, deps: EffectsDeps = {}) {
     closePanel,
     goToTestPage,
     forgetProgress,
+    retryMap,
     retry,
     openStudy,
     newTest,
