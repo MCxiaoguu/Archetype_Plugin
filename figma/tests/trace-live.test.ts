@@ -33,6 +33,8 @@ const UNEXPLAINED_ABORTS = new Set(['engine_error', 'panel_state_lost', 'brain_i
 /** A turn decided inside the request: about 4 s, 10 to 20 s with the debrief; a give-up review asks twice. */
 const POST_TURN_TIMEOUT_MS = 180_000;
 const MAX_SCREENSHOT_BYTES = 1.5 * 1024 * 1024;
+/** The trace brain's model, as the report and each run name it. */
+const ACTOR_MODEL = 'google:gemini-3-flash-preview';
 /** A finding that reads the prototype's sample greeting ("Welcome back, Mara") as a wrong user name. */
 const WRONG_NAME = /\bMara\b|\b(wrong|incorrect)\s+(user\s*)?name\b/i;
 
@@ -402,6 +404,23 @@ describe.skipIf(!LIVE.url)('a live trace study against the local backend', () =>
     }
   });
 
+  it('says in the report how the runs ran: inside the Figma panel, played by the trace brain', () => {
+    const honesty = report.honesty as Doc;
+    const browser = honesty.browser as Doc;
+    expect(browser.sentence).toBe('Scored runs ran inside the Figma panel (figma-trace 0.1.0), 1280x800.');
+    expect(browser.config).toEqual({ engine: 'figma-trace', version: '0.1.0', viewport: { width: 1280, height: 800 } });
+    expect(browser.profile).toBeNull();
+    expect((honesty.models as Doc).actor).toBe(ACTOR_MODEL);
+    for (const test of testDocs()) expect((test.test_meta as Doc).actor_model, test.test_id as string).toBe(ACTOR_MODEL);
+  });
+
+  it('builds the report without falling back on its cluster review', () => {
+    // A model that answered 504 is recorded in the log, not held against the run.
+    const fallbacks = ((report.honesty as Doc).models as Doc).reportFallbacks as string[];
+    log.reportFallbacks = fallbacks;
+    expect(fallbacks.filter((f) => f.startsWith('cluster review'))).toEqual([]);
+  });
+
   it('builds the report, counting every run that is not aborted', () => {
     const rows = report.runs as Array<{ runId: string; included: boolean; status: string }>;
     const scored = testDocs().filter((d) => d.status !== 'aborted').map((d) => d.test_id as string);
@@ -439,6 +458,21 @@ describe.skipIf(!LIVE.url)('a live trace study against the local backend', () =>
     }
     return words.filter((w) => w.text);
   }
+
+  it('gives each persona scenarios that name no frame', () => {
+    const named: Array<{ runId: string; scenario: unknown; names: string[] }> = [];
+    for (const run of runs.values()) {
+      const screens = run.turns.flatMap((t) => [t.visibleText, ...t.elements.map((e) => e.label)]).join('\n');
+      const { hidden } = hiddenFrameNames(fake, doc, screens);
+      const scenarios = ((run.briefing as unknown as { instructions: { scenarios?: unknown[] } } | null)?.instructions.scenarios ?? []);
+      expect(scenarios.length, run.runId).toBeGreaterThan(0);
+      for (const scenario of scenarios) {
+        const names = namesIn(JSON.stringify(scenario), hidden);
+        if (names.length) named.push({ runId: run.runId, scenario, names });
+      }
+    }
+    expect(named).toEqual([]);
+  });
 
   it('never has a persona name a frame its screens did not show it', () => {
     const mentions: Array<{ runId: string; where: string; names: string[]; text: string }> = [];
