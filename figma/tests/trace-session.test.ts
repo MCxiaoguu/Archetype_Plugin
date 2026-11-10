@@ -262,6 +262,14 @@ describe('what timers did', () => {
 });
 
 describe('flags', () => {
+  it("reports the page's scroll range from the frame as rendered, not as it was read", async () => {
+    const main = await mainThread();
+    // Something on the Dashboard grew it by 600 px since the read (a hug-height frame whose variant changed).
+    main.renders.change = (r) => ({ ...r, layers: r.layers.map((l) => (l.key === '1:2' ? { ...l, unclippedBox: { ...l.unclippedBox, height: l.unclippedBox.height + 600 } } : l)) });
+    const { posted } = await play(() => DONE, { main });
+    expect(posted[0]!.screen.scroll).toEqual({ x: 0, y: 0, maxX: 0, maxY: 600 });
+  });
+
   it('flags a missing font from the render, with the fonts, and tells the designer', async () => {
     const main = await mainThread();
     main.renders.notes = [{ missing_font: ['Inter Display', 'Inter Display'] }];

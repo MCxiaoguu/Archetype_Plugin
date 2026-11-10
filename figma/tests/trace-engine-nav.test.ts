@@ -570,6 +570,22 @@ describe('scroll', () => {
     expect(state.scroll).toEqual({});
   });
 
+  it('scrolls the page as far as the frame measures now: a CHANGE_TO grew a hug-height frame by 600 px', () => {
+    // Read at 800 tall it fit the 800 px viewport; a variant swap inside it grew it to 1400 since.
+    const doc = protoDoc([frame('H', 400, 800)]);
+    const s = start(doc, 'H');
+    expect(s.viewport).toEqual({ width: 400, height: 800 });
+    const once = act(doc, s, scroll('down'), [layer('H', null, [0, 0, 400, 1400])]);
+    expect(once.outcome).toBe('scrolled');
+    expect(once.state.scroll.H).toEqual({ x: 0, y: 600, areas: {} });
+    expect(act(doc, once.state, scroll('down'), [layer('H', null, [0, -600, 400, 1400])]).outcome).toBe('scroll_at_end');
+  });
+
+  it('does not scroll a page that measures shorter now than it was read', () => {
+    const doc = protoDoc([frame('H', 400, 2000)]);
+    expect(act(doc, start(doc, 'H'), scroll('down'), [layer('H', null, [0, 0, 400, 800])]).outcome).toBe('scroll_at_end');
+  });
+
   it('a page that overflows by 1.6 px scrolls by a whole 2 px range', () => {
     const doc = protoDoc([frame('S', 1280, 901.6)]);
     const { state, outcome } = act(doc, start(doc, 'S'), scroll('down'), [layer('S', null, [0, 0, 1280, 901.6])]);

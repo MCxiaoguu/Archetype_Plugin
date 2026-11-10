@@ -48,8 +48,19 @@ export function scrollRange(overflow: number): number {
   return Math.max(0, Math.round(overflow));
 }
 
-export function pageRange(frame: ProtoFrame, viewport: Size): ScrollRange {
-  return { maxX: scrollRange(frame.width - viewport.width), maxY: scrollRange(frame.height - viewport.height) };
+/**
+ * How far a page scrolls: by the frame's size as rendered now, the root
+ * layer's unclipped box, which a variant swap in a hug-height frame can have
+ * grown since the read. Only a frame about to show, not rendered yet, is
+ * measured by the size the read gave it (scrollOnShow).
+ */
+export function pageRange(size: { width: number; height: number }, viewport: Size): ScrollRange {
+  return { maxX: scrollRange(size.width - viewport.width), maxY: scrollRange(size.height - viewport.height) };
+}
+
+/** The page range of a measured root layer. */
+export function measuredPageRange(root: RawLayer, viewport: Size): ScrollRange {
+  return pageRange(root.unclippedBox, viewport);
 }
 
 function areaRange(area: ScrollArea): ScrollRange {
@@ -81,12 +92,14 @@ function setOffset(s: TraceState, scroller: Scroller, offset: ScrollOffset): voi
   }
 }
 
-function pageOf(s: TraceState, frames: Map<string, ProtoFrame>, rootKey: string): Scroller | null {
-  const frame = frames.get(rootKey);
+function pageOf(s: TraceState, frames: Map<string, ProtoFrame>, root: RawLayer): Scroller | null {
+  const rootKey = root.key;
+  if (!frames.has(rootKey)) return null;
   const { width, height } = s.viewport;
-  if (rootKey === s.frameId && frame) return { frameId: rootKey, areaKey: null, range: pageRange(frame, s.viewport), view: { x: 0, y: 0, width, height } };
+  const range = measuredPageRange(root, s.viewport);
+  if (rootKey === s.frameId) return { frameId: rootKey, areaKey: null, range, view: { x: 0, y: 0, width, height } };
   const overlay = s.overlays.find((o) => o.frameId === rootKey);
-  if (overlay && frame) return { frameId: rootKey, areaKey: null, range: pageRange(frame, s.viewport), view: { ...overlay.origin, width, height } };
+  if (overlay) return { frameId: rootKey, areaKey: null, range, view: { ...overlay.origin, width, height } };
   return null;
 }
 
@@ -105,7 +118,7 @@ function scrollersAround(index: LayerIndex, s: TraceState, frames: Map<string, P
       around.push({ scroller: { frameId, areaKey: layer.key, range: areaRange(layer.scroll), view: layer.unclippedBox }, via });
     }
     if (layer.parentKey === null) {
-      const page = pageOf(s, frames, layer.key);
+      const page = pageOf(s, frames, layer);
       if (page) around.push({ scroller: page, via });
     }
     via = layer;

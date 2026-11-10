@@ -19,7 +19,7 @@ import { apply, settle, start, type EngineEffect } from '../../lib/proto/engine'
 import { EngineError, type EngineErrorCode } from '../../lib/proto/errors';
 import type { Element, ElementTarget, ProtoDoc, RawLayer, TraceAction, TraceOutcome, TraceState } from '../../lib/proto/model';
 import { outcomeOf } from '../../lib/proto/outcome';
-import { pageOffset, pageRange } from '../../lib/proto/scroll';
+import { measuredPageRange, pageOffset } from '../../lib/proto/scroll';
 import { stepUrl } from '../../lib/proto/url';
 import type { Bridge } from './bridge';
 
@@ -364,7 +364,9 @@ export async function runSession(run: SessionRun, deps: SessionDeps): Promise<Se
     const frame = doc.frames.find((f) => f.id === state.frameId);
     if (!frame) throw new EngineError('invalid_doc', `The frame ${state.frameId} isn't in the prototype`);
     const offset = pageOffset(state, state.frameId);
-    const range = pageRange(frame, state.viewport);
+    const root = rendered.layers.find((l) => l.key === state.frameId && l.parentKey === null);
+    if (!root) throw new EngineError('invalid_layers', `The render measured no root layer for the frame ${state.frameId}`);
+    const range = measuredPageRange(root, state.viewport);
     const overlays = state.overlays.map((o) => o.frameId);
     const fonts = [...new Set(rendered.notes.flatMap((n) => n.missing_font))];
     if (fonts.length) notice(`A font isn't available here (${fonts.join(', ')}): its text shows as designed.`);
