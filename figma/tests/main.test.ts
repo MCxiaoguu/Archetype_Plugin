@@ -1,11 +1,16 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import fixtureJson from '../harness/fixtures/farside-proto.json';
 import type { StudyRecord, UiToMain } from '../src/lib/messages';
+import { start } from '../src/lib/proto/engine';
+import type { ProtoDoc, RawLayer } from '../src/lib/proto/model';
 import { runPreflight } from '../src/lib/preflight';
 import { clearPins, pinFindings, showNode } from '../src/main/canvas';
 import { createController } from '../src/main/controller';
 import { readDocument, reactionActions, selectedFrame, topFrameOf, topLevelFrames } from '../src/main/document';
+import { isScratch, recordScratchNode, SCRATCH_KEY, SCRATCH_VALUE, scratchNodeIds } from '../src/main/scratch';
 import * as store from '../src/main/storage';
-import { FakeNode, makeFigma } from './fake-figma';
+import { designerChanges } from '../src/main/watch';
+import { FakeNode, fakeFromFixture, makeFigma, type ProtoFixture } from './fake-figma';
 
 const rec = (id: string, at: number): StudyRecord => ({ studyId: id, title: id, startName: 'A', goalName: 'B', size: 'quick', launchedAt: at, status: 'running' });
 
@@ -273,5 +278,252 @@ describe('main thread controller', () => {
     expect(api.ui.postMessage.mock.lastCall?.[0]).toEqual({ type: 'selection', selection: null });
     const calls = api.ui.postMessage.mock.calls;
     expect(calls[calls.length - 2]?.[0].type).toBe('doc');
+  });
+});
+
+// --- The trace runner's requests and watchers ---------------------------------
+
+type Reply = { type: string; requestId?: string; result?: unknown; message?: string; frameIds?: string[] };
+
+/** The main thread over the Farside prototype fixture, with the panel's side of postMessage and storage. */
+function traceMain() {
+  const fake = fakeFromFixture(structuredClone(fixtureJson) as unknown as ProtoFixture);
+  const storage = new Map<string, unknown>();
+  const pageHandlers = new Map<string, Array<(event: unknown) => void>>();
+  for (const page of fake.pages as FakeNode[]) {
+    Object.assign(page, {
+      on: (_event: string, fn: (event: unknown) => void) => pageHandlers.set(page.id, [...(pageHandlers.get(page.id) ?? []), fn]),
+    });
+  }
+  const postMessage = vi.fn();
+  Object.assign(fake.api, {
+    ui: { postMessage, resize: vi.fn() },
+    notify: vi.fn(),
+    clientStorage: {
+      getAsync: vi.fn(async (k: string) => structuredClone(storage.get(k))),
+      setAsync: vi.fn(async (k: string, v: unknown) => void storage.set(k, structuredClone(v))),
+      deleteAsync: vi.fn(async (k: string) => void storage.delete(k)),
+    },
+  });
+  const controller = createController(fake.api, '0.1.0');
+  const posted = (): Reply[] => postMessage.mock.calls.map((c) => c[0] as Reply);
+  const ask = async (msg: Record<string, unknown>): Promise<Reply> => {
+    await controller.handle(msg as unknown as UiToMain);
+    const reply = posted().find((r) => r.requestId === msg.requestId);
+    if (!reply) throw new Error(`No reply to ${String(msg.requestId)}`);
+    return reply;
+  };
+  const fire = (pageId: string, nodeChanges: unknown[]) => (pageHandlers.get(pageId) ?? []).forEach((fn) => fn({ nodeChanges }));
+  return { ...fake, controller, ask, posted, postMessage, fire, pageHandlers };
+}
+
+const traceNode = (t: ReturnType<typeof traceMain>, id: string) => t.nodes.get(id) as FakeNode;
+
+describe('trace requests on the main thread', () => {
+  it('answers each of the five requests with its request id', async () => {
+    const t = traceMain();
+    const read = await t.ask({ type: 'trace-read', requestId: 'q1', importLibraryVariants: true });
+    expect(read).toMatchObject({ type: 'trace-result', requestId: 'q1' });
+    const doc = read.result as ProtoDoc;
+    expect(doc.frames.map((f) => f.id)).toContain('1:2');
+    const state = start(doc, '1:2');
+
+    const render = await t.ask({ type: 'trace-render', requestId: 'q2', doc, state });
+    expect(render).toMatchObject({ type: 'trace-result', requestId: 'q2' });
+    const drawn = render.result as { image: Uint8Array; layers: RawLayer[]; viewport: { width: number; height: number }; notes: unknown[] };
+    // The bytes cross the plugin boundary as a Uint8Array (structured clone keeps typed arrays).
+    expect(drawn.image).toBeInstanceOf(Uint8Array);
+    expect(drawn.image.length).toBeGreaterThan(0);
+    expect(drawn.layers.map((l) => l.key)).toContain('1:7');
+    expect(drawn.viewport).toEqual(state.viewport);
+
+    const session = { owner: 'p_7f3a', runId: 'r1', turn: 3, state, lastOutcome: { action: { type: 'click', element: 'e1' }, outcome: 'navigated', target: 'Billing (e1)' } };
+    expect(await t.ask({ type: 'trace-save', requestId: 'q3', studyId: 's1', runId: 'r1', session })).toEqual({ type: 'trace-result', requestId: 'q3', result: null });
+    expect(await t.ask({ type: 'trace-load', requestId: 'q4', studyId: 's1' })).toEqual({ type: 'trace-result', requestId: 'q4', result: { sessions: [session] } });
+    expect((await t.ask({ type: 'trace-load', requestId: 'q5', studyId: 's2' })).result).toEqual({ sessions: [] });
+    await t.ask({ type: 'trace-save', requestId: 'q6', studyId: 's1', runId: 'r1', session: null });
+    expect((await t.ask({ type: 'trace-load', requestId: 'q7', studyId: 's1' })).result).toEqual({ sessions: [] });
+
+    expect(await t.ask({ type: 'trace-scratch-check', requestId: 'q8' })).toEqual({ type: 'trace-result', requestId: 'q8', result: { ok: true, reason: null } });
+    // Neither the render nor the check leaves a container on the canvas.
+    expect((t.api.currentPage as unknown as FakeNode).children.filter((n) => isScratch(n as unknown as BaseNode))).toEqual([]);
+    expect(t.api.notify).not.toHaveBeenCalled();
+  });
+
+  it('keeps sessions per study and per file', async () => {
+    const t = traceMain();
+    const doc = (await t.ask({ type: 'trace-read', requestId: 'a', importLibraryVariants: false })).result as ProtoDoc;
+    const state = start(doc, '1:2');
+    const one = { owner: 'p_1', runId: 'r1', turn: 1, state, lastOutcome: null };
+    const two = { owner: 'p_1', runId: 'r2', turn: 4, state, lastOutcome: null };
+    await t.ask({ type: 'trace-save', requestId: 'b', studyId: 's1', runId: 'r1', session: one });
+    await t.ask({ type: 'trace-save', requestId: 'c', studyId: 's1', runId: 'r2', session: two });
+    expect((await t.ask({ type: 'trace-load', requestId: 'd', studyId: 's1' })).result).toEqual({ sessions: [one, two] });
+    const keys = (t.api.clientStorage.setAsync as unknown as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0] as string);
+    expect(new Set(keys).size).toBe(1);
+    expect(keys[0]).toMatch(/^archetype\.file\.[^.]+\.trace\.s1$/);
+  });
+
+  it('answers a malformed request with trace-error naming what is wrong, not an exception', async () => {
+    const t = traceMain();
+    const doc = (await t.ask({ type: 'trace-read', requestId: 'ok', importLibraryVariants: false })).result as ProtoDoc;
+    const state = start(doc, '1:2');
+    const cases: Array<[Record<string, unknown>, string]> = [
+      [{ type: 'trace-read', requestId: 'm1', importLibraryVariants: 'yes' }, 'importLibraryVariants'],
+      [{ type: 'trace-render', requestId: 'm2', doc: null, state }, 'doc'],
+      [{ type: 'trace-render', requestId: 'm3', doc, state: { ...state, frameId: 7 } }, 'state'],
+      [{ type: 'trace-render', requestId: 'm4', doc, state: { ...state, viewport: null } }, 'state'],
+      [{ type: 'trace-save', requestId: 'm5', studyId: 's1', runId: 'r1', session: { owner: 'p', runId: 'r2', turn: 1, state, lastOutcome: null } }, 'runId'],
+      [{ type: 'trace-save', requestId: 'm6', studyId: 's1', runId: 'r1', session: { owner: '', runId: 'r1', turn: 1, state, lastOutcome: null } }, 'owner'],
+      [{ type: 'trace-save', requestId: 'm7', studyId: 's1', runId: 'r1', session: { owner: 'p', runId: 'r1', turn: -1, state, lastOutcome: null } }, 'turn'],
+      [{ type: 'trace-save', requestId: 'm8', studyId: 's1', runId: 'r1', session: { owner: 'p', runId: 'r1', turn: 1, state: {}, lastOutcome: null } }, 'state'],
+      [{ type: 'trace-save', requestId: 'm9', studyId: 's1', runId: 'r1', session: { owner: 'p', runId: 'r1', turn: 1, state, lastOutcome: 'clicked' } }, 'lastOutcome'],
+      [{ type: 'trace-save', requestId: 'm10', studyId: '', runId: 'r1', session: null }, 'study'],
+      [{ type: 'trace-save', requestId: 'm11', studyId: 's1', session: null }, 'run'],
+      [{ type: 'trace-load', requestId: 'm12' }, 'study'],
+    ];
+    for (const [msg, words] of cases) {
+      const reply = await t.ask(msg);
+      expect(reply, String(msg.requestId)).toMatchObject({ type: 'trace-error', requestId: msg.requestId });
+      expect(reply.message, String(msg.requestId)).toContain(words);
+    }
+    expect(t.api.notify).not.toHaveBeenCalled();
+  });
+
+  it('answers a render that fails with its reason', async () => {
+    const t = traceMain();
+    const doc = (await t.ask({ type: 'trace-read', requestId: 'r', importLibraryVariants: false })).result as ProtoDoc;
+    t.world.exportFails = 'throw';
+    expect(await t.ask({ type: 'trace-render', requestId: 'x', doc, state: start(doc, '1:2') })).toEqual({ type: 'trace-error', requestId: 'x', message: 'Export failed' });
+  });
+
+  it('refuses a trace request it cannot answer, loudly', async () => {
+    const t = traceMain();
+    await expect(t.controller.handle({ type: 'trace-read', importLibraryVariants: true } as unknown as UiToMain)).rejects.toThrow(/request id/);
+    expect(t.posted()).toEqual([]);
+  });
+
+  it('fails the scratch check where nodes cannot be made, as in a view only file', async () => {
+    const t = traceMain();
+    t.api.createFrame = vi.fn(() => {
+      throw new Error('Cannot create nodes in a read-only document');
+    }) as unknown as typeof t.api.createFrame;
+    expect(await t.ask({ type: 'trace-scratch-check', requestId: 'v1' })).toEqual({
+      type: 'trace-result',
+      requestId: 'v1',
+      result: { ok: false, reason: 'Duplicate to your drafts to test' },
+    });
+  });
+
+  it('tells the panel when a frame of the ProtoDoc changes, and nothing else', async () => {
+    const t = traceMain();
+    const doc = (await t.ask({ type: 'trace-read', requestId: 'r', importLibraryVariants: false })).result as ProtoDoc;
+    t.postMessage.mockClear();
+    const changes = () => t.posted().filter((m) => m.type === 'trace-file-changed');
+
+    t.fire('0:1', [{ type: 'PROPERTY_CHANGE', node: traceNode(t, '1:7'), properties: ['characters'] }]);
+    expect(changes()).toEqual([{ type: 'trace-file-changed', frameIds: ['1:2'] }]);
+    t.postMessage.mockClear();
+
+    // A frame inside a section, and a whole frame removed.
+    const gone = { id: '3:3', type: 'FRAME', removed: true };
+    t.fire('0:1', [{ type: 'PROPERTY_CHANGE', node: traceNode(t, '2:70'), properties: ['reactions'] }, { type: 'DELETE', node: gone }]);
+    expect(changes()).toEqual([{ type: 'trace-file-changed', frameIds: ['2:20', '3:3'] }]);
+    t.postMessage.mockClear();
+
+    // Not a ProtoDoc frame: a sticky note on the canvas, a layer removed from somewhere unknown.
+    t.fire('0:1', [{ type: 'PROPERTY_CHANGE', node: traceNode(t, '6:9'), properties: ['characters'] }, { type: 'DELETE', node: { id: '99:1', type: 'TEXT', removed: true } }]);
+    // A render's own copies, while their container lives and after it is gone.
+    const render = t.controller.handle({ type: 'trace-render', requestId: 'rr', doc, state: start(doc, '1:2') } as unknown as UiToMain);
+    await render;
+    const ids = [...scratchNodeIds()];
+    const container = ids[ids.length - 1] as string;
+    t.fire('0:1', [{ type: 'CREATE', node: { id: container, type: 'FRAME', removed: true } }, { type: 'DELETE', node: { id: container, type: 'FRAME', removed: true } }]);
+    expect(changes()).toEqual([]);
+    expect(doc.frames.length).toBeGreaterThan(1);
+  });
+});
+
+describe('deleted prototype layers', () => {
+  it('flag a file change by id, since a removed node has no parent to trace', async () => {
+    const t = traceMain();
+    const doc = (await t.ask({ type: 'trace-read', requestId: 'r', importLibraryVariants: true })).result as ProtoDoc;
+    const changes = () => t.posted().filter((m) => m.type === 'trace-file-changed');
+    const deleted = (id: string, type = 'TEXT') => ({ type: 'DELETE', node: { id, type, removed: true } });
+    t.postMessage.mockClear();
+
+    // A layer with reactions, inside the Dashboard: the button the persona was about to press.
+    expect(doc.reactions['1:7']).toBeDefined();
+    t.fire('0:1', [deleted('1:7')]);
+    expect(changes()).toEqual([{ type: 'trace-file-changed', frameIds: ['1:2'] }]);
+    t.postMessage.mockClear();
+
+    // A layer without reactions is known once a render measured it.
+    t.fire('0:1', [deleted('1:5')]);
+    expect(changes()).toEqual([]);
+    await t.ask({ type: 'trace-render', requestId: 'p', doc, state: start(doc, '1:2') });
+    t.postMessage.mockClear();
+    t.fire('0:1', [deleted('1:5')]);
+    expect(changes()).toEqual([{ type: 'trace-file-changed', frameIds: ['1:2'] }]);
+    t.postMessage.mockClear();
+
+    // A variant a CHANGE_TO shows names the frame its instance is in.
+    const [, set] = Object.entries(doc.variantSets)[0] as [string, ProtoDoc['variantSets'][string]];
+    t.fire('0:1', [deleted(set.variants[0]!.id, 'COMPONENT')]);
+    expect(changes()).toEqual([{ type: 'trace-file-changed', frameIds: [set.frameId] }]);
+    t.postMessage.mockClear();
+
+    // Nodes the prototype never referenced.
+    t.fire('0:1', [deleted('6:9'), deleted('99:1')]);
+    expect(changes()).toEqual([]);
+  });
+});
+
+describe('telling the renderer\'s changes from the designer\'s', () => {
+  function world() {
+    const fake = fakeFromFixture(structuredClone(fixtureJson) as unknown as ProtoFixture);
+    const container = fake.api.createFrame() as unknown as FakeNode;
+    container.setPluginData(SCRATCH_KEY, SCRATCH_VALUE);
+    recordScratchNode(container.id);
+    return { fake, container };
+  }
+
+  it('drops every change inside a scratch container, while it lives and once it is gone', () => {
+    const { fake, container } = world();
+    const copy = (fake.nodes.get('1:2') as FakeNode).clone();
+    container.appendChild(copy);
+    const inner = copy.children[0] as FakeNode;
+    const alive = [
+      { type: 'CREATE', node: container },
+      { type: 'CREATE', node: copy },
+      { type: 'PROPERTY_CHANGE', node: inner, properties: ['x'] },
+    ];
+    expect(designerChanges(alive as unknown as NodeChange[])).toEqual([]);
+    container.remove();
+    // A removed node's parent can't be read: the layers seen inside the container are known by id.
+    const removed = [container, copy, inner].map((n) => ({ type: 'DELETE', node: { id: n.id, type: n.type, removed: true } }));
+    expect(designerChanges(removed as unknown as NodeChange[])).toEqual([]);
+  });
+
+  it('drops a node created and removed before its changes arrive, which changed nothing', () => {
+    const { fake, container } = world();
+    const copy = (fake.nodes.get('2:10') as FakeNode).clone();
+    container.appendChild(copy);
+    container.remove();
+    const late = [
+      { type: 'CREATE', node: { id: container.id, type: 'FRAME', removed: true } },
+      { type: 'CREATE', node: { id: copy.id, type: 'FRAME', removed: true } },
+      { type: 'DELETE', node: { id: copy.id, type: 'FRAME', removed: true } },
+      { type: 'DELETE', node: { id: container.id, type: 'FRAME', removed: true } },
+    ];
+    expect(designerChanges(late as unknown as NodeChange[])).toEqual([]);
+  });
+
+  it('keeps the designer\'s changes', () => {
+    const { fake } = world();
+    const edit = { type: 'PROPERTY_CHANGE', node: fake.nodes.get('1:7'), properties: ['reactions'] };
+    const deleted = { type: 'DELETE', node: { id: '1:10', type: 'TEXT', removed: true } };
+    const made = { type: 'CREATE', node: fake.nodes.get('1:5') };
+    expect(designerChanges([edit, deleted, made] as unknown as NodeChange[])).toEqual([edit, deleted, made]);
   });
 });

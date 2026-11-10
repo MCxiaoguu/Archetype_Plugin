@@ -3,6 +3,8 @@
  * place with network access) and knows nothing about Figma.
  */
 
+import type { Element, TraceAction, TraceOutcome } from './proto/model';
+
 /**
  * The error bodies the panel meets: the studies and plugin routes answer
  * `{error, message}` (error is a slug); framework errors are RFC 9457
@@ -18,6 +20,8 @@ export interface ApiErrorBody {
   error_description?: string;
   request_id?: string;
   fields?: Record<string, string>;
+  /** On 409 turn_out_of_order: the turn the run takes next. */
+  expected?: number;
 }
 
 function errorCode(body: ApiErrorBody | null): string | null {
@@ -37,14 +41,22 @@ export class ApiError extends Error {
   readonly code: string;
   readonly requestId: string | null;
   readonly fields: Record<string, string> | null;
+  /** Set on 409 turn_out_of_order: the turn the run takes next. */
+  readonly expected: number | null;
 
-  constructor(status: number, code: string, message: string, extra: { requestId?: string | null; fields?: Record<string, string> | null } = {}) {
+  constructor(
+    status: number,
+    code: string,
+    message: string,
+    extra: { requestId?: string | null; fields?: Record<string, string> | null; expected?: number | null } = {},
+  ) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
     this.code = code;
     this.requestId = extra.requestId ?? null;
     this.fields = extra.fields ?? null;
+    this.expected = extra.expected ?? null;
   }
 }
 
@@ -87,6 +99,12 @@ const TRANSIENT_STATUS = new Set([502, 503, 504]);
 export const DEFAULT_TIMEOUT_MS = 30_000;
 /** Building personas can take about 90 s on the backend. */
 export const ARCHETYPE_TIMEOUT_MS = 180_000;
+/**
+ * A turn post answers at once behind a Celery worker, but a backend that
+ * decides the turn inside the request (the local live server) takes the
+ * model call: about 4 s, 10 to 20 s on a final turn with its debrief.
+ */
+export const TURN_TIMEOUT_MS = 60_000;
 
 export function normaliseBase(url: string): string {
   return url.trim().replace(/\/+$/, '').replace(/\/api$/, '');
@@ -180,6 +198,7 @@ export class ApiClient {
       throw new ApiError(res.status, errorCode(errBody) ?? `http_${res.status}`, friendlyMessage(res.status, errBody, `Request failed (${res.status}).`), {
         requestId: errBody?.request_id ?? null,
         fields: errBody?.fields ?? null,
+        expected: typeof errBody?.expected === 'number' ? errBody.expected : null,
       });
     }
     return data as T;
@@ -217,6 +236,38 @@ export class ApiClient {
 
   getReport<T = unknown>(id: string): Promise<T> {
     return this.request<T>('GET', `/api/studies/${encodeURIComponent(id)}/report`, undefined, { timeoutMs: 90_000 });
+  }
+
+  /** The next wave of runs, or done. 409 wave_in_progress while runs are still open or finalizing. */
+  nextWave(id: string): Promise<NextWave> {
+    return this.request<NextWave>('POST', `/api/studies/${encodeURIComponent(id)}/runs/next`, {}, { timeoutMs: 60_000 });
+  }
+
+  // Trace runs: the panel runs a plugin-mode study's personas itself
+
+  /** 409 already_claimed when another actor has the run. */
+  claimRun(runId: string, body: ClaimBody): Promise<RunBriefing> {
+    return this.request<RunBriefing>('POST', `/api/plugin/runs/${encodeURIComponent(runId)}/claim`, body);
+  }
+
+  /**
+   * Always 202: `{turn, status: "thinking"}` for a new turn, or the stored
+   * record of a re-posted one. 409 turn_out_of_order (with `expected`),
+   * not_owner or run_ended.
+   */
+  postTurn(runId: string, body: TurnBody, options: { timeoutMs?: number } = {}): Promise<TurnView> {
+    return this.request<TurnView>('POST', `/api/plugin/runs/${encodeURIComponent(runId)}/turn`, body, {
+      timeoutMs: options.timeoutMs ?? TURN_TIMEOUT_MS,
+    });
+  }
+
+  getTurn(runId: string, turn: number): Promise<TurnView> {
+    return this.request<TurnView>('GET', `/api/plugin/runs/${encodeURIComponent(runId)}/turn/${turn}`);
+  }
+
+  /** A failure the panel detected. 409 run_ended when the run is over or finalizing. */
+  abortRun(runId: string, body: AbortBody): Promise<AbortResult> {
+    return this.request<AbortResult>('POST', `/api/plugin/runs/${encodeURIComponent(runId)}/abort`, body);
   }
 
   // Device flow (no bearer token)
@@ -323,4 +374,137 @@ export interface StudyRuns {
   status: StudyStatusValue;
   currentWave?: number;
   runs: RunRowApi[];
+}
+
+export interface WaveRun {
+  runId: string;
+  archetypeId: string;
+  archetypeName: string;
+  repeatIndex: number;
+}
+
+/** 200 with `done` when the study needs no more runs, 201 with the new wave's runs. */
+export type NextWave =
+  | { studyId: string; done: true; reason: string; wave: number }
+  | { studyId: string; done?: undefined; wave: number; created: boolean; runs: WaveRun[] };
+
+// Trace runs (the backend's services/trace_turn_service.py)
+
+export interface TraceBrowser {
+  engine: 'figma-trace';
+  version: string;
+  viewport: [width: number, height: number];
+}
+
+export interface ClaimBody {
+  browser: TraceBrowser;
+  /** This panel's id; every turn and abort of the run must carry it. */
+  owner: string;
+}
+
+/** The claim's briefing (only the fields the panel uses). */
+export interface RunBriefing {
+  runId: string;
+  sessionId: string;
+  claimedAt: string;
+  brief: string;
+  persona: { name: string };
+  instructions: { targetUrl: string; goal: string };
+}
+
+export type TurnFlag = 'file_changed' | 'timer_loop' | 'missing_font';
+
+/** What a timer fired during settle or wait that the outcome does not say. */
+export interface TimerEffect {
+  type: 'left_prototype' | 'unsupported';
+  detail: string;
+}
+
+/** What the action turn n-1 answered did, as the engine saw it. */
+export interface TurnLast {
+  action: TraceAction;
+  outcome: TraceOutcome;
+  /** The element's label and id, such as "Continue (e4)"; null when the action had no element. */
+  target: string | null;
+  /** Required with the unsupported outcome, and only then: what did nothing, at most 200 characters. */
+  unsupported?: string;
+  /** At most 10. */
+  timer_effects?: TimerEffect[];
+}
+
+export interface TurnScreen {
+  url: string;
+  title: string;
+  frameId: string;
+  overlays: string[];
+  viewport: [width: number, height: number];
+  scroll: { x: number; y: number; maxX: number; maxY: number };
+}
+
+export interface TurnBody {
+  owner: string;
+  turn: number;
+  screen: TurnScreen;
+  /** The viewport as a base64 JPEG, at most 1.5 MiB decoded. */
+  screenshot_b64: string;
+  /** At most 80, ids unique in the turn. */
+  elements: Element[];
+  visible_text_excerpt: string;
+  /** Null on turn 1, required after it. */
+  last: TurnLast | null;
+  /** Required, [] when nothing applies. */
+  flags: TurnFlag[];
+  /** Each detail only with its flag in `flags`. */
+  flag_details?: { timer_loop?: { frames: string[] }; missing_font?: { fonts: string[] } };
+  elapsed_s: number;
+  client_ts: string;
+}
+
+export interface TurnState {
+  seq: number;
+  maxSteps: number;
+  unproductive: number;
+  maxUnproductiveSteps: number;
+  progress: number;
+  sentimentTrend: 'falling' | 'steady' | 'rising';
+  reviewGiveUp: boolean;
+  ended: boolean;
+  endedReason: string | null;
+}
+
+/** How the run ends: finalizing while the debrief is made, then its final status. */
+export interface TurnEnded {
+  status: 'finalizing' | 'completed' | 'abandoned' | 'aborted';
+  reason: string | null;
+}
+
+/** A turn as the poll sees it. Once `ended` is set the session stops and never aborts. */
+export type TurnView =
+  | { turn: number; status: 'thinking' }
+  /** `action` is null when patience ended the run on the step before. */
+  | { turn: number; status: 'ready'; action: TraceAction | null; state: TurnState; ended: TurnEnded | null }
+  | { turn: number; status: 'failed'; error: { code: string; message: string }; ended: TurnEnded };
+
+/** The abort codes the panel may send (the backend's own finalize_failed is not one). */
+export type AbortCode =
+  | 'render_failed'
+  | 'turn_timeout'
+  | 'panel_state_lost'
+  | 'file_changed'
+  | 'brain_invalid_action'
+  | 'model_unavailable'
+  | 'debrief_invalid'
+  | 'engine_error';
+
+export interface AbortBody {
+  owner: string;
+  code: AbortCode;
+  /** What went wrong, in a sentence; required. */
+  detail: string;
+}
+
+export interface AbortResult {
+  runId: string;
+  status: 'aborted';
+  abortReason: AbortCode;
 }

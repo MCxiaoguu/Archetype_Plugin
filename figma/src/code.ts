@@ -1,5 +1,6 @@
 import type { UiToMain } from './lib/messages';
 import { createController } from './main/controller';
+import { designerChanges } from './main/watch';
 
 declare const __PLUGIN_VERSION__: string;
 
@@ -18,6 +19,8 @@ figma.ui.onmessage = (msg: UiToMain) => {
 };
 
 figma.on('selectionchange', () => controller.pushSelection());
+// A container a crash left behind would stay on the canvas and in the designer's undo history.
+figma.on('close', () => controller.removeLeftovers());
 
 // Keep the flow graph fresh while the designer edits connections or names.
 let timer: ReturnType<typeof setTimeout> | null = null;
@@ -32,7 +35,8 @@ function scheduleRefresh() {
 
 function watchPage(page: PageNode) {
   page.on('nodechange', (event) => {
-    const relevant = event.nodeChanges.some(
+    // A trace render's scratch container and copies are not the designer's flow.
+    const relevant = designerChanges(event.nodeChanges).some(
       (c) => c.type === 'CREATE' || c.type === 'DELETE' || (c.type === 'PROPERTY_CHANGE' && c.properties.some((p) => p === 'reactions' || p === 'name' || p === 'parent')),
     );
     if (relevant) scheduleRefresh();
