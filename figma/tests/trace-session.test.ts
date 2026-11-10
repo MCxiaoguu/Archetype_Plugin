@@ -6,7 +6,7 @@ import { apply, start } from '../src/lib/proto/engine';
 import { EngineError, type EngineErrorCode } from '../src/lib/proto/errors';
 import type { ProtoDoc, TraceAction, TraceState } from '../src/lib/proto/model';
 import { NOTICE, runSession, type SessionResult, type SessionRun, type SessionStatus } from '../src/ui/trace/session';
-import { BridgeError } from '../src/ui/trace/bridge';
+import { BridgeError, createBridge, type TraceReplyMessage } from '../src/ui/trace/bridge';
 import type { FakeNode } from './fake-figma';
 import { clock, click, DONE, farside, lastOf, mainThread, type Decision, type Fake } from './trace-fakes';
 
@@ -26,6 +26,7 @@ vi.mock('../src/lib/proto/engine', async (importOriginal) => {
 
 afterEach(() => {
   hooks.applyError = null;
+  vi.useRealTimers();
 });
 
 // --- The backend: turns answered by a scripted brain --------------------------
@@ -373,6 +374,35 @@ describe('resuming a run this panel owns', () => {
 const offline = () => new ApiError(0, 'network', 'Could not reach Archetype.');
 
 describe('when things go wrong', () => {
+  it('aborts with render_failed when Figma never answers a render, once 2 minutes passed, never acting on silently', async () => {
+    vi.useFakeTimers();
+    const main = await mainThread();
+    // The main thread takes every request but never answers a render.
+    const handlers = new Set<(msg: TraceReplyMessage) => void>();
+    const renders: string[] = [];
+    const bridge = createBridge({
+      send: (msg) => {
+        if (msg.type === 'trace-render') renders.push(msg.requestId);
+        else queueMicrotask(() => handlers.forEach((h) => h({ type: 'trace-result', requestId: msg.requestId, result: null })));
+      },
+      listen: (handler) => {
+        handlers.add(handler);
+        return () => void handlers.delete(handler);
+      },
+    });
+    const playing = play(() => DONE, { main: { ...main, bridge: { call: bridge.call, close: vi.fn(bridge.close) } } });
+    await vi.advanceTimersByTimeAsync(119_999);
+    expect(renders).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    const { aborted, result, posted } = await playing;
+    vi.useRealTimers();
+    expect(aborted).toEqual([{ owner: 'p_7f3a', code: 'render_failed', detail: "Figma hasn't answered a render for 2 minutes; its main thread may be stuck." }]);
+    expect(result).toMatchObject({ stop: 'aborted', ended: { status: 'aborted', reason: 'render_failed' } });
+    expect(posted).toEqual([]);
+    // The retry waited behind the unanswered render, and was never sent.
+    expect(renders).toHaveLength(1);
+  });
+
   it('retries a render once, and aborts with render_failed when it fails twice', async () => {
     const once = await mainThread();
     once.renders.failures = 1;

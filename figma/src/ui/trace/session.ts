@@ -21,7 +21,7 @@ import type { Element, ElementTarget, ProtoDoc, RawLayer, TraceAction, TraceOutc
 import { outcomeOf } from '../../lib/proto/outcome';
 import { measuredPageRange, pageOffset } from '../../lib/proto/scroll';
 import { stepUrl } from '../../lib/proto/url';
-import type { Bridge } from './bridge';
+import { RenderStuck, type Bridge } from './bridge';
 
 /** Polls start at 1 s and back off to 3 s (spec, Data flow 6). */
 export const POLL_FIRST_MS = 1_000;
@@ -325,7 +325,8 @@ export async function runSession(run: SessionRun, deps: SessionDeps): Promise<Se
    * aborts with both reasons. The bridge sends renders one at a time and
    * times each from when it is sent, so the time a render waits behind
    * other sessions' renders doesn't count; a retry after a timeout waits
-   * until the main thread answered the first.
+   * until the main thread answered the first, or until the bridge gives up
+   * on it two minutes after it was sent (RenderStuck), which aborts the run.
    */
   async function render(): Promise<TraceRenderReply> {
     let first: unknown;
@@ -334,11 +335,14 @@ export async function runSession(run: SessionRun, deps: SessionDeps): Promise<Se
     } catch (err) {
       // A bridge the closing panel shut: no retry.
       checkCancel();
+      // A main thread stuck on an earlier render won't answer a retry either.
+      if (err instanceof RenderStuck) throw new Abort('render_failed', err.message);
       first = err;
     }
     try {
       return await bridge.call('trace-render', { docHash: doc.docHash, state });
     } catch (second) {
+      if (second instanceof RenderStuck) throw new Abort('render_failed', second.message);
       const [a, b] = [messageOf(first), messageOf(second)];
       throw new Abort('render_failed', a === b ? b : `${b} (the first try: ${a})`);
     }

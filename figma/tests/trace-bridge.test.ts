@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   BridgeError,
   BridgeTimeout,
+  RenderStuck,
   createBridge,
   panelTransport,
   type BridgeTransport,
@@ -199,6 +200,47 @@ describe('renders through the bridge', () => {
     await vi.advanceTimersByTimeAsync(29_999);
     main.reply({ type: 'trace-result', requestId: renderIds(main)[1]!, result: { image: new Uint8Array([1]), layers: [], viewport: { width: 1, height: 1 }, notes: [] } });
     await expect(retry).resolves.toMatchObject({ viewport: { width: 1, height: 1 } });
+  });
+
+  it('gives up on a render Figma never answers 2 minutes after it was sent, rejecting the renders queued behind it', async () => {
+    vi.useFakeTimers();
+    const main = fakeMain();
+    const bridge = createBridge(main.transport);
+    const first = render(bridge, 1).catch((e: unknown) => e);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(await first).toBeInstanceOf(BridgeTimeout);
+    const queued = [render(bridge, 1).catch((e: unknown) => e), render(bridge, 2).catch((e: unknown) => e)];
+    await vi.advanceTimersByTimeAsync(89_999);
+    expect(renderIds(main)).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    for (const err of await Promise.all(queued)) {
+      expect(err).toBeInstanceOf(RenderStuck);
+      expect(err).toMatchObject({ message: "Figma hasn't answered a render for 2 minutes; its main thread may be stuck." });
+    }
+    // The slot is free: a render after that is sent, and the stuck one's late answer changes nothing.
+    const later = render(bridge, 3);
+    expect(renderIds(main)).toHaveLength(2);
+    main.reply({ type: 'trace-error', requestId: renderIds(main)[0]!, message: 'Export failed' });
+    main.reply({ type: 'trace-result', requestId: renderIds(main)[1]!, result: { image: new Uint8Array([1]), layers: [], viewport: { width: 1, height: 1 }, notes: [] } });
+    await expect(later).resolves.toMatchObject({ viewport: { width: 1, height: 1 } });
+  });
+
+  it('keeps no ceiling on a render that was answered', async () => {
+    vi.useFakeTimers();
+    const main = fakeMain();
+    const bridge = createBridge(main.transport);
+    const first = render(bridge, 1);
+    main.reply({ type: 'trace-result', requestId: renderIds(main)[0]!, result: { image: new Uint8Array([1]), layers: [], viewport: { width: 1, height: 1 }, notes: [] } });
+    await first;
+    const second = render(bridge, 2).catch((e: unknown) => e);
+    await vi.advanceTimersByTimeAsync(90_000);
+    // The second timed out on its own 30 s, and its ceiling counts from when it was sent, not from the first.
+    expect(await second).toBeInstanceOf(BridgeTimeout);
+    const third = render(bridge, 3).catch((e: unknown) => e);
+    await vi.advanceTimersByTimeAsync(29_999);
+    expect(renderIds(main)).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await third).toBeInstanceOf(RenderStuck);
   });
 
   it('rejects the queued renders too when it closes', async () => {

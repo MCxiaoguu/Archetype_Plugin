@@ -38,6 +38,8 @@ export type {
 } from '../../lib/messages';
 
 export const BRIDGE_TIMEOUT_MS = 30_000;
+/** How long a render that timed out keeps its place, from when it was sent: past that, Figma is taken to be stuck. */
+export const RENDER_CEILING_MS = 120_000;
 
 export interface BridgeTransport {
   send(message: TraceRequestMessage): void;
@@ -94,6 +96,14 @@ export class BridgeTimeout extends Error {
   }
 }
 
+/** Figma left a render unanswered past RENDER_CEILING_MS: the renders queued behind it are refused with this. */
+export class RenderStuck extends Error {
+  constructor() {
+    super("Figma hasn't answered a render for 2 minutes; its main thread may be stuck.");
+    this.name = 'RenderStuck';
+  }
+}
+
 // --- The bridge --------------------------------------------------------
 
 export interface Bridge {
@@ -114,7 +124,9 @@ interface Waiting {
  * renders one state at a time anyway, so a render waits here, not there,
  * and its timeout counts from when it is sent, measuring the render alone.
  * A render that timed out keeps its place until its answer comes, so no
- * other render (its retry least of all) runs beside it.
+ * other render (its retry least of all) runs beside it, but only until
+ * RENDER_CEILING_MS after it was sent: then the renders queued behind it
+ * are refused with RenderStuck, and the place is free again.
  */
 export function createBridge(transport: BridgeTransport): Bridge {
   // Unique across bridges and panel reloads: a reply meant for another one never matches.
@@ -122,15 +134,23 @@ export function createBridge(transport: BridgeTransport): Bridge {
   let next = 0;
   let closed = false;
   const waiting = new Map<string, Waiting>();
-  /** The render the main thread is on: answered yet or not, it holds the place of the next. */
-  let rendering: string | null = null;
-  /** Renders waiting to be sent, in order, with how to refuse them when the bridge closes. */
+  /** The render the main thread is on: answered yet or not, it holds the place of the next, until its ceiling. */
+  let rendering: { requestId: string; ceiling: ReturnType<typeof setTimeout> } | null = null;
+  /** Renders waiting to be sent, in order, with how to refuse them when the bridge closes or Figma is stuck. */
   const renders: Array<{ send: () => void; refuse: (err: Error) => void }> = [];
 
   function renderDone(requestId: string) {
-    if (rendering !== requestId) return;
+    if (rendering?.requestId !== requestId) return;
+    clearTimeout(rendering.ceiling);
     rendering = null;
     renders.shift()?.send();
+  }
+
+  /** The render in place was never answered: what waits behind it would wait for good. */
+  function renderStuck() {
+    rendering = null;
+    const err = new RenderStuck();
+    for (const queued of renders.splice(0)) queued.refuse(err);
   }
 
   const stop = transport.listen((msg) => {
@@ -146,7 +166,7 @@ export function createBridge(transport: BridgeTransport): Bridge {
 
   function send<K extends TraceCallType>(type: K, payload: TraceCalls[K]['request'], timeoutMs: number, resolve: (result: unknown) => void, reject: (err: Error) => void) {
     const requestId = `${prefix}-${++next}`;
-    if (type === 'trace-render') rendering = requestId;
+    if (type === 'trace-render') rendering = { requestId, ceiling: setTimeout(renderStuck, Math.max(RENDER_CEILING_MS, timeoutMs)) };
     const timer = setTimeout(() => {
       waiting.delete(requestId);
       reject(new BridgeTimeout(type, timeoutMs));
@@ -181,6 +201,7 @@ export function createBridge(transport: BridgeTransport): Bridge {
         waiting.delete(requestId);
       }
       for (const queued of renders.splice(0)) queued.refuse(new BridgeError('trace-render', 'The trace bridge was closed before the render was sent.'));
+      if (rendering) clearTimeout(rendering.ceiling);
       rendering = null;
     },
   };
