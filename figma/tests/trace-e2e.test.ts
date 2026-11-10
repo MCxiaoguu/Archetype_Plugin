@@ -3,12 +3,14 @@ import fixtureJson from '../harness/fixtures/farside-proto.json';
 import { cleanTurn, createMockBackend, serveMock, type MockBackend, type ScriptStep } from '../harness/mock-backend.mjs';
 import { ApiClient, ApiError, type TurnBody } from '../src/lib/api';
 import type { MainToUi, SavedSession, TraceRequestMessage, UiToMain } from '../src/lib/messages';
+import { start } from '../src/lib/proto/engine';
 import type { ProtoDoc } from '../src/lib/proto/model';
 import { isScratch } from '../src/main/scratch';
 import { createTraceMain } from '../src/main/trace';
 import { createBridge, panelTransport } from '../src/ui/trace/bridge';
 import { NOTICE, runSession, type SessionResult, type SessionStatus } from '../src/ui/trace/session';
 import { fakeFromFixture, type FakeNode, type ProtoFixture } from './fake-figma';
+import { frame, protoDoc } from './trace-fixtures';
 
 // A whole trace study in the plugin, in process: the real reader, renderer,
 // engine, elements, bridge, main thread (trace.ts) and session, on the fake
@@ -648,6 +650,15 @@ describe('the mock backend', () => {
     expect(briefing).toMatchObject({ runId: 'run-claim', persona: { name: 'run-claim' }, claimedAt: expect.any(String) });
     expect(await refused(api.claimRun('run-claim', { browser, owner: OWNER }))).toMatchObject({ status: 409, code: 'already_claimed' });
     expect(await refused(api.claimRun('run-nobody', { browser, owner: OWNER }))).toMatchObject({ status: 404, code: 'run_not_found' });
+  });
+
+  it('takes the claim of a start frame of fractional size, in the whole pixels the panel claims with', async () => {
+    // Farside's "Enter your code" is 818.4 px tall: its viewport is what the panel claims with.
+    const cut = frame('S', 1280, 818.4);
+    const { width, height } = start(protoDoc([cut]), 'S').viewport;
+    own.trace.addStudy({ studyId: 'study-pixels', waves: [[{ runId: 'run-pixels', script: [] }, { runId: 'run-fraction', script: [] }]] });
+    expect(await api.claimRun('run-pixels', { browser: { ...browser, viewport: [width, height] }, owner: OWNER })).toMatchObject({ runId: 'run-pixels' });
+    expect(await refused(api.claimRun('run-fraction', { browser: { ...browser, viewport: [cut.width, cut.height] }, owner: OWNER }))).toMatchObject({ status: 400, code: 'bad_request' });
   });
 
   it('takes turns in order: 202 thinking, then the poll decides; expected names the turn it takes next', async () => {
