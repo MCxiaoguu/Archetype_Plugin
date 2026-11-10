@@ -13,6 +13,7 @@ import { toMain } from '../bridge';
 import type { Store } from '../store';
 import { BridgeError, createBridge, panelTransport, type Bridge } from './bridge';
 import { runStudy, type DocRead } from './runner';
+import type { SessionStatus } from './session';
 
 /** A read that imports library components can take longer than the bridge's 30 s. */
 export const READ_TIMEOUT_MS = 120_000;
@@ -197,8 +198,13 @@ export function createTracePanel(deps: TracePanelDeps) {
           now: () => Date.now(),
           sleep: deps.sleep,
           pluginVersion: store.get().pluginVersion,
-          onSession: (status) => store.dispatch({ type: 'session', studyId, status }),
+          onSession: (status) => {
+            store.dispatch({ type: 'session', studyId, status });
+            follow(studyId, status);
+          },
           onRunner: report,
+          onMap: (map) => store.dispatch({ type: 'flow-map', studyId, map }),
+          onScreen: (_runId, node, image) => store.dispatch({ type: 'flow-shot', studyId, node, image }),
           watchFile: (onChange) => {
             fileWatchers.add(onChange);
             return () => fileWatchers.delete(onChange);
@@ -244,6 +250,34 @@ export function createTracePanel(deps: TracePanelDeps) {
     start();
   }
 
+  /** The node the viewport last moved to for each followed run, so it moves once per turn there. */
+  const followed = new Map<string, string>();
+
+  /**
+   * Follow persona: on each turn of the followed run that lands on another
+   * node, the main thread brings that frame into view, moving nothing else.
+   * A frame on another page leaves the viewport, and the card says which page.
+   */
+  function follow(studyId: string, status: Pick<SessionStatus, 'runId' | 'node'>) {
+    const flow = store.get().study?.id === studyId ? store.get().study?.flow : null;
+    if (!flow || flow.following !== status.runId || followed.get(status.runId) === status.node) return;
+    followed.set(status.runId, status.node);
+    bridge()
+      .call('trace-follow', { frameId: status.node })
+      .then(({ otherPage }) => store.dispatch({ type: 'flow-follow-note', studyId, note: otherPage ? `On page ${otherPage}` : null }))
+      .catch((err: unknown) => store.dispatch({ type: 'flow-follow-note', studyId, note: `Can't follow: ${deps.message(err)}` }));
+  }
+
+  /** Starts or stops following a persona of the study on screen; following starts at the node it is on. */
+  function followRun(runId: string | null) {
+    const st = store.get().study;
+    if (!st?.id) return;
+    store.dispatch({ type: 'flow-follow', studyId: st.id, runId });
+    followed.clear();
+    const live = runId ? st.live[runId] : undefined;
+    if (live) follow(st.id, live);
+  }
+
   /** After the flow map couldn't be completed: Try again, or launch with the drawn connections only. */
   function afterMapFailed(drawnOnly: boolean) {
     if (store.get().study?.runner?.phase !== 'map_failed') return;
@@ -277,7 +311,7 @@ export function createTracePanel(deps: TracePanelDeps) {
     line?.close?.();
   }
 
-  return { gate, launchAnyway, cancel, lastRead, launchedOn, start, forgetProgress, afterMapFailed, pageChanged, goToPage, fileChanged, close };
+  return { gate, launchAnyway, cancel, lastRead, launchedOn, start, forgetProgress, afterMapFailed, followRun, pageChanged, goToPage, fileChanged, close };
 }
 
 export type TracePanel = ReturnType<typeof createTracePanel>;

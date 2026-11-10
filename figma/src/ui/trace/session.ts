@@ -73,17 +73,30 @@ export interface SessionRun {
 
 export type SessionPhase = 'acting' | 'thinking' | 'paused' | 'ended';
 
+/** Where the persona's last action took it, for the Flow map: from node to node, what it did, and the element's label. */
+export interface SessionMove {
+  from: string;
+  to: string;
+  outcome: TraceOutcome;
+  label: string | null;
+  /** The turn the action was chosen on. */
+  turn: number;
+}
+
 /** What the Running screen shows for a persona. */
 export interface SessionStatus {
   runId: string;
   phase: SessionPhase;
   /** The frame the persona is on. */
   frameName: string;
+  /** The node the persona is on: the topmost overlay, else the frame. */
+  node: string;
   /** The turn the persona is on. */
   turn: number;
   /** Everything the designer should know, each once. */
   notices: string[];
   ended: TurnEnded | null;
+  move: SessionMove | null;
 }
 
 export interface SessionResult {
@@ -105,6 +118,8 @@ export interface SessionDeps {
   now: () => number;
   sleep: (ms: number) => Promise<void>;
   onStatus: (status: SessionStatus) => void;
+  /** The screen a turn showed the persona, on the node it is of, for the Flow map. */
+  onScreen?: (node: string, image: Uint8Array) => void;
   /** Subscribes to the main thread's trace-file-changed; returns the unsubscribe. */
   watchFile: (onChange: (frameIds: string[]) => void) => () => void;
   /** How long a turn post may take; a backend deciding inside the request needs longer. */
@@ -229,6 +244,9 @@ function settledOutcome(last: TurnLast, before: TraceState, after: TraceState): 
   return { ...last, outcome: last.outcome === 'waited' ? 'timers_fired' : seen };
 }
 
+/** The node a state shows on top: the topmost overlay, else the frame. */
+const nodeOf = (s: TraceState) => (s.overlays.length ? (s.overlays[s.overlays.length - 1] as { frameId: string }).frameId : s.frameId);
+
 function targetOf(action: TraceAction, elements: readonly Element[]): string | null {
   if (!('element' in action) || !action.element) return null;
   const label = elements.find((e) => e.id === action.element)?.label;
@@ -260,8 +278,15 @@ export async function runSession(run: SessionRun, deps: SessionDeps): Promise<Se
   let ended: TurnEnded | null = null;
 
   const frameName = (id: string) => doc.frames.find((f) => f.id === id)?.name ?? id;
-  const shownFrame = () => (state as TraceState | undefined)?.frameId ?? run.resume?.state.frameId ?? run.startFrameId;
-  const status = () => deps.onStatus({ runId: run.runId, phase, frameName: frameName(shownFrame()), turn, notices: [...notices], ended });
+  const shown = () => (state as TraceState | undefined) ?? run.resume?.state ?? null;
+  const shownFrame = () => shown()?.frameId ?? run.startFrameId;
+  const shownNode = () => {
+    const s = shown();
+    return s ? nodeOf(s) : run.startFrameId;
+  };
+  /** What the last action did, for the Flow map; null before the first. */
+  let move: SessionMove | null = null;
+  const status = () => deps.onStatus({ runId: run.runId, phase, frameName: frameName(shownFrame()), node: shownNode(), turn, notices: [...notices], ended, move });
   const notice = (text: string) => {
     if (!notices.includes(text)) {
       notices.push(text);
@@ -516,6 +541,7 @@ export async function runSession(run: SessionRun, deps: SessionDeps): Promise<Se
     if (state.overlays.length > MAX_OVERLAYS) throw new Abort('engine_error', `More than ${MAX_OVERLAYS} overlays are open, more than a turn can carry.`);
 
     const rendered = await render();
+    deps.onScreen?.(nodeOf(state), rendered.image);
     let listed: { elements: Element[]; targets: Record<string, ElementTarget> };
     let turnBody: TurnBody;
     try {
@@ -553,6 +579,8 @@ export async function runSession(run: SessionRun, deps: SessionDeps): Promise<Se
     } catch (err) {
       throw engineAbort(err, `Playing turn ${turn}'s ${action.type}`);
     }
+    const label = 'element' in action && action.element ? listed.elements.find((e) => e.id === action.element)?.label ?? null : null;
+    move = { from: nodeOf(state), to: nodeOf(applied.state), outcome: applied.outcome, label, turn };
     state = applied.state;
     if (action.type === 'wait') {
       // What a wait fires is a timer's doing, reported with the next turn.

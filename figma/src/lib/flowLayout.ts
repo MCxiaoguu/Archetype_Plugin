@@ -5,6 +5,8 @@
  * short stub ending in a dot. Pure geometry: the card draws it as SVG.
  */
 
+import type { FlowMap } from './proto/flow';
+
 export interface LayoutNode {
   id: string;
   name: string;
@@ -158,3 +160,81 @@ export function layoutFlow(nodes: LayoutNode[], edges: LayoutEdge[], gaps: Layou
     height: tallest * NODE_HEIGHT + (tallest - 1) * ROW_GAP + BEND,
   };
 }
+
+/**
+ * What a map version draws: its nodes; its drawn edges that change the
+ * screen (a scroll stays on its node); an inferred edge from every node an
+ * edge reading is on to its frame; and a gap on every node a gap is on.
+ */
+export function graphOf(map: FlowMap): { nodes: LayoutNode[]; edges: LayoutEdge[]; gaps: LayoutGap[] } {
+  const edges: LayoutEdge[] = map.edges.filter((e) => e.action !== 'SCROLL_TO').map((e) => ({ from: e.from, to: e.to, inferred: false }));
+  const gaps: LayoutGap[] = [];
+  for (const r of map.readings) {
+    const on = [...new Set(r.nodes)];
+    if (r.kind === 'edge') for (const n of on) edges.push({ from: n, to: r.to as string, inferred: true });
+    if (r.kind === 'gap') for (const n of on) gaps.push({ id: `${r.id}@${n}`, node: n, label: r.label });
+  }
+  return { nodes: map.nodes.map((n) => ({ id: n.id, name: n.name, kind: n.kind })), edges, gaps };
+}
+
+
+/** A persona on the map: where it is, where its last action took it, and how its run ended. */
+export interface Walker {
+  id: string;
+  name: string;
+  node: string;
+  move: { from: string; to: string; outcome: string; label: string | null; turn: number } | null;
+  /** Null while the run goes on. */
+  ended: 'reached' | 'stopped' | null;
+}
+
+/** What the card lights on the map for the personas walking it, or for the paths past runs took. */
+export interface Marks {
+  /** One token per persona, on its node, in the order given (its colour). */
+  tokens: Array<{ id: string; name: string; node: string; slot: number }>;
+  /** The edges taken, as `from>to`: the last move of each live persona, or every step of a past path. */
+  lit: Set<string>;
+  /** The node left and the node reached on each persona's last move, to alternate briefly; `key` restarts it per turn. */
+  moves: Array<{ from: string; to: string; key: string }>;
+  /** A control accepted or a gap hit: the node pulses, with the gap's label. */
+  pulses: Array<{ node: string; label: string | null; key: string }>;
+  /** Where a run ended: reached the goal, or stopped (gave up, ran out of steps). */
+  ends: Array<{ id: string; node: string; reached: boolean }>;
+}
+
+const edgeKey = (from: string, to: string) => `${from}>${to}`;
+
+/** The marks of personas walking the map now (spec, Live). */
+export function liveMarks(walkers: Walker[]): Marks {
+  const marks: Marks = { tokens: [], lit: new Set(), moves: [], pulses: [], ends: [] };
+  walkers.forEach((w, slot) => {
+    marks.tokens.push({ id: w.id, name: w.name, node: w.node, slot });
+    if (w.ended) marks.ends.push({ id: w.id, node: w.node, reached: w.ended === 'reached' });
+    const m = w.move;
+    if (!m) return;
+    const key = `${w.id}:${m.turn}`;
+    if (m.from !== m.to) {
+      marks.lit.add(edgeKey(m.from, m.to));
+      marks.moves.push({ from: m.from, to: m.to, key });
+    }
+    if (m.outcome === 'accepted' || m.outcome === 'missing') marks.pulses.push({ node: m.to, label: m.outcome === 'missing' ? m.label : null, key });
+  });
+  return marks;
+}
+
+/** The marks of the paths past runs took: every step's edge lit, and where each run ended (spec, Past studies). */
+export function pastMarks(paths: Array<{ runId: string; archetypeName: string; endNode: string | null; reachedGoal?: boolean; steps: Array<{ node: string }> }>, goal: string | null): Marks {
+  const marks: Marks = { tokens: [], lit: new Set(), moves: [], pulses: [], ends: [] };
+  paths.forEach((p, slot) => {
+    p.steps.forEach((st, i) => {
+      const next = p.steps[i + 1];
+      if (next && next.node !== st.node) marks.lit.add(edgeKey(st.node, next.node));
+    });
+    if (p.endNode === null) return;
+    marks.tokens.push({ id: p.runId, name: p.archetypeName, node: p.endNode, slot });
+    marks.ends.push({ id: p.runId, node: p.endNode, reached: p.reachedGoal ?? (goal !== null && p.steps.some((st) => st.node === goal)) });
+  });
+  return marks;
+}
+
+export { edgeKey };

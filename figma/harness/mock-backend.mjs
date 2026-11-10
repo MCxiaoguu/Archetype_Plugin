@@ -19,6 +19,25 @@ const iso = (t = Date.now()) => new Date(t).toISOString();
 
 const ARCHETYPES = REPORT.archetypes.map((a) => ({ archetypeId: a.archetypeId, archetypeName: a.name, role: a.role }));
 
+/** The flow map the flow report preset played: the fake Farside page's frames, connections and readings. */
+const FLOW_MAP = (() => {
+  const node = (id, name, kind = 'frame') => ({ id, kind, name, pageId: '0:1', heading: name });
+  const edge = (id, from, to, label, action = 'NAVIGATE') => ({ id, from, to, layerKey: from, label, trigger: 'ON_CLICK', action, conditional: false });
+  const reading = (id, node, layerKey, label, kind, to = null) => ({ id, shareKey: `L:${node}:${layerKey}`, nodes: [node], layerKeys: [layerKey], label, role: 'text', kind, to, by: 'model', reason: 'Read by the mock.' });
+  return {
+    version: 1, baseVersion: null, inputHash: 'in-preset', docHash: 'preset', dropped: [], completedAt: iso(0), model: 'mock:reader', buildId: 'build-preset',
+    nodes: [node('1:2', 'Dashboard'), node('2:10', 'Billing settings'), node('2:20', 'Connect bank'), node('3:1', 'Bank sign in error', 'overlay'), node('2:30', 'Verify phone'), node('2:50', 'Bank connected'), node('3:5', 'Plans'), node('7:1', 'Release notes')],
+    edges: [
+      edge('d1', '1:2', '2:10', 'Billing'), edge('d2', '1:2', '3:5', 'unlabeled area'), edge('d3', '1:2', '7:1', "What's new"), edge('d4', '2:10', '2:20', 'Connect a bank'),
+      edge('d5', '2:20', '3:1', 'Sign in with your bank', 'OVERLAY'), edge('d6', '2:20', '2:30', 'Continue'), edge('d7', '2:30', '2:50', 'Send code'), edge('d8', '2:50', '1:2', 'Done'),
+    ],
+    readings: [
+      reading('r4', '2:20', '2:27', 'Use routing number instead', 'gap'), reading('r7', '2:20', '2:28', 'Connect your bank', 'edge', '1:2'),
+      reading('r8', '3:5', 'I3:8;6:23', 'Yearly', 'control'), reading('r9', '1:2', '1:5', 'Welcome back, Mara', 'edge', '1:2'), reading('r10', '7:1', '7:3', 'Subscribe', 'gap'),
+    ],
+  };
+})();
+
 /** The flow of the fixture report's runs, as a plugin-mode study reports it (study_report_service's flow). */
 const FLOW_REPORT = (() => {
   const nodes = [['1:2', 'Dashboard'], ['2:10', 'Billing settings'], ['2:20', 'Connect bank'], ['3:1', 'Bank sign in error'], ['2:30', 'Verify phone'], ['2:50', 'Bank connected']].map(([id, name]) => ({ id, name }));
@@ -224,6 +243,8 @@ export function createMockBackend({ log = () => {}, clock = () => Date.now(), th
         const { status, runs } = simulated(s);
         return [200, { studyId: s.id, status, currentWave: 1, runs }];
       }
+      if (s.flow && sub === '/flow-map' && method === 'GET') return [200, { map: { ...FLOW_MAP, studyId: s.id } }];
+      if (s.flow && sub === '/paths' && method === 'GET') return [200, { runs: FLOW_REPORT.paths.map(({ reachedGoal, ...p }) => p) }];
       if (sub === '/report' && method === 'GET') {
         if (s.flow) return [200, { ...REPORT, studyId: s.id, title: s.title, findings: null, flow: FLOW_REPORT, cached: false }];
         return [200, s.traced ? tracedReport(s) : s.body?.design?.mode === 'single' ? singleReport(s) : { ...REPORT, studyId: s.id, title: s.title, cached: false }];

@@ -196,6 +196,7 @@ export function createEffects(store: Store, deps: EffectsDeps = {}) {
     if (status === 'cancelled' || gen !== watchGen) return;
     // Only a running study has personas to run: a finished one is only shown.
     if (status === 'running') trace.start();
+    if (store.get().study?.record?.trace) void loadFlow(gen, { paths: false });
     void loop(gen);
   }
 
@@ -272,11 +273,51 @@ export function createEffects(store: Store, deps: EffectsDeps = {}) {
       // A report whose parts don't fit together fails here, as a failed load, not on screen.
       buildReportView(report, indexFrames(store.get().doc));
       store.dispatch({ type: 'report', report, now: Date.now() });
+      if (report.flow) void loadFlow(gen, { paths: true });
       const rec = store.get().study?.record;
       if (rec) toMain({ type: 'save-study', record: rec });
     } catch (err) {
       if (gen === watchGen) store.dispatch({ type: 'report-failed', message: message(err) });
     }
+  }
+
+  /**
+   * The Flow map card's data: the study's current map (none before its
+   * first commit), and once it ran, each run's path. What fails to load is
+   * shown in the card; the rest of the screen goes on.
+   */
+  async function loadFlow(gen: number, { paths }: { paths: boolean }) {
+    const id = store.get().study?.id;
+    if (!id) return;
+    try {
+      const map = await api()
+        .getFlowMap(id)
+        .then(({ map: m }) => m)
+        .catch((err: unknown) => {
+          if (err instanceof ApiError && err.code === 'flow_map_not_found') return null;
+          throw err;
+        });
+      if (gen !== watchGen) return;
+      store.dispatch({ type: 'flow-map', studyId: id, map });
+      if (!paths) return;
+      const { runs } = await api().getPaths(id);
+      if (gen !== watchGen) return;
+      if (!Array.isArray(runs)) throw new Error('Archetype sent paths the panel cannot read.');
+      store.dispatch({ type: 'flow-paths', studyId: id, paths: runs });
+    } catch (err) {
+      if (gen === watchGen) store.dispatch({ type: 'flow-error', studyId: id, message: message(err) });
+    }
+  }
+
+  /** Follow persona: the viewport moves to the frame the persona is on, on each of its turns; null stops. */
+  function followPersona(runId: string | null) {
+    trace.followRun(runId);
+  }
+
+  /** Clear paths: the card shows none for this study until the panel opens it again. */
+  function clearPaths() {
+    const id = store.get().study?.id;
+    if (id) store.dispatch({ type: 'flow-clear', studyId: id });
   }
 
   function openStudy(record: StudyRecord) {
@@ -377,6 +418,8 @@ export function createEffects(store: Store, deps: EffectsDeps = {}) {
     goToTestPage,
     forgetProgress,
     retryMap,
+    followPersona,
+    clearPaths,
     retry,
     openStudy,
     newTest,

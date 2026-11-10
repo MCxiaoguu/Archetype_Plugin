@@ -66,7 +66,7 @@ button:disabled { cursor: default; }
 /* Shell */
 
 #app, .app { height: 100%; }
-.app { display: grid; grid-template-rows: 40px 1fr; position: relative; overflow: hidden; }
+.app { display: grid; grid-template-rows: 40px 1fr; grid-template-columns: minmax(0, 1fr); position: relative; overflow: hidden; }
 .main { min-height: 0; }
 .screen { height: 100%; display: flex; flex-direction: column; min-height: 0; }
 .scroll { flex: 1; overflow-y: auto; padding: 12px 16px 20px; display: flex; flex-direction: column; gap: 16px; }
@@ -420,3 +420,36 @@ button.drop-name:hover { color: var(--accent-text); text-decoration: underline; 
   cursor: nwse-resize; color: var(--text-3); z-index: 6; touch-action: none;
 }
 .resize:hover { color: var(--text); }
+
+/* The Flow map card. */
+.fm-scroll { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-2); }
+.fm { display: block; }
+.fm-edge { fill: none; stroke: var(--text-3); stroke-width: 1.25; }
+.fm-edge.inferred { stroke-dasharray: 4 3; }
+.fm-edge.lit { stroke: var(--accent); stroke-width: 2; }
+.fm-gap line { stroke: var(--warn); stroke-width: 1.25; }
+.fm-gap circle { fill: var(--warn); }
+.fm-box { fill: var(--bg); stroke: var(--border-strong); stroke-opacity: 0.35; }
+.fm-node.overlay .fm-box { stroke-dasharray: 3 2; }
+.fm-node.unreached { opacity: 0.5; }
+.fm-name { fill: var(--text); font-size: 10px; font-family: var(--font); }
+.fm-more { fill: var(--warn); font-size: 9px; font-family: var(--font); }
+.fm-token { stroke: var(--bg); stroke-width: 1.5; }
+.fm-end { font-size: 11px; font-weight: 600; }
+.fm-end.ok { fill: var(--ok); }
+.fm-end.bad { fill: var(--danger); }
+.fm-pulse-label { fill: var(--warn); font-size: 9px; font-family: var(--font); }
+.fm-node.was .fm-box { animation: fm-was 1.2s ease-out 1; }
+.fm-node.now .fm-box { animation: fm-now 1.2s ease-out 1; stroke: var(--accent); stroke-opacity: 1; }
+.fm-node.pulse .fm-box { animation: fm-pulse 0.9s ease-out 2; }
+@keyframes fm-was { 0%, 50% { stroke: var(--accent); stroke-opacity: 1; } 100% { stroke-opacity: 0.35; } }
+@keyframes fm-now { 0%, 40% { stroke-opacity: 0.35; } 50%, 100% { stroke-opacity: 1; } }
+@keyframes fm-pulse { 0% { stroke: var(--warn); stroke-width: 3; stroke-opacity: 1; } 100% { stroke-width: 1; } }
+@media (prefers-reduced-motion: reduce) { .fm-node .fm-box { animation: none !important; } }
+.fm-legend { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.fm-persona { display: inline-flex; align-items: center; gap: 5px; padding: 2px 6px; border: 1px solid var(--border); border-radius: 999px; background: var(--bg); color: var(--text); font: inherit; }
+button.fm-persona { cursor: pointer; }
+button.fm-persona:hover { background: var(--bg-hover); }
+.fm-persona.following { border-color: var(--accent); color: var(--accent-text); }
+.fm-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+

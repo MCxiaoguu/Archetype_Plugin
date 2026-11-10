@@ -6,6 +6,7 @@ import type { Effects } from '../effects';
 import { NOTICE } from '../trace/session';
 import { IconCheck, IconClock, IconExternal } from '../icons';
 import { Banner, Section, Spinner, elapsed, plural } from '../parts';
+import { FlowMapCard, walkersOf } from './flowmap';
 import { useTicker } from '../store';
 
 function stepIndex(stage: Stage): number {
@@ -170,6 +171,9 @@ export function Progress({ state, fx }: { state: AppState; fx: Effects }) {
               </>
             )}
           </Section>
+        )}
+        {inPanel && st.record?.trace && (st.flow.map || st.flow.error) && (
+          <FlowMapCard flow={st.flow} start={st.record.trace.startFrameId} walkers={walkersOf(st.runs, st.live)} live goal={null} fx={fx} />
         )}
         {st.stage === 'done' && !st.report && !st.reportError && (
           <div class="placeholder" role="status">

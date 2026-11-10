@@ -58,6 +58,10 @@ export interface RunnerDeps {
   pluginVersion: string;
   onSession: (status: SessionStatus) => void;
   onRunner: (status: RunnerStatus) => void;
+  /** The flow map version each commit made current, which the runs claimed after it play. */
+  onMap?: (map: FlowMap) => void;
+  /** The screen a persona's turn showed, on the node it is of. */
+  onScreen?: (runId: string, node: string, image: Uint8Array) => void;
   watchFile: SessionDeps['watchFile'];
   /** Reads the prototype again, for a new wave. */
   readDoc: () => Promise<DocRead>;
@@ -262,6 +266,7 @@ async function run(study: StudyTrace, deps: RunnerDeps, results: SessionResult[]
         const map = keep(answer.status === 'ready' ? answer.map : await built(answer.buildId));
         latest = map.version;
         playing = map.version;
+        deps.onMap?.(map);
         return;
       } catch (err) {
         const moved = err instanceof MapMoved || (err instanceof ApiError && err.code === 'flow_map_changed');
@@ -306,7 +311,8 @@ async function run(study: StudyTrace, deps: RunnerDeps, results: SessionResult[]
   function begin(runId: string, resume: SavedSession | null, map: FlowMap | null) {
     if (phase !== 'running') report('running');
     const run: SessionRun = { runId, studyId, owner, doc: current.doc, shareKey: study.shareKey, startFrameId: study.startFrameId, resume, fileChanged: current.changed(), map };
-    started.set(runId, runSession(run, { bridge, api, now: deps.now, sleep: deps.sleep, onStatus: deps.onSession, watchFile: deps.watchFile, postTurnTimeoutMs: deps.postTurnTimeoutMs, signal: deps.signal }));
+    const onScreen = deps.onScreen ? (node: string, image: Uint8Array) => deps.onScreen?.(runId, node, image) : undefined;
+    started.set(runId, runSession(run, { bridge, api, now: deps.now, sleep: deps.sleep, onStatus: deps.onSession, onScreen, watchFile: deps.watchFile, postTurnTimeoutMs: deps.postTurnTimeoutMs, signal: deps.signal }));
   }
 
   /**

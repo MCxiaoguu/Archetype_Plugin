@@ -6,6 +6,7 @@ import { toMain } from '../bridge';
 import type { Effects } from '../effects';
 import { IconExternal, IconPin } from '../icons';
 import { Banner, FrameChip, Section, Skeleton, plural } from '../parts';
+import { FlowMapCard } from './flowmap';
 
 const SEVERITY_CLASS: Record<number, string> = { 0: 'sev-0', 1: 'sev-1', 2: 'sev-2', 3: 'sev-3', 4: 'sev-4' };
 
@@ -145,6 +146,10 @@ export function Report({ state, fx }: { state: AppState; fx: Effects }) {
                   ))}
                 </ul>
               </Section>
+            )}
+
+            {report?.flow && (st.flow.map || st.flow.error) && (
+              <FlowMapCard flow={st.flow} start={report.flow.startNode} walkers={[]} live={false} goal={report.flow.goalNode} fx={fx} />
             )}
 
             <Section title="Paths" id="paths">

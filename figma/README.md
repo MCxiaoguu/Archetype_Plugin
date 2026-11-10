@@ -23,9 +23,9 @@ studies API. The account is the product; the listing is free.
 | :-- | :-- |
 | Sign in | One button. Archetype opens in your browser with a short code; approve it there and the panel carries on by itself. |
 | New test | Start and goal screens (from your selection or a list), the goal, who your user is, an optional product line, an optional share link, and how deep: Single persona (one typical user from your description, one try), Quick or Thorough. A preflight runs on every change. |
-| Running | Three stages (understanding your users, building personas, running), then one row per persona with its status, the screen it is on and its turn, while the panel itself walks each persona through the prototype. It says when it starts the next round of tries, when it lost touch with Archetype, and, for a test reopened on another page, which page the test runs on, with a button to go there. |
+| Running | Three stages (understanding your users, building personas, running), then one row per persona with its status, the screen it is on and its turn, while the panel itself walks each persona through the prototype. It says when it starts the next round of tries, when it lost touch with Archetype, and, for a test reopened on another page, which page the test runs on, with a button to go there. The **Flow map** card draws the prototype's screens left to right from the start, drawn links solid, links read from the screens dashed, and gaps as short stubs; each persona is a token that moves along it, and a screen a persona saw shows that screenshot. Click a persona to follow it: the canvas viewport moves to each frame it reaches (nothing else changes; a frame on another page is named instead). **Clear paths** hides the paths until you open the test again. |
 | Report | How many tries reached the goal, the headline, each persona with the report's own confidence words ("99% likely lower completion"), where people gave up by screen, and what to change first. A test run in the panel reports its flow instead of usability findings: what the personas looked for that has no page yet (in their own words), the links they took that the prototype doesn't draw yet, so you can wire them, and each persona's path. Other tests show the top findings with severity and the frames they happened on. |
-| Past tests | Every test launched from this file, newest first. Reopening the plugin returns to the last one. |
+| Past tests | Every test launched from this file, newest first. Reopening the plugin returns to the last one. A past test run in the panel shows its Flow map with the paths its personas took, loaded from Archetype. |
 
 **Preflight, instant and free.** Before anything leaves the file the plugin walks
 the prototype's connections from your start screen:
@@ -174,7 +174,8 @@ the history follows the file.
 | `src/main/canvas.ts` | Show on canvas, pin and clear annotations, and Follow persona (a viewport move, nothing else). |
 | `src/main/storage.ts` | Settings, token, per file history and draft, and the saved progress of running tests. |
 | `src/lib/proto/*` | The prototype engine, pure: navigation, overlays, scroll, pointer and keys, timers, variables and conditions, variants, what a persona can act on, step URLs, and the flow map's readings where no reaction handles a click. |
-| `src/ui/trace/*` | The trace runner: the bridge to the main thread (one render at a time), a persona's session, the runner of a study's waves, and the launch gate and runner wiring. |
+| `src/ui/trace/*` | The trace runner: the bridge to the main thread (one render at a time), a persona's session, the runner of a study's waves, and the launch gate and runner wiring (Follow persona included). |
+| `src/ui/screens/flowmap.tsx`, `src/lib/flowLayout.ts` | The Flow map card, and its layout: breadth first columns from the start node, edges, gap stubs, and what the live personas or past paths light. |
 | `src/lib/ids.ts`, `links.ts` | Colon and dash node ids, share link parsing, and the prototype URL. |
 | `src/lib/graph.ts`, `preflight.ts`, `names.ts` | The reaction graph, breadth first reachability, dead ends, broken links, generic names. |
 | `src/lib/study.ts`, `launch.ts` | The `POST /api/studies` body and the resumable launch sequence (factors, personas, wave 1). |

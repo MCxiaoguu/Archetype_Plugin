@@ -77,7 +77,7 @@ describe('persona rows', () => {
   });
 
   it('shows the screen and step from the session this panel runs, ahead of the runs list', () => {
-    const live = (runId: string, phase: LiveRun['phase'], frameName: string, turn: number): LiveRun => ({ runId, phase, frameName, turn, notices: [] });
+    const live = (runId: string, phase: LiveRun['phase'], frameName: string, turn: number): LiveRun => ({ runId, phase, frameName, node: '1:2', turn, notices: [], ended: null, move: null });
     const rows = personaRows(runs, index, {
       inPanel: true,
       live: {
@@ -99,7 +99,7 @@ describe('persona rows', () => {
 
   it('shows what the sessions and the runner say, each once, and the runner only while it is paused', () => {
     const LOST = 'Lost touch with Archetype. Retrying.';
-    const live = (runId: string, phase: LiveRun['phase'], notices: string[]): LiveRun => ({ runId, phase, frameName: 'Dashboard', turn: 1, notices });
+    const live = (runId: string, phase: LiveRun['phase'], notices: string[]): LiveRun => ({ runId, phase, frameName: 'Dashboard', node: '1:2', turn: 1, notices, ended: null, move: null });
     const sessions = {
       r1: live('r1', 'paused', [LOST, 'Keep this tab visible, or use the desktop app.']),
       r2: live('r2', 'acting', ['This file changed while the test ran.']),
@@ -123,7 +123,7 @@ describe('persona rows', () => {
 
   it('words the Running screen for one persona as one', () => {
     const one = [run({ runId: 'b1', status: 'running' })];
-    const here = personaRows(one, index, { inPanel: true, live: { b1: { runId: 'b1', phase: 'thinking', frameName: 'Dashboard', turn: 1, notices: [] } } });
+    const here = personaRows(one, index, { inPanel: true, live: { b1: { runId: 'b1', phase: 'thinking', frameName: 'Dashboard', node: '1:2', turn: 1, notices: [], ended: null, move: null } } });
     const waiting = personaRows([run({ runId: 'b1', status: 'queued' })], index, { inPanel: true, live: {} });
     expect(panelRunText(here, { phase: 'running', notice: null }, 'running')).toBe('The persona is clicking through your prototype here in the panel.');
     expect(panelRunText(waiting, null, 'queued')).toBe('Starting the persona.');
@@ -138,7 +138,7 @@ describe('persona rows', () => {
   });
 
   it("words the Running screen by the panel's own runner and sessions", () => {
-    const here = personaRows(runs, index, { inPanel: true, live: { v1: { runId: 'v1', phase: 'thinking', frameName: 'Verify phone', turn: 3, notices: [] } } });
+    const here = personaRows(runs, index, { inPanel: true, live: { v1: { runId: 'v1', phase: 'thinking', frameName: 'Verify phone', node: '2:30', turn: 3, notices: [], ended: null, move: null } } });
     const none = personaRows(runs, index, { inPanel: true, live: {} });
     expect(panelRunText(here, { phase: 'running', notice: null }, 'running')).toBe('Personas are clicking through your prototype here in the panel.');
     expect(panelRunText(none, { phase: 'next_wave', notice: null }, 'finishing')).toBe('Starting the next round of tries.');

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { RunRowApi } from '../src/lib/api';
 import { DEFAULT_SETTINGS, type InitPayload, type StudyRecord } from '../src/lib/messages';
-import { INITIAL_STATE, reducer, type Action, type AppState } from '../src/lib/state';
+import { EMPTY_FLOW, INITIAL_STATE, reducer, type Action, type AppState } from '../src/lib/state';
 import { fixtureDoc, fixtureReport } from './helpers';
 
 const record: StudyRecord = { studyId: 's1', title: 'Connect a bank', startName: 'Dashboard', goalName: 'Bank connected', size: 'quick', launchedAt: 1000, status: 'running' };
@@ -191,9 +191,26 @@ describe('panel state machine', () => {
     expect(reducer(init(), { type: 'signed-out', expired: false }).notice).toBeNull();
   });
 
+  it("keeps the Flow map card's map, paths, screens, following and Clear paths for its own study, until it is opened again", () => {
+    let s = run([{ type: 'launch-started', now: 1 }, { type: 'study-created', record }], init());
+    const map = { studyId: 's1', version: 2, baseVersion: 1, inputHash: 'h', docHash: 'd', nodes: [], edges: [], readings: [], dropped: [], completedAt: 'c', model: null, buildId: null };
+    s = reducer(s, { type: 'flow-map', studyId: 's1', map });
+    s = reducer(s, { type: 'flow-shot', studyId: 's1', node: '1:2', image: new Uint8Array([1]) });
+    s = reducer(s, { type: 'flow-follow', studyId: 's1', runId: 'r1' });
+    s = reducer(s, { type: 'flow-follow-note', studyId: 's1', note: 'On page Archive' });
+    expect(s.study?.flow).toMatchObject({ map, following: 'r1', followNote: 'On page Archive', cleared: false });
+    expect(Object.keys(s.study?.flow.shots ?? {})).toEqual(['1:2']);
+    s = reducer(s, { type: 'flow-clear', studyId: 's1' });
+    expect(s.study?.flow).toMatchObject({ cleared: true, following: null, followNote: null, map });
+    expect(reducer(s, { type: 'flow-clear', studyId: 's0' })).toBe(s);
+    expect(reducer(s, { type: 'flow-error', studyId: 's1', message: 'Archetype had a problem.' }).study?.flow).toMatchObject({ error: 'Archetype had a problem.', map });
+    // Opened again, the study shows its paths again.
+    expect(reducer(s, { type: 'open-study', record, now: 9 }).study?.flow).toEqual(EMPTY_FLOW);
+  });
+
   it('keeps what each session and the runner in this panel say, for their own study only', () => {
     let s = run([{ type: 'launch-started', now: 1 }, { type: 'study-created', record }], init());
-    const status = { runId: 'r1', phase: 'thinking' as const, frameName: 'Connect bank', turn: 3, notices: [] };
+    const status = { runId: 'r1', phase: 'thinking' as const, frameName: 'Connect bank', node: '2:20', turn: 3, notices: [], ended: null, move: null };
     s = reducer(s, { type: 'session', studyId: 's1', status });
     expect(s.study?.live).toEqual({ r1: status });
     s = reducer(s, { type: 'session', studyId: 's1', status: { ...status, phase: 'acting', turn: 4 } });

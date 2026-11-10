@@ -97,6 +97,15 @@ export async function mainThread(edit: (fake: Fake) => void = () => {}, log: str
       log.push('cleanup');
       return { removed: 0 };
     }
+    if (type === 'trace-follow') {
+      const frameId = payload.frameId as string;
+      log.push(`follow ${frameId}`);
+      const node = fake.nodes.get(frameId);
+      if (!node) throw new BridgeError('trace-follow', `The frame ${frameId} isn't in the file any more`);
+      let page = node.parent;
+      while (page && page.type !== 'PAGE') page = page.parent;
+      return { otherPage: page && page !== fake.api.currentPage ? page.name : null };
+    }
     if (type === 'trace-candidates') {
       const known = docs.get(payload.docHash as string);
       if (!known) throw new BridgeError('trace-candidates', `The panel sent a read of the flow of prototype ${String(payload.docHash)}, which this plugin has not read`);

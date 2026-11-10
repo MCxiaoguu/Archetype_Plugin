@@ -187,8 +187,12 @@ describe('panel effects', () => {
     expect(turns[0]?.screen.url).toContain(`https://www.figma.com/proto/${KEY}/`);
     // The Running screen read the persona's screen and step from the session, polling nothing new for it.
     expect(store.get().study?.live.r1).toMatchObject({ phase: 'ended', frameName: 'Dashboard', turn: 1 });
-    // Besides one read of the study's flow map version, to commit on it.
-    expect(calls.filter((c) => c.startsWith('GET ') && !/\/(status|runs|report|turn\/\d+)$/.test(c))).toEqual(['GET /api/studies/s1/flow-map']);
+    // Besides the reads of the study's flow map: the runner's, to commit on it, and the Flow map card's.
+    expect(calls.filter((c) => c.startsWith('GET ') && !/\/(status|runs|report|turn\/\d+)$/.test(c))).toEqual(['GET /api/studies/s1/flow-map', 'GET /api/studies/s1/flow-map']);
+    // The card has the map the runner committed, and the screen the persona saw.
+    expect(store.get().study?.flow.map).toMatchObject({ version: 1 });
+    expect(Object.keys(store.get().study?.flow.shots ?? {})).toEqual(['1:2']);
+    expect(store.get().study?.live.r1).toMatchObject({ node: '1:2', ended: { status: 'completed', reason: 'done' } });
     expect(main.log).toContain('cleanup');
     expect(sent.map((m) => m.type)).toContain('save-draft');
     expect(lastOf(savedStudies()).outcome).toBe('6 of 15 reached the goal');
@@ -346,6 +350,46 @@ describe('panel effects', () => {
     vi.useRealTimers();
     expect(traceCalls(main).filter((t) => t === 'trace-load')).toHaveLength(2);
     expect(calls.filter((c) => c === 'POST /api/plugin/runs/r1/claim')).toHaveLength(1);
+  });
+
+  it('follows a persona on the canvas, once per node it reaches, until the designer stops', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const main = await mainThread();
+    const run = { runId: 'r1', archetypeId: 'a', archetypeName: 'Baseline founder', role: 'baseline', status: 'queued' };
+    let status = 'running';
+    let decide = false;
+    installFetch((method, path, body) => {
+      if (path === '/api/studies/s12/status') return [200, { studyId: 's12', status }];
+      if (path === '/api/studies/s12/runs') return [200, { studyId: 's12', status, runs: [run] }];
+      if (path === '/api/plugin/runs/r1/claim') return (run.status = 'running'), [200, { runId: 'r1', ...BRIEFING }];
+      if (method === 'POST' && path === '/api/plugin/runs/r1/turn') return [202, { turn: (body as { turn: number }).turn, status: 'thinking' }];
+      if (path === '/api/plugin/runs/r1/turn/1') {
+        if (!decide) return [200, { turn: 1, status: 'thinking' }];
+        return [200, { turn: 1, status: 'ready', action: { type: 'click', element: 'e3' }, state: TURN_STATE, ended: null }];
+      }
+      if (path === '/api/plugin/runs/r1/turn/2') {
+        run.status = 'completed';
+        return [200, { turn: 2, status: 'ready', action: { type: 'done', claim: 'Done.' }, state: TURN_STATE, ended: { status: 'completed', reason: 'done' } }];
+      }
+      if (path === '/api/studies/s12/runs/next') return (status = 'complete'), [200, { studyId: 's12', done: true, reason: 'every wave ran', wave: 1 }];
+      if (path === '/api/studies/s12/report') return [200, fixtureReport()];
+      return [404, { error: 'x', message: path }];
+    });
+    const { store, fx } = initStore('tok', main, { studies: [traceStudy('s12', 'running')], lastStudyId: 's12' });
+    await runUntil(() => store.get().study?.live.r1?.phase === 'thinking', 60_000, 250);
+    fx.followPersona('r1');
+    expect(store.get().study?.flow.following).toBe('r1');
+    decide = true;
+    await runUntil(() => store.get().screen === 'report', 600_000, 1_000);
+    vi.useRealTimers();
+    // The Dashboard when following began, then Billing settings after the click: viewport moves only.
+    expect(main.log.filter((l) => l.startsWith('follow'))).toEqual(['follow 1:2', 'follow 2:10']);
+    expect(store.get().study?.flow.followNote).toBeNull();
+
+    fx.followPersona(null);
+    expect(store.get().study?.flow.following).toBeNull();
+    fx.clearPaths();
+    expect(store.get().study?.flow).toMatchObject({ cleared: true, following: null });
   });
 
   it("says when the flow map couldn't be completed, tries again, and launches with drawn connections only when asked", async () => {

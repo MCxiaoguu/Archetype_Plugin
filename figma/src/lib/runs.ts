@@ -10,8 +10,14 @@ export interface LiveRun {
   runId: string;
   phase: 'acting' | 'thinking' | 'paused' | 'ended';
   frameName: string;
+  /** The node the persona is on: the topmost overlay, else the frame. */
+  node: string;
   turn: number;
   notices: string[];
+  /** How the run ended, once it has. */
+  ended: { status: string; reason: string | null } | null;
+  /** Where the last action took the persona, from node to node, and what it did. */
+  move: { from: string; to: string; outcome: string; label: string | null; turn: number } | null;
 }
 
 /**

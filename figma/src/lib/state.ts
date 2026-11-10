@@ -1,4 +1,5 @@
-import type { DeviceCode, RunRowApi, StudyStatusValue } from './api';
+import type { DeviceCode, RunPath, RunRowApi, StudyStatusValue } from './api';
+import type { FlowMap } from './proto/flow';
 import { isRunSize } from './form';
 import { DEFAULT_SETTINGS, type Draft, type InitPayload, type Settings, type StudyRecord } from './messages';
 import { nextQueuedSince } from './poll';
@@ -32,7 +33,28 @@ export interface ActiveStudy {
   /** What the sessions this panel runs say, by run id (plugin mode). */
   live: Record<string, LiveRun>;
   runner: RunnerStatus | null;
+  flow: FlowCard;
 }
+
+/** The Flow map card of a plugin-mode study (spec, The Flow map in the panel). */
+export interface FlowCard {
+  /** The study's current map version; null until it is known, and for a study that has none. */
+  map: FlowMap | null;
+  /** Each run's path from its steps, for a study that ran. */
+  paths: RunPath[] | null;
+  /** Why the map or the paths didn't load. */
+  error: string | null;
+  /** Clear paths: hidden until the panel opens the study again. */
+  cleared: boolean;
+  /** Follow persona: the run whose node the viewport moves to on each of its turns. */
+  following: string | null;
+  /** "On page <name>": the followed persona's frame is on another page, where the viewport doesn't go. */
+  followNote: string | null;
+  /** The screen each persona last saw on a node, by node: a visited node shows it. */
+  shots: Record<string, Uint8Array>;
+}
+
+export const EMPTY_FLOW: FlowCard = { map: null, paths: null, error: null, cleared: false, following: null, followNote: null, shots: {} };
 
 /** What stands between the form and a launch (spec, Data flow 1). */
 export type LaunchGate =
@@ -126,7 +148,14 @@ export type Action =
   | { type: 'notice'; notice: Notice | null }
   | { type: 'gate'; gate: LaunchGate | null }
   | { type: 'session'; studyId: string; status: LiveRun }
-  | { type: 'runner'; studyId: string; status: RunnerStatus };
+  | { type: 'runner'; studyId: string; status: RunnerStatus }
+  | { type: 'flow-map'; studyId: string; map: FlowMap | null }
+  | { type: 'flow-paths'; studyId: string; paths: RunPath[] }
+  | { type: 'flow-error'; studyId: string; message: string }
+  | { type: 'flow-shot'; studyId: string; node: string; image: Uint8Array }
+  | { type: 'flow-clear'; studyId: string }
+  | { type: 'flow-follow'; studyId: string; runId: string | null }
+  | { type: 'flow-follow-note'; studyId: string; note: string | null };
 
 function emptyStudy(now: number, record: StudyRecord | null, stage: Stage): ActiveStudy {
   return {
@@ -145,7 +174,28 @@ function emptyStudy(now: number, record: StudyRecord | null, stage: Stage): Acti
     reportError: null,
     live: {},
     runner: null,
+    flow: EMPTY_FLOW,
   };
+}
+
+/** The Flow map card after one of its actions. */
+function flowCard(flow: FlowCard, action: Extract<Action, { type: `flow-${string}` }>): FlowCard {
+  switch (action.type) {
+    case 'flow-map':
+      return { ...flow, map: action.map, error: null };
+    case 'flow-paths':
+      return { ...flow, paths: action.paths, error: null };
+    case 'flow-error':
+      return { ...flow, error: action.message };
+    case 'flow-shot':
+      return { ...flow, shots: { ...flow.shots, [action.node]: action.image } };
+    case 'flow-clear':
+      return { ...flow, cleared: true, following: null, followNote: null };
+    case 'flow-follow':
+      return { ...flow, following: action.runId, followNote: null };
+    case 'flow-follow-note':
+      return { ...flow, followNote: action.note };
+  }
 }
 
 /** A top level frame on the page that the prototype can open as a screen. */
@@ -339,6 +389,16 @@ export function reducer(state: AppState, action: Action): AppState {
     case 'runner':
       if (state.study?.id !== action.studyId) return state;
       return patchStudy(state, { runner: action.status });
+    case 'flow-map':
+    case 'flow-paths':
+    case 'flow-error':
+    case 'flow-shot':
+    case 'flow-clear':
+    case 'flow-follow':
+    case 'flow-follow-note': {
+      if (state.study?.id !== action.studyId) return state;
+      return patchStudy(state, { flow: flowCard(state.study.flow, action) });
+    }
     default:
       return state;
   }
