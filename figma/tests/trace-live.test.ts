@@ -417,6 +417,7 @@ describe.skipIf(!LIVE.url)('a live trace study against the local backend', () =>
   });
 
   it('leaves the file as it was: no scratch container, every original node untouched', async () => {
+    await plugin.settled();
     expect(scratchOn(fake)).toEqual([]);
     expect(plugin.main.removeLeftovers()).toBe(0);
     await tick();

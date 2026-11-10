@@ -1,9 +1,9 @@
 /**
- * The plugin as Figma runs it, in process, for the live trace run
- * (trace-live.test.ts): the fake Farside file, the real main thread
- * (trace.ts) on it, and the panel's bridge to it, plus what the run checks
- * the file against. The same harness as trace-e2e's, without the hooks
- * that test holds saves back with.
+ * The plugin as Figma runs it, in process, for the trace end-to-end tests
+ * (trace-e2e against the mock backend, trace-live against the local live
+ * backend): the fake Farside file, the real main thread (trace.ts) on it,
+ * and the panel's channel to it, plus what the tests check the file
+ * against.
  */
 
 import { expect } from 'vitest';
@@ -33,8 +33,27 @@ export const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 1))
 export function openPlugin(fake: Fake) {
   const listeners = new Set<(msg: MainToUi) => void>();
   const posted: MainToUi[] = [];
+  /** The type of every request the panel sent, in order. */
+  const sent: string[] = [];
   const failures: unknown[] = [];
+  /** The requests the main thread is answering, also after the plugin closed: the fake can't stop them as Figma does. */
+  const answering = new Set<Promise<void>>();
   let open = true;
+  /** trace-save requests held back, to reach the main thread together. */
+  let held: { count: number; which: (msg: TraceRequestMessage) => boolean; saves: TraceRequestMessage[] } | null = null;
+  /** When set, the other trace-saves reach the main thread one at a time, each after the one before was answered. */
+  let serial: Promise<void> | null = null;
+  const answer = (msg: TraceRequestMessage): Promise<void> => {
+    // handle answers every request itself; a throw means a request it could not answer at all.
+    const work = main.handle(msg).catch((err: unknown) => void failures.push(err));
+    answering.add(work);
+    void work.then(() => answering.delete(work));
+    return work;
+  };
+  const deliver = (msgs: TraceRequestMessage[]) =>
+    setTimeout(() => {
+      if (open) for (const msg of msgs) void answer(msg);
+    }, 0);
   const main = createTraceMain(fake.api, (msg) => {
     posted.push(msg);
     const copy = structuredClone(msg);
@@ -44,10 +63,20 @@ export function openPlugin(fake: Fake) {
   });
   const toMain = (msg: UiToMain) => {
     const copy = structuredClone(msg) as TraceRequestMessage;
-    setTimeout(() => {
-      // handle answers every request itself; a throw means a request it could not answer at all.
-      if (open) main.handle(copy).catch((err: unknown) => failures.push(err));
-    }, 0);
+    sent.push(copy.type);
+    if (held && copy.type === 'trace-save' && held.which(copy)) {
+      held.saves.push(copy);
+      if (held.saves.length < held.count) return;
+      const together = held.saves;
+      held = null;
+      deliver(together);
+      return;
+    }
+    if (serial && copy.type === 'trace-save') {
+      serial = serial.then(() => (open ? answer(copy) : undefined));
+      return;
+    }
+    deliver([copy]);
   };
   const onMain = (handler: (msg: MainToUi) => void) => {
     listeners.add(handler);
@@ -64,13 +93,33 @@ export function openPlugin(fake: Fake) {
     main,
     bridge,
     posted,
+    sent,
     failures,
     watchFile,
     signal: closing.signal,
-    /** The plugin closes: the sessions are told, then the panel's bridge and the main thread stop together. */
+    /** Resolves once the main thread answered every request it took, the ones under way when the plugin closed too. */
+    async settled() {
+      while (answering.size) await Promise.all([...answering]);
+    },
+    /** Holds the next `count` trace-saves (of those `which` picks) until all of them are sent, then delivers them in one task. */
+    holdSaves(count: number, which: (msg: TraceRequestMessage) => boolean = () => true) {
+      held = { count, which, saves: [] };
+    },
+    /** Sends every trace-save not held on its own, after the one before it was answered. */
+    serialSaves() {
+      serial = Promise.resolve();
+    },
+    /**
+     * The plugin closes, as Figma closes it: the panel fires its signal and
+     * shuts the bridge (effects.closePanel), then the main thread's close
+     * handler removes what renders hold (figma.on('close') in code.ts), and
+     * nothing more reaches either side.
+     */
     close() {
+      if (!open) return;
       closing.abort();
       bridge.close();
+      main.removeLeftovers();
       open = false;
     },
   };
@@ -108,5 +157,6 @@ export function expectUntouched(fake: Fake, before: Map<string, unknown>) {
   expect(after).toEqual(before);
 }
 
+/** The scratch containers on the file's pages. */
 export const scratchOn = (fake: Fake) =>
   fake.api.root.children.flatMap((page) => (page as unknown as FakeNode).children.filter((n) => isScratch(n as unknown as BaseNode)));
