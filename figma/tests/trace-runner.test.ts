@@ -38,6 +38,8 @@ interface BackendOptions {
   /** Claims that reach the backend only once these settle. */
   claimWaits?: Record<string, Promise<void>>;
   onPost?: (runId: string, turn: number) => void;
+  /** Runs whose turns the backend already holds: below `expected` a post is out of order; `decided` are its decisions. */
+  ahead?: Record<string, { expected: number; decided: Record<number, Decision> }>;
 }
 
 function studyBackend(brain: (runId: string, body: TurnBody) => Decision, opts: BackendOptions, log: string[]) {
@@ -49,6 +51,7 @@ function studyBackend(brain: (runId: string, body: TurnBody) => Decision, opts: 
   const posted: Array<{ runId: string; body: TurnBody }> = [];
   const aborted: Array<{ runId: string } & AbortBody> = [];
   const decisions = new Map<string, Decision>();
+  for (const [runId, held] of Object.entries(opts.ahead ?? {})) for (const [turn, d] of Object.entries(held.decided)) decisions.set(`${runId}/${turn}`, d);
   const row = (runId: string) => {
     const found = rows.find((r) => r.runId === runId);
     if (!found) throw new ApiError(404, 'run_not_found', `No run ${runId}.`);
@@ -78,6 +81,10 @@ function studyBackend(brain: (runId: string, body: TurnBody) => Decision, opts: 
     postTurn: vi.fn(async (runId: string, body: TurnBody): Promise<TurnView> => {
       const error = opts.postErrors?.[runId]?.shift();
       if (error) throw error;
+      const held = opts.ahead?.[runId];
+      if (held && body.turn < held.expected) {
+        throw new ApiError(409, 'turn_out_of_order', `turn ${body.turn} is out of order: this run takes turn ${held.expected} next.`, { expected: held.expected });
+      }
       posted.push({ runId, body: structuredClone(body) });
       log.push(`post ${runId} ${body.turn}`);
       opts.onPost?.(runId, body.turn);
@@ -364,7 +371,7 @@ describe('resuming when the panel reopens', () => {
       runs: [
         { runId: 'r1', status: 'running' },
         { runId: 'r2', status: 'running' },
-        { runId: 'r3', status: 'running' },
+        { runId: 'r3', status: 'running', owner: 'p_other_panel' },
         { runId: 'r4', status: 'completed' },
         { runId: 'r5', status: 'queued' },
         { runId: 'r6', status: 'aborted' },
@@ -387,6 +394,40 @@ describe('resuming when the panel reopens', () => {
     expect(postsOf(posted, 'r5').map((b) => b.turn)).toEqual([1, 2]);
     // The runs left alone keep the wave open.
     expect(result).toMatchObject({ stop: 'stuck' });
+  });
+
+  it("claims again a run of its own that nothing was saved for, and starts it from the first turn", async () => {
+    // The panel closed after the claim's answer, before the run's turn 0 save landed.
+    const { api, posted, result, main } = await runner(shortWalk, { runs: [{ runId: 'r1', status: 'running', owner: OWNER }] });
+    expect(api.claimRun).toHaveBeenCalledWith('r1', expect.objectContaining({ owner: OWNER }));
+    expect(postsOf(posted, 'r1').map((b) => [b.turn, b.last])).toEqual([[1, null], [2, expect.objectContaining({ outcome: 'navigated' })]]);
+    expect(result).toMatchObject({ stop: 'done', sessions: [{ runId: 'r1', stop: 'ended' }] });
+    expect(main.stored.get('s1')?.size ?? 0).toBe(0);
+  });
+
+  it("leaves a running run another panel claimed, which the backend refuses to this panel's claim", async () => {
+    const { api, posted, result } = await runner(shortWalk, { runs: [{ runId: 'r2', status: 'running', owner: 'p_other_panel' }] });
+    expect(api.claimRun).toHaveBeenCalledTimes(1);
+    expect(postsOf(posted, 'r2')).toEqual([]);
+    expect(result).toMatchObject({ stop: 'stuck', sessions: [] });
+  });
+
+  it('fails loudly when the backend refuses a claim again for another reason', async () => {
+    const gone = new ApiError(404, 'run_not_found', 'No run r1 for this user.');
+    const { error } = await runner(shortWalk, { runs: [{ runId: 'r1', status: 'running', owner: OWNER }], claimErrors: { r1: [gone] }, fails: true });
+    expect((error as Error).message).toMatch(/r1.*No run r1 for this user\./);
+  });
+
+  it('catches a claimed-again run up with the turns the backend already holds', async () => {
+    // Turn 1 was decided (Billing) and turn 2 posted before the panel closed; nothing reached this machine's storage.
+    const { posted, api, result } = await runner(shortWalk, {
+      runs: [{ runId: 'r1', status: 'running', owner: OWNER }],
+      ahead: { r1: { expected: 2, decided: { 1: { action: { type: 'click', element: 'e3' } } } } },
+    });
+    expect(api.getTurn.mock.calls[0]).toEqual(['r1', 1]);
+    // Turn 1 was read, not posted again; turn 2 went out on the screen turn 1 led to.
+    expect(postsOf(posted, 'r1').map((b) => [b.turn, b.screen.title])).toEqual([[2, 'Billing settings']]);
+    expect(result).toMatchObject({ stop: 'done', sessions: [{ runId: 'r1', stop: 'ended' }] });
   });
 
   it('flags every resumed run with file_changed when the file changed since they were saved', async () => {

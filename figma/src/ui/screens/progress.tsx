@@ -136,7 +136,7 @@ export function Progress({ state, fx }: { state: AppState; fx: Effects }) {
                   </button>
                 }
               >
-                {st.runner.notice} Forgetting it runs the test on; tries this panel was in the middle of end on their own.
+                {st.runner.notice} Forgetting it runs the test on: each try goes on from what Archetype has of it.
               </Banner>
             )}
             {notices.map((n) => (

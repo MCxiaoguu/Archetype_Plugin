@@ -376,12 +376,15 @@ describe('panel effects', () => {
     const main = await mainThread();
     main.loads.error = { message: "This test's saved progress was made by another version of the plugin.", code: 'saved_progress_unreadable' };
     const run = { runId: 'r1', archetypeId: 'a', archetypeName: 'Baseline founder', role: 'baseline', status: 'queued' };
-    // The run whose saved progress that was: running, with nothing saved once it is forgotten.
-    const theirs = { runId: 'r0', archetypeId: 'b', archetypeName: 'Low trust founder', role: 'variant', status: 'running' };
-    const calls = installFetch((_m, path) => {
+    // The run whose saved progress that was: this panel's, running, with nothing saved once it is forgotten.
+    const ours = { runId: 'r0', archetypeId: 'b', archetypeName: 'Low trust founder', role: 'variant', status: 'running' };
+    const calls = installFetch((method, path, body) => {
       if (path === '/api/studies/s14/status') return [200, { studyId: 's14', status: 'running' }];
-      if (path === '/api/studies/s14/runs') return [200, { studyId: 's14', status: 'running', runs: [theirs, run] }];
+      if (path === '/api/studies/s14/runs') return [200, { studyId: 's14', status: 'running', runs: [ours, run] }];
       if (path === '/api/plugin/runs/r1/claim') return (run.status = 'running'), [200, { runId: 'r1', ...BRIEFING }];
+      if (path === '/api/plugin/runs/r0/claim') return [200, { runId: 'r0', ...BRIEFING }];
+      if (method === 'POST' && path === '/api/plugin/runs/r0/turn') return [202, { turn: (body as { turn: number }).turn, status: 'thinking' }];
+      if (path === '/api/plugin/runs/r0/turn/1') return [200, { turn: 1, status: 'thinking' }];
       return [404, { error: 'x', message: path }];
     });
     const { store, fx } = initStore('tok', main, { studies: [traceStudy('s14', 'running')], lastStudyId: 's14' });
@@ -390,12 +393,14 @@ describe('panel effects', () => {
     // Its own banner, with the way out: not a Try again that would fail the same way.
     expect(store.get().study?.error).toBeNull();
     expect(calls).not.toContain('POST /api/plugin/runs/r1/claim');
+    expect(calls).not.toContain('POST /api/plugin/runs/r0/claim');
 
     await fx.forgetProgress();
     await until(() => calls.includes('POST /api/plugin/runs/r1/claim'));
     expect(main.log).toContain('forget s14');
-    // Left to the backend's watchdog, as runs with no saved state are.
-    expect(calls.filter((c) => c.includes('/runs/r0/'))).toEqual([]);
+    // Nothing saved for it any more: claimed again, it is this panel's, and goes on from its first turn.
+    await until(() => calls.includes('POST /api/plugin/runs/r0/turn'));
+    expect(calls).toContain('POST /api/plugin/runs/r0/claim');
     fx.newTest();
   });
 

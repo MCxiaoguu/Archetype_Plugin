@@ -762,6 +762,36 @@ describe('a whole study through the runner', () => {
     expect([...first.failures, ...second.failures]).toEqual([]);
   }, 30_000);
 
+  it('claims again and finishes a run whose turn 0 save the plugin closed before storing', async () => {
+    mock.trace.addStudy({
+      studyId: 'study-reclaim',
+      waves: [[{ runId: 'run-rc', script: [{ expect: 'Dashboard', click: 'Billing' }, { expect: 'Billing settings', give_up: 'Billing has no bank here.' }] }]],
+    });
+    const fake = fakeFile();
+    const first = openPlugin(fake);
+    const doc = await first.bridge.call('trace-read', { importLibraryVariants: true });
+    // The run's turn 0 save is held back, and the plugin closes before it reaches the main thread.
+    first.holdSaves(2);
+    const running = study(first, doc, 'study-reclaim');
+    for (let i = 0; i < 500 && !first.sent.includes('trace-save'); i++) await tick();
+    first.close();
+    expect(await running).toMatchObject({ stop: 'cancelled' });
+    expect(mock.trace.runs.get('run-rc')).toMatchObject({ status: 'running', owner: OWNER });
+    expect(postsOf('run-rc')).toEqual([]);
+
+    // Reopened: nothing is saved for the run, but the backend answers this panel's claim of it again.
+    const second = openPlugin(fake);
+    const reread = await second.bridge.call('trace-read', { importLibraryVariants: true });
+    expect(await second.bridge.call('trace-load', { studyId: 'study-reclaim' })).toEqual({ sessions: [] });
+    const result = await study(second, reread, 'study-reclaim');
+    expect(result).toMatchObject({ stop: 'done', sessions: [{ runId: 'run-rc', ended: { status: 'finalizing', reason: 'give_up' }, stop: 'ended' }] });
+    expect(refusalsOf('run-rc')).toEqual([]);
+    expect(postsOf('run-rc').map((p) => p.turn)).toEqual([1, 2]);
+    expect(await second.bridge.call('trace-load', { studyId: 'study-reclaim' })).toEqual({ sessions: [] });
+    await second.settled();
+    expect([...first.failures, ...second.failures]).toEqual([]);
+  }, 30_000);
+
   it('resumes every run from its turn 0 save when the plugin closes before any turn was played', async () => {
     const script: ScriptStep[] = [
       { expect: 'Dashboard', click: 'Billing', hold: 'reopened' },

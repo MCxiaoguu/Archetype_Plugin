@@ -160,7 +160,9 @@ async function run(study: StudyTrace, deps: RunnerDeps, results: SessionResult[]
   /**
    * Claims a run and starts its session at once, without waiting for the
    * other claims. It saves the run at turn 0 first, so a panel that closes
-   * now resumes it. A run another actor got first is theirs.
+   * now resumes it. A run another actor got first is theirs. A running run
+   * is claimed again the same way: the backend answers its own owner with
+   * the briefing again, and anyone else with already_claimed.
    */
   async function claimAndStart(runId: string): Promise<void> {
     try {
@@ -191,11 +193,13 @@ async function run(study: StudyTrace, deps: RunnerDeps, results: SessionResult[]
     deps.onRunner({ phase: phase ?? 'running', notice: `${NOTICE.notSaved} ${messageOf(failure)}` });
   }
 
-  /** Claims and starts every queued run, each on its own; when the panel closes, once every claim is through. */
-  async function claimQueued(runs: readonly RunRowApi[]): Promise<void> {
-    const claims = await Promise.allSettled(runs.filter((r) => r.status === 'queued' && !started.has(r.runId)).map((r) => claimAndStart(r.runId)));
+  /** Claims and starts runs, each on its own; when the panel closes, once every claim is through. */
+  async function claimEach(runIds: readonly string[]): Promise<void> {
+    const claims = await Promise.allSettled(runIds.filter((id) => !started.has(id)).map((id) => claimAndStart(id)));
     for (const c of claims) if (c.status === 'rejected') throw c.reason;
   }
+
+  const claimQueued = (runs: readonly RunRowApi[]) => claimEach(runs.filter((r) => r.status === 'queued').map((r) => r.runId));
 
   /** Waits for every session started so far, then cleans up; a session that broke or a refused claim fails the runner. */
   async function settle(): Promise<void> {
@@ -241,8 +245,8 @@ async function run(study: StudyTrace, deps: RunnerDeps, results: SessionResult[]
   }
 
   // `started` holds every session this runner started, in the order it started them.
-  // Resume (spec, Data flow 10): only the runs this panel saved that the backend still runs.
-  // A saved run of another owner, or a running run nothing was saved for, may be another panel's.
+  // Resume (spec, Data flow 10): the runs this panel saved that the backend still runs.
+  // A saved run of another owner is another panel's on this machine.
   const { sessions: saved } = await bridge.call('trace-load', { studyId });
   const runs = await readRuns();
   const statusOf = new Map(runs.map((r) => [r.runId, r.status]));
@@ -252,7 +256,12 @@ async function run(study: StudyTrace, deps: RunnerDeps, results: SessionResult[]
     // It ended while the panel was closed: there is nothing left to resume.
     else await bridge.call('trace-save', { studyId, runId: s.runId, session: null });
   }
-  await claimQueued(runs);
+  // A running run nothing was saved for here: this panel's when it closed before the turn 0 save
+  // landed, or another panel's. Claimed again, the backend says which; one of ours starts from
+  // turn 1 and catches up with the turns the backend already holds.
+  const savedHere = new Set(saved.map((s) => s.runId));
+  const unsaved = runs.filter((r) => r.status === 'running' && !savedHere.has(r.runId)).map((r) => r.runId);
+  await claimEach([...runs.filter((r) => r.status === 'queued').map((r) => r.runId), ...unsaved]);
 
   for (;;) {
     await settle();
