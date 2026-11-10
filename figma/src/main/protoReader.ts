@@ -228,9 +228,17 @@ async function readVariables(api: PluginAPI): Promise<Record<string, ProtoCollec
 
 // --- Walking the flow ------------------------------------------------------------------
 
-function* subtree(node: SceneNode): Generator<SceneNode> {
-  yield node;
-  if ('children' in node) for (const child of node.children) yield* subtree(child);
+const hasReactions = (node: SceneNode): boolean => 'reactions' in node && (node as Reactive).reactions.length > 0;
+
+/**
+ * A screen's or a component's layers that have reactions, the node itself
+ * first: one findAll, which walks the layers inside Figma, instead of a
+ * walk here over every layer. It reaches hidden layers inside instances
+ * while skipInvisibleInstanceChildren is off, as it is during a read.
+ */
+function reactive(node: SceneNode): SceneNode[] {
+  const inside = 'findAll' in node ? node.findAll(hasReactions) : [];
+  return hasReactions(node) ? [node, ...inside] : inside;
 }
 
 /** A layer's key inside a variant: its id without Figma's leading `I`. */
@@ -261,22 +269,33 @@ async function variantsAround(instance: InstanceNode): Promise<ComponentNode[]> 
   return set && set.type === 'COMPONENT_SET' ? (set.children as ComponentNode[]) : [main];
 }
 
-/** A component's layers, or why they can't be read (a library component whose layers the file doesn't hold). */
+/** A component's layers with reactions, or why they can't be read (a library component whose layers the file doesn't hold). */
 function layersOf(component: ComponentNode): SceneNode[] | Error {
   try {
-    return [...subtree(component)];
+    return reactive(component);
   } catch (err) {
     return err instanceof Error ? err : new Error(String(err));
   }
 }
 
+/** A read, with the frame each reaction key of `doc.reactions` is in, which the reader knows as it reads. */
+export interface ProtoRead {
+  doc: ProtoDoc;
+  frameOf: Map<string, string>;
+}
+
 export async function readProto(api: PluginAPI, page: PageNode, options: ReadOptions): Promise<ProtoDoc> {
+  return (await readProtoWithKeys(api, page, options)).doc;
+}
+
+export function readProtoWithKeys(api: PluginAPI, page: PageNode, options: ReadOptions): Promise<ProtoRead> {
   return exclusive(api, () => read(api, page, options));
 }
 
-async function read(api: PluginAPI, page: PageNode, options: ReadOptions): Promise<ProtoDoc> {
+async function read(api: PluginAPI, page: PageNode, options: ReadOptions): Promise<ProtoRead> {
   const frames: ProtoFrame[] = [];
   const reactions: Record<string, ProtoReaction[]> = {};
+  const keyFrames = new Map<string, string>();
   const variantSets: Record<string, VariantSet> = {};
   const libraryVariants: LibraryVariant[] = [];
   const queue: Screen[] = [];
@@ -374,10 +393,11 @@ async function read(api: PluginAPI, page: PageNode, options: ReadOptions): Promi
 
   while (queue.length) {
     const frame = queue.shift() as Screen;
-    for (const node of subtree(frame)) {
+    for (const node of reactive(frame)) {
       const own = reactionsOf(node);
       if (!own.length) continue;
       reactions[node.id] = own;
+      keyFrames.set(node.id, frame.id);
       unfollowed.push(...own);
       await registerChangeTos(node, own, frame, (n) => n.id, frame.id);
     }
@@ -394,5 +414,5 @@ async function read(api: PluginAPI, page: PageNode, options: ReadOptions): Promi
     variableCollections: await readVariables(api),
     libraryVariants,
   };
-  return { docHash: hashText(stableJson(doc)), ...doc };
+  return { doc: { docHash: hashText(stableJson(doc)), ...doc }, frameOf: keyFrames };
 }

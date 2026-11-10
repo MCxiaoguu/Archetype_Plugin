@@ -48,12 +48,18 @@ export function createTracePanel(deps: TracePanelDeps) {
   /** Fires when the panel closes: every session stops where it is, to resume when it reopens. */
   const closing = new AbortController();
 
-  /** Reads the prototype on the current page, once more if that fails (spec, Error handling). */
+  /**
+   * Reads the prototype on the current page, once more if the main thread
+   * answered with an error (spec, Error handling). A read that timed out
+   * may still be running there, and another would only queue behind it, so
+   * it isn't tried again.
+   */
   async function read(importLibraryVariants: boolean): Promise<ProtoDoc> {
     let first: unknown;
     try {
       return await bridge().call('trace-read', { importLibraryVariants }, { timeoutMs: READ_TIMEOUT_MS });
     } catch (err) {
+      if (!(err instanceof BridgeError)) throw err;
       first = err;
     }
     try {

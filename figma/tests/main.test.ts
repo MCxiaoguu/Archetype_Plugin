@@ -458,6 +458,25 @@ describe('trace requests on the main thread', () => {
     expect(t.api.notify).not.toHaveBeenCalled();
   });
 
+  it('learns which frame each reaction layer is in from the read, looking no reaction layer up', async () => {
+    const t = traceMain();
+    const asked: string[] = [];
+    const lookup = t.api.getNodeByIdAsync.getMockImplementation();
+    if (!lookup) throw new Error('The fake has no getNodeByIdAsync');
+    t.api.getNodeByIdAsync.mockImplementation(async (id: string) => {
+      asked.push(id);
+      return lookup(id);
+    });
+    const doc = (await t.ask({ type: 'trace-read', requestId: 'r', importLibraryVariants: false })).result as ProtoDoc;
+    // 1:7 (the Billing link) and I2:21;6:4 (a hidden spinner) are reaction layers, neither a frame nor a destination.
+    expect(Object.keys(doc.reactions)).toEqual(expect.arrayContaining(['1:7', 'I2:21;6:4']));
+    expect(asked).not.toContain('1:7');
+    expect(asked).not.toContain('I2:21;6:4');
+    // Deleted, the Billing link still names its frame.
+    t.fire('0:1', [{ type: 'DELETE', node: { id: '1:7', type: 'TEXT', removed: true } }]);
+    expect(t.posted()).toContainEqual({ type: 'trace-file-changed', frameIds: ['1:2'] });
+  });
+
   it('renders only a prototype it read, by its hash, and refuses another', async () => {
     const t = traceMain();
     const doc = (await t.ask({ type: 'trace-read', requestId: 'r', importLibraryVariants: false })).result as ProtoDoc;

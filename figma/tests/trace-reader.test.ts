@@ -1,8 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import fixtureJson from '../harness/fixtures/farside-proto.json';
 import type { ProtoAction, ProtoDoc } from '../src/lib/proto/model';
 import { topLevelFrames } from '../src/main/document';
-import { readProto } from '../src/main/protoReader';
+import { readProto, readProtoWithKeys } from '../src/main/protoReader';
 import { SCRATCH_KEY, SCRATCH_VALUE } from '../src/main/scratch';
 import { FakeNode, fakeFromFixture, type ProtoFixture } from './fake-figma';
 
@@ -100,6 +100,32 @@ describe('readProto', () => {
       const fake = await read();
       expect(fake.doc.reactions['I2:21;6:4']).toEqual([{ trigger: { type: 'ON_CLICK' }, actions: [{ type: 'URL', url: 'https://status.example.com' }] }]);
       expect(fake.api.skipInvisibleInstanceChildren).toBe(true);
+    });
+
+    it('finds a hidden layer with reactions inside a variant too', async () => {
+      const { doc } = await read(undefined, (f) => (node(f, 'I8:6;6:12').visible = false));
+      expect(doc.variantSets['2:33']?.variants[1]?.reactions['8:6;6:12']).toEqual([{ trigger: { type: 'ON_HOVER' }, actions: [{ type: 'URL', url: 'https://help.example.com/saved' }] }]);
+    });
+
+    it('asks each frame and each variant for its layers with reactions in one findAll, without walking every layer', async () => {
+      const fake = fakeFromFixture(fixture());
+      const spy = vi.spyOn(FakeNode.prototype, 'findAll');
+      const doc = await readProto(fake.api, fake.api.currentPage, { importLibraryVariants: true });
+      const searched = spy.mock.contexts.map((c) => (c as FakeNode).id);
+      spy.mockRestore();
+      // A variant whose layers the file lacks is asked too, before it is imported or left unavailable.
+      const variants = Object.values(doc.variantSets).flatMap((set) => set.variants.map((v) => v.componentId ?? v.id));
+      expect(searched.sort()).toEqual([...new Set([...doc.frames.map((f) => f.id), ...variants])].sort());
+    });
+
+    it('says which frame each reaction key is in, so the main thread need not look any up', async () => {
+      const fake = fakeFromFixture(fixture());
+      const { doc, frameOf } = await readProtoWithKeys(fake.api, fake.api.currentPage, { importLibraryVariants: true });
+      expect([...frameOf.keys()].sort()).toEqual(Object.keys(doc.reactions).sort());
+      expect(frameOf.get('1:7')).toBe('1:2');
+      expect(frameOf.get('I2:21;6:4')).toBe('2:20');
+      expect(frameOf.get('3:1')).toBe('3:1');
+      expect(frameOf.get('7:2')).toBe('7:1');
     });
 
     it('puts skipInvisibleInstanceChildren back when the read throws', async () => {

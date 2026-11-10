@@ -372,6 +372,19 @@ describe('panel effects', () => {
     expect(store.get()).toMatchObject({ gate: null, notice: { kind: 'error', text: expect.stringMatching(/second.*first/) } });
   });
 
+  it('does not read again while a read that timed out may still be running, and says so', async () => {
+    const main = await mainThread();
+    main.gate.readTimeouts = 1;
+    const calls = installFetch((method, path) => [404, { error: 'x', message: `${method} ${path}` }]);
+    const { store, fx } = initStore('tok', main);
+    fillForm(store, '');
+    await fx.launch();
+    expect(main.gate.reads).toEqual([false]);
+    expect(calls).toEqual([]);
+    expect(store.get()).toMatchObject({ gate: null, notice: { kind: 'error', text: 'The Figma document did not answer trace-read within 120 s.' } });
+    fx.newTest();
+  });
+
   it('offers to forget saved progress it cannot read, and then runs the test on without it', async () => {
     const main = await mainThread();
     main.loads.error = { message: "This test's saved progress was made by another version of the plugin.", code: 'saved_progress_unreadable' };

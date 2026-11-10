@@ -11,7 +11,7 @@ import type { RenderNote, SavedSession, ScratchCheckReply, TraceRenderReply } fr
 import type { ProtoDoc, TraceAction, TraceState } from '../src/lib/proto/model';
 import { readProto } from '../src/main/protoReader';
 import { createRenderer } from '../src/main/renderer';
-import { BridgeError, type Bridge } from '../src/ui/trace/bridge';
+import { BridgeError, BridgeTimeout, type Bridge } from '../src/ui/trace/bridge';
 import { fakeFromFixture, type ProtoFixture } from './fake-figma';
 
 export type Fake = ReturnType<typeof fakeFromFixture>;
@@ -35,12 +35,17 @@ export async function mainThread(edit: (fake: Fake) => void = () => {}, log: str
   const loads = { error: null as { message: string; code: 'saved_progress_unreadable' } | null };
   /** The launch gate's view of the file, and each read's importLibraryVariants. */
   /** `readErrors`: reads that fail with these messages first. */
-  const gate = { scratch: { ok: true, reason: null } as ScratchCheckReply, reads: [] as boolean[], readErrors: [] as string[], readAs: null as ((importLibraryVariants: boolean) => ProtoDoc) | null };
+  /** `readTimeouts`: reads the bridge gives up on first, as it does on a main thread that hasn't answered in time. */
+  const gate = { scratch: { ok: true, reason: null } as ScratchCheckReply, reads: [] as boolean[], readErrors: [] as string[], readTimeouts: 0, readAs: null as ((importLibraryVariants: boolean) => ProtoDoc) | null };
   const call = vi.fn(async (type: string, payload: Record<string, unknown>) => {
     if (type === 'trace-scratch-check') return gate.scratch;
     if (type === 'trace-read') {
       const importLibraryVariants = payload.importLibraryVariants as boolean;
       gate.reads.push(importLibraryVariants);
+      if (gate.readTimeouts > 0) {
+        gate.readTimeouts--;
+        throw new BridgeTimeout('trace-read', 120_000);
+      }
       const error = gate.readErrors.shift();
       if (error) throw new BridgeError('trace-read', error);
       const read = gate.readAs ? gate.readAs(importLibraryVariants) : structuredClone(doc);

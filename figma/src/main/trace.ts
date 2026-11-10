@@ -9,8 +9,8 @@
 
 import type { MainToUi, SavedSession, ScratchCheckReply, TraceCalls, TraceCallType, TraceRequestMessage } from '../lib/messages';
 import type { ProtoDoc, RawLayer, TraceState } from '../lib/proto/model';
-import { pageOf, topFrameOf } from './document';
-import { readProto } from './protoReader';
+import { pageOf } from './document';
+import { readProtoWithKeys } from './protoReader';
 import { createRenderer } from './renderer';
 import { exclusive, heldContainers, isScratch, recordScratchNode, SCRATCH_KEY, SCRATCH_VALUE } from './scratch';
 import * as store from './storage';
@@ -91,15 +91,14 @@ export function createTraceMain(api: PluginAPI, post: (msg: MainToUi) => void): 
 
   async function read(importLibraryVariants: unknown): Promise<ProtoDoc> {
     if (typeof importLibraryVariants !== 'boolean') bad('importLibraryVariants that is not true or false');
-    const doc = await readProto(api, api.currentPage, { importLibraryVariants });
-    // A reaction key can name a hidden layer inside an instance, which Figma gives by id only with invisible instance children reachable.
-    await exclusive(api, () => learn(doc));
+    const { doc, frameOf } = await readProtoWithKeys(api, api.currentPage, { importLibraryVariants });
+    await learn(doc, frameOf);
     docs.set(doc.docHash, doc);
     return doc;
   }
 
-  /** The frames to watch and the node ids the trace knows, from a ProtoDoc just read. */
-  async function learn(doc: ProtoDoc): Promise<void> {
+  /** The frames to watch and the node ids the trace knows, from a ProtoDoc just read and the frame of each of its reaction keys. */
+  async function learn(doc: ProtoDoc, frameOf: ReadonlyMap<string, string>): Promise<void> {
     frames = new Set(doc.frames.map((f) => f.id));
     known = new Map();
     for (const frame of doc.frames) {
@@ -110,10 +109,9 @@ export function createTraceMain(api: PluginAPI, post: (msg: MainToUi) => void): 
       if (page) watch(page);
     }
     for (const key of Object.keys(doc.reactions)) {
-      // Path keys inside swapped variants are not node ids: no node, no frame.
-      const node = await api.getNodeByIdAsync(key);
-      const frameId = node ? (topFrameOf(node)?.id ?? null) : null;
-      remember(key, frameId && frames.has(frameId) ? frameId : null);
+      const frameId = frameOf.get(key);
+      if (frameId === undefined) throw new Error(`The read of the prototype left out which frame its layer ${key} is in`);
+      remember(key, frameId);
     }
     for (const [instanceKey, set] of Object.entries(doc.variantSets)) {
       remember(instanceKey, set.frameId);
