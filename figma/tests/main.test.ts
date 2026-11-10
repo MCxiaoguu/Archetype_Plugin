@@ -350,6 +350,27 @@ describe('trace requests on the main thread', () => {
     expect(t.api.notify).not.toHaveBeenCalled();
   });
 
+  it('removes leftover scratch containers when the panel asks, once no render is running', async () => {
+    const t = traceMain();
+    const doc = (await t.ask({ type: 'trace-read', requestId: 'r', importLibraryVariants: false })).result as ProtoDoc;
+    const page = t.api.currentPage as unknown as FakeNode;
+    const leftover = t.api.createFrame() as unknown as FakeNode;
+    leftover.setPluginData(SCRATCH_KEY, SCRATCH_VALUE);
+    const designers = t.api.createFrame() as unknown as FakeNode;
+    // Asked while a render is under way, the cleanup waits for it instead of pulling its container away.
+    const scratchOnPage = () => page.children.filter((n) => isScratch(n as unknown as BaseNode)).length;
+    const rendering = t.ask({ type: 'trace-render', requestId: 'r1', doc, state: start(doc, '1:2') });
+    for (let i = 0; i < 100 && scratchOnPage() < 2; i++) await Promise.resolve();
+    expect(scratchOnPage()).toBe(2);
+    const cleanup = t.ask({ type: 'trace-cleanup', requestId: 'c1' });
+    expect((await rendering).type).toBe('trace-result');
+    expect(await cleanup).toEqual({ type: 'trace-result', requestId: 'c1', result: { removed: 1 } });
+    expect(leftover.removed).toBe(true);
+    expect(page.children).toContain(designers);
+    expect(page.children.filter((n) => isScratch(n as unknown as BaseNode))).toEqual([]);
+    expect((await t.ask({ type: 'trace-cleanup', requestId: 'c2' })).result).toEqual({ removed: 0 });
+  });
+
   it('keeps sessions per study and per file', async () => {
     const t = traceMain();
     const doc = (await t.ask({ type: 'trace-read', requestId: 'a', importLibraryVariants: false })).result as ProtoDoc;

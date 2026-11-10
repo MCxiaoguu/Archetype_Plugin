@@ -42,6 +42,21 @@ export interface StudyRecord {
   status: string;
   /** "3 of 5 reached the goal", once a report was seen. */
   outcome?: string | null;
+  /** A plugin-mode study this panel runs itself; absent for one a runner service runs. */
+  trace?: TraceRecord;
+}
+
+/** Who runs a plugin-mode study's personas here, and on what (spec, Data flow 2 and 10). */
+export interface TraceRecord {
+  /** This panel's id for the study's runs, kept so a reopened panel resumes the runs it owns. */
+  owner: string;
+  /** The ProtoDoc's hash at launch. */
+  docHash: string;
+  startFrameId: string;
+  /** The share link's file key; null without a link. */
+  shareKey: string | null;
+  /** The designer agreed that reading the flow imports its library components. */
+  importLibraryVariants: boolean;
 }
 
 export type Draft = Pick<StudyForm, 'goal' | 'who' | 'product' | 'link' | 'size'>;
@@ -116,11 +131,13 @@ export interface TraceLoadReply {
   sessions: SavedSession[];
 }
 
-/** The launch gate: whether a scratch container can be made and removed (edit access). */
-export interface ScratchCheckReply {
-  ok: boolean;
-  reason: string | null;
+/** Scratch containers removed from the page once no session renders any more. */
+export interface TraceCleanupReply {
+  removed: number;
 }
+
+/** The launch gate: whether a scratch container can be made and removed (edit access). */
+export type ScratchCheckReply = { ok: true; reason: null } | { ok: false; reason: string };
 
 export interface TraceCalls {
   'trace-read': { request: TraceReadRequest; reply: ProtoDoc };
@@ -128,6 +145,7 @@ export interface TraceCalls {
   'trace-save': { request: TraceSaveRequest; reply: null };
   'trace-load': { request: TraceLoadRequest; reply: TraceLoadReply };
   'trace-scratch-check': { request: Record<string, never>; reply: ScratchCheckReply };
+  'trace-cleanup': { request: Record<string, never>; reply: TraceCleanupReply };
 }
 
 export type TraceCallType = keyof TraceCalls;
@@ -140,7 +158,7 @@ export type TraceReplyMessage =
   | { type: 'trace-result'; requestId: string; result: unknown }
   | { type: 'trace-error'; requestId: string; message: string };
 
-export const TRACE_CALLS: readonly TraceCallType[] = ['trace-read', 'trace-render', 'trace-save', 'trace-load', 'trace-scratch-check'];
+export const TRACE_CALLS: readonly TraceCallType[] = ['trace-read', 'trace-render', 'trace-save', 'trace-load', 'trace-scratch-check', 'trace-cleanup'];
 
 export function isTraceRequest(msg: { type: string }): msg is TraceRequestMessage {
   return (TRACE_CALLS as readonly string[]).includes(msg.type);

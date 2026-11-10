@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ApiError, type StudyStatusValue } from '../src/lib/api';
-import { continueLaunch, stageForStatus, type LaunchApi } from '../src/lib/launch';
+import { componentsToImport, continueLaunch, importText, stageForStatus, type LaunchApi } from '../src/lib/launch';
+import type { LibraryVariant } from '../src/lib/proto/model';
 
 function fakeApi(start: StudyStatusValue, opts: { busyOnce?: boolean; failAt?: 'factors' | 'archetypes' | 'runs' } = {}) {
   let status: StudyStatusValue = start;
@@ -121,5 +122,20 @@ describe('launch steps', () => {
     };
     await expect(continueLaunch(api, 's', { onStage: () => undefined, sleep })).rejects.toThrow(/did not move forward/);
     expect(sleep).toHaveBeenCalledWith(5000);
+  });
+});
+
+describe('the library components a launch would add', () => {
+  const variant = (name: string, status: LibraryVariant['status']): LibraryVariant => ({ variantId: `5:${name.length}`, key: `k-${name}`, name, status, error: null });
+
+  it('names each component the read was not allowed to import, once', () => {
+    const doc = { libraryVariants: [variant('State=Open', 'needs_import'), variant('State=Open', 'needs_import'), variant('Size=Large', 'needs_import'), variant('State=Done', 'imported'), variant('State=Gone', 'failed')] };
+    expect(componentsToImport(doc)).toEqual(['State=Open', 'Size=Large']);
+    expect(componentsToImport({ libraryVariants: [] })).toEqual([]);
+  });
+
+  it('tells the designer what testing adds to the file', () => {
+    expect(importText(['State=Open'])).toBe('Testing this flow adds State=Open to this file, as using it in Figma would.');
+    expect(importText(['A', 'B', 'C'])).toBe('Testing this flow adds A, B and C to this file, as using it in Figma would.');
   });
 });

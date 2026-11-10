@@ -1,16 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import fixtureJson from '../harness/fixtures/farside-proto.json';
 import { ApiError, type AbortBody, type TurnBody, type TurnEnded, type TurnView } from '../src/lib/api';
 import type { RenderNote, SavedSession, TraceRenderReply } from '../src/lib/messages';
 import { listElements } from '../src/lib/proto/elements';
 import { apply, start } from '../src/lib/proto/engine';
 import { EngineError, type EngineErrorCode } from '../src/lib/proto/errors';
 import type { ProtoDoc, TraceAction, TraceState } from '../src/lib/proto/model';
-import { readProto } from '../src/main/protoReader';
-import { createRenderer } from '../src/main/renderer';
-import { BridgeError, type Bridge } from '../src/ui/trace/bridge';
 import { NOTICE, runSession, type SessionRun, type SessionStatus } from '../src/ui/trace/session';
-import { fakeFromFixture, type FakeNode, type ProtoFixture } from './fake-figma';
+import type { FakeNode } from './fake-figma';
+import { clock, click, DONE, farside, lastOf, mainThread, type Decision, type Fake } from './trace-fakes';
 
 // The engine runs for real; a test can make `apply` throw an EngineError the
 // engine has no way to raise yet (doc_changed lands with the engine review).
@@ -30,49 +27,7 @@ afterEach(() => {
   hooks.applyError = null;
 });
 
-function lastOf<T>(items: readonly T[]): T {
-  if (!items.length) throw new Error('Nothing was recorded');
-  return items[items.length - 1] as T;
-}
-
-// --- The main thread: the Farside prototype, read and rendered for real ------
-
-type Fake = ReturnType<typeof fakeFromFixture>;
-
-async function mainThread(edit: (fake: Fake) => void = () => {}) {
-  const fake = fakeFromFixture(structuredClone(fixtureJson) as unknown as ProtoFixture);
-  edit(fake);
-  const doc = await readProto(fake.api, fake.api.currentPage, { importLibraryVariants: true });
-  const renderer = createRenderer(fake.api);
-  const saves: Array<SavedSession | null> = [];
-  const renders = { failures: 0, notes: null as RenderNote[] | null, change: null as ((r: TraceRenderReply) => TraceRenderReply) | null };
-  const call = vi.fn(async (type: string, payload: Record<string, unknown>) => {
-    if (type === 'trace-render') {
-      if (renders.failures > 0) {
-        renders.failures--;
-        throw new BridgeError('trace-render', 'The export of the screen came back empty');
-      }
-      // The main thread answers a render that throws with trace-error, which the bridge rejects as a BridgeError.
-      let r = await renderer.render(payload.doc as ProtoDoc, payload.state as TraceState).catch((err: Error) => {
-        throw new BridgeError('trace-render', err.message);
-      });
-      if (renders.notes) r = { ...r, notes: renders.notes };
-      return renders.change ? renders.change(r) : r;
-    }
-    if (type === 'trace-save') {
-      saves.push(structuredClone(payload.session) as SavedSession | null);
-      return null;
-    }
-    throw new Error(`The session should not ask for ${type}`);
-  });
-  // The in-process main thread answers the bridge's calls, whatever their type.
-  const bridge = { call: call as unknown as Bridge['call'] };
-  return { fake, doc, bridge, saves, renders };
-}
-
 // --- The backend: turns answered by a scripted brain --------------------------
-
-type Decision = { action: TraceAction | null; ended?: TurnEnded } | { failed: { code: string; message: string }; ended: TurnEnded };
 
 const STATE = { seq: 1, maxSteps: 22, unproductive: 0, maxUnproductiveSteps: 5, progress: 30, sentimentTrend: 'steady' as const, reviewGiveUp: false, ended: false, endedReason: null };
 
@@ -110,50 +65,6 @@ function backend(brain: (body: TurnBody) => Decision, opts: { thinking?: number;
     }),
   };
   return { api, posted, aborted, decisions };
-}
-
-const click = (body: TurnBody, label: string): TraceAction => {
-  const element = body.elements.find((e) => e.label === label);
-  if (!element) throw new Error(`No "${label}" on ${body.screen.title}: ${body.elements.map((e) => e.label).join(', ')}`);
-  return { type: 'click', element: element.id };
-};
-
-const DONE: Decision = { action: { type: 'done', claim: 'My bank is connected.' }, ended: { status: 'finalizing', reason: 'done' } };
-
-/** A persona that takes the Farside billing path, with one misclick, to the end. */
-function farside(body: TurnBody): Decision {
-  switch (body.screen.title) {
-    case 'Dashboard':
-      return { action: click(body, 'Billing') };
-    case 'Billing settings':
-      return { action: click(body, 'Connect a bank') };
-    case 'Connect bank':
-      if (body.last?.outcome === 'nothing_happened') return { action: { type: 'scroll', direction: 'down' } };
-      if (body.last?.outcome === 'scrolled') return { action: click(body, 'Continue') };
-      return { action: click(body, 'Use routing number instead') };
-    case 'Verify phone':
-      return { action: click(body, 'Send code') };
-    case 'Bank connected':
-      return DONE;
-    default:
-      throw new Error(`The persona got lost on ${body.screen.title}`);
-  }
-}
-
-// --- Time: a clock that only moves when the session waits --------------------
-
-function clock(late: (ms: number) => number = () => 0) {
-  let t = Date.parse('2026-11-10T10:00:00Z');
-  const waits: number[] = [];
-  return {
-    now: () => t,
-    sleep: async (ms: number) => {
-      waits.push(ms);
-      t += ms + late(ms);
-    },
-    waits,
-    at: () => t,
-  };
 }
 
 async function play(

@@ -2,6 +2,7 @@ import type { DeviceCode, RunRowApi, StudyStatusValue } from './api';
 import { DEFAULT_SETTINGS, type Draft, type InitPayload, type Settings, type StudyRecord } from './messages';
 import { nextQueuedSince } from './poll';
 import type { StudyReport } from './report';
+import type { LiveRun, RunnerStatus } from './runs';
 import { EMPTY_FORM, type RunSize, type StudyForm } from './study';
 import type { DocSnapshot, NodeRef } from './types';
 
@@ -26,7 +27,18 @@ export interface ActiveStudy {
   pollError: string | null;
   report: StudyReport | null;
   reportError: string | null;
+  /** What the sessions this panel runs say, by run id (plugin mode). */
+  live: Record<string, LiveRun>;
+  runner: RunnerStatus | null;
 }
+
+/** What stands between the form and a launch (spec, Data flow 1). */
+export type LaunchGate =
+  | { kind: 'checking' }
+  /** The file can't be edited, so nothing can be rendered. */
+  | { kind: 'blocked'; reason: string }
+  /** Testing the flow would import these library components into the file: the designer confirms first. */
+  | { kind: 'confirm-import'; components: string[] };
 
 export interface AuthState {
   phase: 'idle' | 'starting' | 'waiting' | 'error';
@@ -57,6 +69,7 @@ export interface AppState {
   study: ActiveStudy | null;
   history: StudyRecord[];
   notice: Notice | null;
+  gate: LaunchGate | null;
 }
 
 export const INITIAL_STATE: AppState = {
@@ -74,6 +87,7 @@ export const INITIAL_STATE: AppState = {
   study: null,
   history: [],
   notice: null,
+  gate: null,
 };
 
 export type Action =
@@ -105,7 +119,10 @@ export type Action =
   | { type: 'signed-out'; expired: boolean }
   | { type: 'settings'; settings: Settings }
   | { type: 'studies'; studies: StudyRecord[] }
-  | { type: 'notice'; notice: Notice | null };
+  | { type: 'notice'; notice: Notice | null }
+  | { type: 'gate'; gate: LaunchGate | null }
+  | { type: 'session'; studyId: string; status: LiveRun }
+  | { type: 'runner'; studyId: string; status: RunnerStatus };
 
 function emptyStudy(now: number, record: StudyRecord | null, stage: Stage): ActiveStudy {
   return {
@@ -122,6 +139,8 @@ function emptyStudy(now: number, record: StudyRecord | null, stage: Stage): Acti
     pollError: null,
     report: null,
     reportError: null,
+    live: {},
+    runner: null,
   };
 }
 
@@ -208,7 +227,7 @@ export function reducer(state: AppState, action: Action): AppState {
     case 'attempt-launch':
       return { ...state, touched: true };
     case 'launch-started':
-      return { ...state, screen: 'progress', study: emptyStudy(action.now, null, 'creating'), notice: null };
+      return { ...state, screen: 'progress', study: emptyStudy(action.now, null, 'creating'), notice: null, gate: null };
     case 'study-created':
       return patchStudy(
         { ...state, history: [action.record, ...state.history.filter((h) => h.studyId !== action.record.studyId)] },
@@ -273,7 +292,7 @@ export function reducer(state: AppState, action: Action): AppState {
     case 'open-study':
       return { ...state, study: emptyStudy(action.now, action.record, 'watching'), screen: 'progress', notice: null };
     case 'new-test':
-      return { ...state, study: null, screen: 'new', touched: false, notice: null };
+      return { ...state, study: null, screen: 'new', touched: false, notice: null, gate: null };
     case 'navigate': {
       if (action.screen === 'settings') return { ...state, back: state.screen === 'settings' ? state.back : state.screen, screen: 'settings' };
       return { ...state, screen: action.screen };
@@ -307,6 +326,14 @@ export function reducer(state: AppState, action: Action): AppState {
       return { ...state, history: action.studies };
     case 'notice':
       return { ...state, notice: action.notice };
+    case 'gate':
+      return { ...state, gate: action.gate };
+    case 'session':
+      if (state.study?.id !== action.studyId) return state;
+      return patchStudy(state, { live: { ...state.study.live, [action.status.runId]: action.status } });
+    case 'runner':
+      if (state.study?.id !== action.studyId) return state;
+      return patchStudy(state, { runner: action.status });
     default:
       return state;
   }

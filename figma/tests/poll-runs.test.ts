@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { RunRowApi } from '../src/lib/api';
 import { frameForUrl, indexFrames } from '../src/lib/frames';
 import { FAST_POLL_MS, SLOW_POLL_MS, isStudyDone, isTerminalRun, nextQueuedSince, pollDelay, runnerState } from '../src/lib/poll';
-import { personaRows, rowUrl } from '../src/lib/runs';
+import { panelNotices, personaRows, rowUrl, type LiveRun } from '../src/lib/runs';
 import { fixtureDoc, protoAt } from './helpers';
 
 const run = (over: Partial<RunRowApi>): RunRowApi => ({ runId: 'r', archetypeId: 'a', archetypeName: 'Baseline founder', role: 'baseline', status: 'queued', ...over });
@@ -74,6 +74,38 @@ describe('persona rows', () => {
       ['Stress: everything at risk', 'waiting', 'Waiting to start', null, null],
     ]);
     expect(rows[0]).toMatchObject({ runs: 2, finished: 2, completed: 1, gaveUp: 1 });
+  });
+
+  it('shows the screen and step from the session this panel runs, ahead of the runs list', () => {
+    const live = (runId: string, phase: LiveRun['phase'], frameName: string, turn: number): LiveRun => ({ runId, phase, frameName, turn, notices: [] });
+    const rows = personaRows(runs, index, {
+      v1: live('v1', 'thinking', 'Bank connected', 7),
+      i1: live('i1', 'paused', 'Connect bank', 4),
+      // Queued in the last poll, already running here.
+      s1: live('s1', 'acting', 'Dashboard', 1),
+      // Ended here: the runs list says how.
+      b1: live('b1', 'ended', 'Plans', 9),
+    });
+    expect(rows.map((r) => [r.name, r.phase, r.statusText, r.screen, r.steps])).toEqual([
+      ['Baseline founder', 'done', 'Reached the goal 1 of 2 times', null, null],
+      ['Low trust founder', 'running', 'On Bank connected', 'Bank connected', 7],
+      ['Impatient founder', 'running', 'Paused on Connect bank', 'Connect bank', 4],
+      ['Stress: everything at risk', 'running', 'On Dashboard', 'Dashboard', 1],
+    ]);
+  });
+
+  it('shows what the sessions and the runner say, and a pause only while it lasts', () => {
+    const LOST = 'Lost touch with Archetype. Retrying.';
+    const live = (runId: string, phase: LiveRun['phase'], notices: string[]): LiveRun => ({ runId, phase, frameName: 'Dashboard', turn: 1, notices });
+    const sessions = {
+      r1: live('r1', 'paused', [LOST, 'Keep this tab visible, or use the desktop app.']),
+      r2: live('r2', 'acting', [LOST, 'This file changed while the test ran.']),
+    };
+    expect(panelNotices(sessions, { phase: 'running', notice: null }, [LOST])).toEqual([LOST, 'Keep this tab visible, or use the desktop app.', 'This file changed while the test ran.']);
+    const back = { ...sessions, r1: { ...sessions.r1, phase: 'thinking' as const } };
+    expect(panelNotices(back, null, [LOST])).toEqual(['Keep this tab visible, or use the desktop app.', 'This file changed while the test ran.']);
+    expect(panelNotices({}, { phase: 'paused', notice: LOST }, [LOST])).toEqual([LOST]);
+    expect(panelNotices({}, { phase: 'next_wave', notice: null }, [LOST])).toEqual([]);
   });
 
   it('says what a single finished try did', () => {

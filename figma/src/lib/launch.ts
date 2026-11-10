@@ -1,4 +1,5 @@
 import { ApiError, type ApiClient, type StudyStatusValue } from './api';
+import type { ProtoDoc } from './proto/model';
 import type { Stage } from './state';
 
 export type LaunchApi = Pick<ApiClient, 'identifyFactors' | 'buildArchetypes' | 'startRuns' | 'getStatus'>;
@@ -58,4 +59,19 @@ export async function continueLaunch(api: LaunchApi, studyId: string, hooks: Lau
     }
   }
   throw new Error('The study did not move forward. Open it in Archetype to see where it stopped.');
+}
+
+/**
+ * The library components testing would add to the file (spec, Data flow 1):
+ * variants a CHANGE_TO in the flow shows, whose layers only their library
+ * holds. The Plugin API names no library, so only the components are named.
+ */
+export function componentsToImport(doc: Pick<ProtoDoc, 'libraryVariants'>): string[] {
+  return [...new Set(doc.libraryVariants.filter((v) => v.status === 'needs_import').map((v) => v.name))];
+}
+
+/** What the designer confirms before a launch imports them. */
+export function importText(components: readonly string[]): string {
+  const names = components.length > 1 ? `${components.slice(0, -1).join(', ')} and ${components[components.length - 1]}` : components[0];
+  return `Testing this flow adds ${names} to this file, as using it in Figma would.`;
 }
