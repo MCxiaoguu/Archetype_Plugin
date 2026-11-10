@@ -8,7 +8,7 @@
  * paths hides them until the panel opens the study again.
  */
 
-import { useEffect, useMemo, useState } from 'preact/hooks';
+import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { edgeKey, graphOf, layoutFlow, liveMarks, NODE_HEIGHT, NODE_WIDTH, pastMarks, type Marks, type Walker } from '../../lib/flowLayout';
 import type { FlowMap, FlowReading, ReadingKind } from '../../lib/proto/flow';
 import type { LiveRun } from '../../lib/runs';
@@ -19,9 +19,10 @@ import { Banner, Section } from '../parts';
 /** Each persona's colour, by its place in the study's list. */
 const TOKEN_COLORS = ['#0d99ff', '#14ae5c', '#f24822', '#9747ff', '#ffa629', '#0fa8b0'];
 const PAD = 12;
-const TOKEN = 5;
+const TOKEN = 4;
 /** The most characters of a node's name that fit its box. */
-const NAME_CHARS = 15;
+const NAME_CHARS = 13;
+const LABEL_BAND = 13;
 
 const short = (text: string, max: number) => (text.length > max ? `${text.slice(0, max - 1).trimEnd()}…` : text);
 const colorOf = (slot: number) => TOKEN_COLORS[slot % TOKEN_COLORS.length] as string;
@@ -135,12 +136,24 @@ export function FlowMapCard({
 }) {
   const [editing, setEditing] = useState(false);
   const shots = useShots(flow.shots);
+  const scroller = useRef<HTMLDivElement>(null);
   const map = flow.map;
   const layout = useMemo(() => {
     if (!map) return null;
     const g = graphOf(map);
     return layoutFlow(g.nodes, g.edges, g.gaps, start);
   }, [map, start]);
+
+  // The node to keep in view: the followed persona's, else where the latest move went.
+  const latest = [...walkers].filter((w) => w.move).sort((a, b) => (b.move?.turn ?? 0) - (a.move?.turn ?? 0))[0];
+  const focus = flow.cleared || !live ? null : (walkers.find((w) => w.id === flow.following)?.node ?? latest?.move?.to ?? null);
+  const focusX = focus && layout ? layout.nodes.find((n) => n.id === focus)?.x ?? null : null;
+  useEffect(() => {
+    const el = scroller.current;
+    if (!el || focusX === null) return;
+    const left = focusX + PAD;
+    if (left < el.scrollLeft || left + NODE_WIDTH > el.scrollLeft + el.clientWidth) el.scrollTo({ left: Math.max(0, left - PAD * 2), behavior: 'smooth' });
+  }, [focusX]);
 
   if (flow.error && !map) {
     return (
@@ -177,7 +190,7 @@ export function FlowMapCard({
       }
     >
       {editing && <MapEditor map={map} order={layout.nodes.map((n) => n.id)} fx={fx} />}
-      <div class="fm-scroll">
+      <div class="fm-scroll" ref={scroller}>
         <svg
           class="fm"
           width={layout.width + PAD * 2}
@@ -208,9 +221,12 @@ export function FlowMapCard({
                 <title>{n.name}</title>
                 <rect class="fm-box" width={NODE_WIDTH} height={NODE_HEIGHT} rx={4} />
                 {shots[n.id] ? (
-                  <image href={shots[n.id]} x={1} y={1} width={NODE_WIDTH - 2} height={NODE_HEIGHT - 14} preserveAspectRatio="xMidYMin slice" />
+                  <>
+                    <image href={shots[n.id]} x={1} y={1} width={NODE_WIDTH - 2} height={NODE_HEIGHT - LABEL_BAND - 1} preserveAspectRatio="xMidYMin slice" />
+                    <rect class="fm-band" x={1} y={NODE_HEIGHT - LABEL_BAND} width={NODE_WIDTH - 2} height={LABEL_BAND - 1} />
+                  </>
                 ) : null}
-                <text class="fm-name" x={NODE_WIDTH / 2} y={shots[n.id] ? NODE_HEIGHT - 4 : NODE_HEIGHT / 2 + 4} text-anchor="middle">
+                <text class="fm-name" x={NODE_WIDTH / 2} y={shots[n.id] ? NODE_HEIGHT - 3 : NODE_HEIGHT / 2 + 4} text-anchor="middle">
                   {short(n.name, NAME_CHARS)}
                 </text>
                 {n.moreGaps > 0 && (
@@ -219,7 +235,7 @@ export function FlowMapCard({
                   </text>
                 )}
                 {(tokensOn.get(n.id) ?? []).map((t, i) => (
-                  <circle class="fm-token" cx={8 + i * (TOKEN * 2 + 2)} cy={8} r={TOKEN} fill={colorOf(t.slot)}>
+                  <circle class="fm-token" cx={7 + i * (TOKEN * 2 + 2)} cy={7} r={TOKEN} fill={colorOf(t.slot)}>
                     <title>{t.name}</title>
                   </circle>
                 ))}

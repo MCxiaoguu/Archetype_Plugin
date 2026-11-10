@@ -58,15 +58,15 @@ export interface FlowLayout {
   height: number;
 }
 
-export const NODE_WIDTH = 96;
-export const NODE_HEIGHT = 64;
-const COLUMN_GAP = 56;
-const ROW_GAP = 28;
-const STUB = 12;
-const STUB_SPACING = 8;
+export const NODE_WIDTH = 80;
+export const NODE_HEIGHT = 52;
+export const COLUMN_GAP = 40;
+export const ROW_GAP = 20;
+export const STUB = 12;
+export const STUB_SPACING = 8;
 /** Room for the stubs down a node's right side, and below a back edge's bend. */
-const MAX_STUBS = Math.floor((NODE_HEIGHT - STUB_SPACING) / STUB_SPACING);
-const BEND = 24;
+export const MAX_STUBS = Math.floor((NODE_HEIGHT - STUB_SPACING) / STUB_SPACING);
+export const BEND = 24;
 
 export function layoutFlow(nodes: LayoutNode[], edges: LayoutEdge[], gaps: LayoutGap[], start: string): FlowLayout {
   const byId = new Map(nodes.map((n) => [n.id, n]));

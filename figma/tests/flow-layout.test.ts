@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { graphOf, layoutFlow, liveMarks, NODE_HEIGHT, NODE_WIDTH, pastMarks, type LayoutEdge, type LayoutGap, type LayoutNode, type Walker } from '../src/lib/flowLayout';
+import { BEND, COLUMN_GAP, graphOf, layoutFlow, liveMarks, MAX_STUBS, NODE_HEIGHT, NODE_WIDTH, pastMarks, ROW_GAP, STUB, STUB_SPACING, type LayoutEdge, type LayoutGap, type LayoutNode, type Walker } from '../src/lib/flowLayout';
 import type { FlowMap, FlowReading } from '../src/lib/proto/flow';
 
 const n = (id: string, kind: LayoutNode['kind'] = 'frame'): LayoutNode => ({ id, name: `Frame ${id}`, kind });
@@ -11,7 +11,7 @@ describe('layoutFlow', () => {
   it('puts nodes left to right in breadth-first order from the start, one column per step', () => {
     const layout = layoutFlow([n('D'), n('A'), n('B'), n('C')], [drawn('A', 'B'), drawn('A', 'C'), inferred('C', 'D')], [], 'A');
     const where = Object.fromEntries(layout.nodes.map((p) => [p.id, [p.column, p.y]]));
-    expect(where).toEqual({ A: [0, 0], B: [1, 0], C: [1, NODE_HEIGHT + 28], D: [2, 0] });
+    expect(where).toEqual({ A: [0, 0], B: [1, 0], C: [1, NODE_HEIGHT + ROW_GAP], D: [2, 0] });
     expect(layout.nodes.map((p) => p.id)).toEqual(['A', 'B', 'C', 'D']);
     expect(layout.nodes.every((p) => p.reached)).toBe(true);
   });
@@ -31,22 +31,23 @@ describe('layoutFlow', () => {
     expect(forward.startsWith(`M ${NODE_WIDTH} ${NODE_HEIGHT / 2} C`)).toBe(true);
     const back = layout.edges[2]?.path as string;
     // From the bottom middle of B to the bottom middle of A, bending below both.
-    expect(back).toBe(`M ${NODE_WIDTH + 56 + NODE_WIDTH / 2} ${NODE_HEIGHT} C ${NODE_WIDTH + 56 + NODE_WIDTH / 2} ${NODE_HEIGHT + 24}, ${NODE_WIDTH / 2} ${NODE_HEIGHT + 24}, ${NODE_WIDTH / 2} ${NODE_HEIGHT}`);
+    const bx = NODE_WIDTH + COLUMN_GAP + NODE_WIDTH / 2;
+    expect(back).toBe(`M ${bx} ${NODE_HEIGHT} C ${bx} ${NODE_HEIGHT + BEND}, ${NODE_WIDTH / 2} ${NODE_HEIGHT + BEND}, ${NODE_WIDTH / 2} ${NODE_HEIGHT}`);
   });
 
   it("gives each gap a stub down its node's right side, counting the ones it has no room for", () => {
     const many = Array.from({ length: 9 }, (_, i) => gap(`g${i}`, 'B'));
     const layout = layoutFlow([n('A'), n('B')], [drawn('A', 'B')], [gap('g', 'A'), ...many], 'A');
     const onA = layout.gaps.filter((g) => g.node === 'A');
-    expect(onA).toEqual([{ id: 'g', node: 'A', label: 'Gap g', x1: NODE_WIDTH, y1: 8, x2: NODE_WIDTH + 12, y2: 8 }]);
-    expect(layout.gaps.filter((g) => g.node === 'B')).toHaveLength(7);
-    expect(layout.nodes.find((p) => p.id === 'B')?.moreGaps).toBe(2);
+    expect(onA).toEqual([{ id: 'g', node: 'A', label: 'Gap g', x1: NODE_WIDTH, y1: STUB_SPACING, x2: NODE_WIDTH + STUB, y2: STUB_SPACING }]);
+    expect(layout.gaps.filter((g) => g.node === 'B')).toHaveLength(MAX_STUBS);
+    expect(layout.nodes.find((p) => p.id === 'B')?.moreGaps).toBe(9 - MAX_STUBS);
   });
 
   it('is as wide and tall as what it holds', () => {
     const layout = layoutFlow([n('A'), n('B'), n('C')], [drawn('A', 'B'), drawn('A', 'C')], [], 'A');
-    expect(layout.width).toBe(2 * NODE_WIDTH + 56 + 12);
-    expect(layout.height).toBe(2 * NODE_HEIGHT + 28 + 24);
+    expect(layout.width).toBe(2 * NODE_WIDTH + COLUMN_GAP + STUB);
+    expect(layout.height).toBe(2 * NODE_HEIGHT + ROW_GAP + BEND);
   });
 
   it('refuses a start, an edge or a gap that names a node the map lacks', () => {
