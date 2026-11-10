@@ -63,7 +63,7 @@
       <p>Relay ships as a single npm package with zero runtime dependencies. It supports Node.js 18 and later, in both CommonJS and ESM projects.</p>
       <div class="code-block">
         <div class="code-head"><span>terminal</span><button class="code-copy" type="button">Copy</button></div>
-        <pre><span class="tok-com"># npm</span>
+        <pre tabindex="0"><span class="tok-com"># npm</span>
 npm install @relay/sdk
 
 <span class="tok-com"># yarn</span>
@@ -75,14 +75,14 @@ yarn add @relay/sdk</pre>
       <p>Call <code>Relay.init()</code> once, as early as possible in your service's startup — before your HTTP server starts accepting traffic.</p>
       <div class="code-block">
         <div class="code-head"><span>src/relay.js</span><button class="code-copy" type="button">Copy</button></div>
-        <pre><span class="tok-kw">const</span> Relay = <span class="tok-fn">require</span>(<span class="tok-str">'@relay/sdk'</span>);
+        <pre tabindex="0"><span class="tok-kw">const</span> Relay = <span class="tok-fn">require</span>(<span class="tok-str">'@relay/sdk'</span>);
 
 Relay.<span class="tok-fn">init</span>({ <span class="tok-prop">token</span>: process.env.RELAY_TOKEN });</pre>
       </div>
       <p>You can optionally pass a service name and environment. If you skip them, Relay infers the service name from your <code>package.json</code> and defaults the environment to <code>production</code>.</p>
       <div class="code-block">
         <div class="code-head"><span>src/relay.js — with options</span><button class="code-copy" type="button">Copy</button></div>
-        <pre>Relay.<span class="tok-fn">init</span>({
+        <pre tabindex="0">Relay.<span class="tok-fn">init</span>({
   <span class="tok-prop">token</span>: process.env.RELAY_TOKEN,
   <span class="tok-prop">service</span>: <span class="tok-str">'checkout-api'</span>,
   <span class="tok-prop">environment</span>: <span class="tok-str">'production'</span>,
@@ -97,7 +97,7 @@ Relay.<span class="tok-fn">init</span>({ <span class="tok-prop">token</span>: pr
       <p>The fastest way to verify your setup is to track a custom event. Events show up in your dashboard within a few seconds.</p>
       <div class="code-block">
         <div class="code-head"><span>src/index.js</span><button class="code-copy" type="button">Copy</button></div>
-        <pre>Relay.<span class="tok-fn">track</span>(<span class="tok-str">'deploy.finished'</span>, {
+        <pre tabindex="0">Relay.<span class="tok-fn">track</span>(<span class="tok-str">'deploy.finished'</span>, {
   <span class="tok-prop">version</span>: <span class="tok-str">'2.14.0'</span>,
   <span class="tok-prop">region</span>: <span class="tok-str">'us-east-1'</span>,
 });</pre>
@@ -105,7 +105,7 @@ Relay.<span class="tok-fn">init</span>({ <span class="tok-prop">token</span>: pr
       <p>You can also send an event straight from your terminal with <code>curl</code>:</p>
       <div class="code-block">
         <div class="code-head"><span>terminal</span><button class="code-copy" type="button">Copy</button></div>
-        <pre>curl -X POST http://localhost:8322/api/events \
+        <pre tabindex="0">curl -X POST http://localhost:8322/api/events \
   -H <span class="tok-str">"Authorization: Bearer $RELAY_TOKEN"</span> \
   -H <span class="tok-str">"Content-Type: application/json"</span> \
   -d <span class="tok-str">'{"name": "deploy.finished", "service": "checkout-api", "status": 200}'</span></pre>
@@ -113,7 +113,7 @@ Relay.<span class="tok-fn">init</span>({ <span class="tok-prop">token</span>: pr
       <p>For Express apps, mount the middleware and Relay will automatically capture latency, status codes, and throughput for every route — no per-route instrumentation needed:</p>
       <div class="code-block">
         <div class="code-head"><span>src/index.js — Express</span><button class="code-copy" type="button">Copy</button></div>
-        <pre><span class="tok-kw">const</span> express = <span class="tok-fn">require</span>(<span class="tok-str">'express'</span>);
+        <pre tabindex="0"><span class="tok-kw">const</span> express = <span class="tok-fn">require</span>(<span class="tok-str">'express'</span>);
 <span class="tok-kw">const</span> app = <span class="tok-fn">express</span>();
 
 app.<span class="tok-fn">use</span>(Relay.<span class="tok-fn">middleware</span>());
