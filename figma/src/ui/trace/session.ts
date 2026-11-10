@@ -17,7 +17,8 @@ import type { SavedSession, TraceRenderReply } from '../../lib/messages';
 import { listElements } from '../../lib/proto/elements';
 import { apply, settle, start, type EngineEffect } from '../../lib/proto/engine';
 import { EngineError, type EngineErrorCode } from '../../lib/proto/errors';
-import type { Element, ElementTarget, ProtoDoc, RawLayer, TraceAction, TraceState } from '../../lib/proto/model';
+import type { Element, ElementTarget, ProtoDoc, RawLayer, TraceAction, TraceOutcome, TraceState } from '../../lib/proto/model';
+import { outcomeOf } from '../../lib/proto/outcome';
 import { pageOffset, pageRange } from '../../lib/proto/scroll';
 import { stepUrl } from '../../lib/proto/url';
 import type { Bridge } from './bridge';
@@ -143,6 +144,9 @@ const ENGINE_ABORT: Record<EngineErrorCode, AbortCode> = {
 
 const ELEMENT_ACTIONS: ReadonlySet<string> = new Set(['click', 'hover', 'drag', 'type']);
 
+/** Outcomes of an action that changed nothing; what the settle after it shows can still come of it. */
+const UNCHANGED: ReadonlySet<TraceOutcome> = new Set<TraceOutcome>(['nothing_happened', 'typed_nothing', 'scroll_at_end', 'back_empty', 'waited']);
+
 const cap = (text: string, limit: number) => (text.length > limit ? text.slice(0, limit) : text);
 const messageOf = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
@@ -193,6 +197,21 @@ function unsupportedDetail(effects: readonly EngineEffect[]): string {
   const effect = effects.find((e) => e.type === 'unsupported' || e.type === 'expr_error');
   if (!effect) throw new EngineError('invalid_doc', 'The engine said unsupported without saying what was');
   return timerEffect(effect).detail;
+}
+
+/**
+ * What the person saw come of the last action once the screen settled. An
+ * action that changed nothing itself can still have: a delayed MOUSE_ENTER
+ * fires at the settle after the hover (spec, Pointer model), and a wait can
+ * end just before a timer the settle fires. The person waited for that
+ * before acting again, so it is what the action did.
+ */
+function settledOutcome(last: TurnLast, before: TraceState, after: TraceState): TurnLast {
+  if (!UNCHANGED.has(last.outcome)) return last;
+  // What timers did that the screen can't show is reported as timer_effects.
+  const seen = outcomeOf(before, after, [], last.outcome);
+  if (seen === last.outcome) return last;
+  return { ...last, outcome: last.outcome === 'waited' ? 'timers_fired' : seen };
 }
 
 function targetOf(action: TraceAction, elements: readonly Element[]): string | null {
@@ -455,6 +474,7 @@ export async function runSession(run: SessionRun, deps: SessionDeps): Promise<Se
     } catch (err) {
       throw engineAbort(err, 'Settling the screen failed');
     }
+    if (last && settled.fired) last = settledOutcome(last, state, settled.state);
     state = settled.state;
     addEffects(settled.effects);
     addLoop(settled.looped);

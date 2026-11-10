@@ -229,6 +229,28 @@ describe('what timers did', () => {
     expect(posted[0]!.flag_details).toEqual({ timer_loop: { frames: expect.arrayContaining(['1:2', '4:1']) } });
   });
 
+  it('reports what a hover opened once its delay passed, not that nothing happened', async () => {
+    // Billing settings' help icon opens the ACH tooltip 500 ms after the pointer enters it.
+    const { posted } = await play((b) => {
+      if (b.turn === 1) return { action: click(b, 'Billing') };
+      if (b.turn === 2) return { action: { type: 'hover', element: b.elements.find((e) => e.label === 'unlabeled area')?.id as string } };
+      return DONE;
+    });
+    expect(posted[2]!.screen.overlays).toEqual(['3:3']);
+    expect(posted[2]!.last).toEqual({ action: { type: 'hover', element: expect.any(String) }, outcome: 'opened_overlay', target: expect.stringMatching(/^unlabeled area \(e\d+\)$/) });
+  });
+
+  it('reports a wait after which a timer changed the screen as timers firing', async () => {
+    const later = (fake: Fake) => {
+      // Figma stores the timeout in milliseconds: 4 s.
+      (fake.nodes.get('1:2') as FakeNode).reactions = [{ trigger: { type: 'AFTER_TIMEOUT', timeout: 4000 }, actions: [{ type: 'NODE', destinationId: '2:10', navigation: 'NAVIGATE', transition: null }] }];
+    };
+    // The wait ends 1 s before the timer: the settle before the next screen fires it.
+    const { posted } = await play((b) => (b.turn === 1 ? { action: { type: 'wait', seconds: 3 } } : DONE), { edit: later });
+    expect(posted.map((b) => b.screen.title)).toEqual(['Dashboard', 'Billing settings']);
+    expect(posted[1]!.last).toEqual({ action: { type: 'wait', seconds: 3 }, outcome: 'timers_fired', target: null });
+  });
+
   it('reports what a wait fired as timer effects', async () => {
     const waitLink = (fake: Fake) => {
       (fake.nodes.get('1:2') as FakeNode).reactions = [{ trigger: { type: 'AFTER_TIMEOUT', timeout: 5 }, actions: [{ type: 'URL', url: 'https://help.example.com/late' }] }];
