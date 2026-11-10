@@ -9,9 +9,14 @@ export interface LiveConfig {
   out: string;
   /** The user the live server's dev auth acts as (X-User-Id). */
   user: string;
+  /** The live server's log; null when it wasn't given. */
+  serverLog: string | null;
 }
 
 export function liveConfig(): LiveConfig;
+
+/** A text file as it is now. */
+export function readText(path: string): string;
 
 /** Writes a file under `folder`, making its directories; returns its path. */
 export function saveFile(folder: string, path: string, data: string | Uint8Array): string;

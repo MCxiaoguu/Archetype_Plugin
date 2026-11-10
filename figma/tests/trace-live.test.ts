@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { liveConfig, openWireframer, saveFile, type Wireframer } from '../harness/live.mjs';
+import { liveConfig, openWireframer, readText, saveFile, type Wireframer } from '../harness/live.mjs';
 import { ApiClient, ApiError, type ClaimBody, type NextWave, type RunBriefing, type StudyRuns, type TurnBody, type TurnView } from '../src/lib/api';
 import type { ProtoDoc } from '../src/lib/proto/model';
 import type { RunnerStatus } from '../src/lib/runs';
@@ -29,7 +29,9 @@ const START = '1:2';
 const GOAL = '2:50';
 const TERMINAL = new Set(['completed', 'abandoned', 'aborted']);
 /** Aborts the panel or backend must never cause without a cause the run log explains. */
-const UNEXPLAINED_ABORTS = new Set(['engine_error', 'panel_state_lost', 'brain_invalid_action']);
+const UNEXPLAINED_ABORTS = new Set(['engine_error', 'panel_state_lost', 'brain_invalid_action', 'decider_error']);
+/** Turn posts the backend refuses: a body it can't use (400), or one too large (413). */
+const REFUSED = new Set([400, 413]);
 /** A turn decided inside the request: about 4 s, 10 to 20 s with the debrief; a give-up review asks twice. */
 const POST_TURN_TIMEOUT_MS = 180_000;
 const MAX_SCREENSHOT_BYTES = 1.5 * 1024 * 1024;
@@ -192,7 +194,7 @@ describe.skipIf(!LIVE.url)('a live trace study against the local backend', () =>
         post.ms = Date.now() - at;
         if (err instanceof ApiError) {
           Object.assign(post, { status: err.status, code: err.code, message: err.message });
-          if (err.status === 400) refusals.push({ runId, turn: body.turn, status: err.status, code: err.code, message: err.message });
+          if (REFUSED.has(err.status)) refusals.push({ runId, turn: body.turn, status: err.status, code: err.code, message: err.message });
         }
         throw err;
       } finally {
@@ -242,7 +244,15 @@ describe.skipIf(!LIVE.url)('a live trace study against the local backend', () =>
     if (state) saveFile(folder, 'state.json', JSON.stringify(state, null, 2));
   }
 
+  /** The live server's log from where this run began, line by line: what it refused, and the model calls it retried. */
+  let logFrom = 0;
+  const serverLines = (): string[] => {
+    if (!LIVE.serverLog) throw new Error('Set TRACE_LIVE_SERVER_LOG to the live server\'s log: the run reads its refusals and model retries there.');
+    return readText(LIVE.serverLog).slice(logFrom).split('\n');
+  };
+
   beforeAll(async () => {
+    if (LIVE.serverLog) logFrom = readText(LIVE.serverLog).length;
     wireframer = openWireframer();
     fake = fakeFile();
     // Every export is a real JPEG of what the copies draw, read at export time.
@@ -381,6 +391,47 @@ describe.skipIf(!LIVE.url)('a live trace study against the local backend', () =>
       expect(UNEXPLAINED_ABORTS.has(reason ?? ''), `${doc.test_id as string} aborted: ${reason}`).toBe(false);
     }
     expect(plugin.failures).toEqual([]);
+  });
+
+  it('has the server refuse no turn post, and ask the model again only for a give-up review or a model error', () => {
+    const lines = serverLines();
+    const ids = [...runs.keys()];
+    const refused = lines.filter((l) => ids.some((id) => l.includes(`/api/plugin/runs/${id}/turn`)) && / HTTP\/1\.1"? (400|413) /.test(l.replace(/\x1b\[[0-9;]*m/g, '')));
+    // Every model call of a turn counts in its attempts: the first ask, a
+    // re-ask for an unusable answer (decide.action_text missing among them),
+    // the give-up review asked again with its note, and model errors retried.
+    // The server logs no line for a re-ask, so it is what is left over.
+    const turns = (state['Archetype_Test.trace_turns'] ?? []).filter((t) => runs.has(t.run_id as string));
+    const stateOf = (t: Doc | undefined) => ((t?.result as Doc | undefined)?.state ?? {}) as Doc;
+    let extra = 0;
+    let reviews = 0;
+    const asked: Array<{ runId: string; turn: number; attempts: number; review: boolean }> = [];
+    for (const t of turns) {
+      const attempts = t.attempts as number;
+      const before = turns.find((p) => p.run_id === t.run_id && p.turn === (t.turn as number) - 1);
+      // Asked again when step n-1 newly raised the review, unless patience ended the run there.
+      const review = stateOf(t).reviewGiveUp === true && stateOf(before).reviewGiveUp !== true && stateOf(t).ended !== true;
+      extra += attempts - 1;
+      if (review) reviews += 1;
+      if (attempts > 1) asked.push({ runId: t.run_id as string, turn: t.turn as number, attempts, review });
+    }
+    // The debrief retries model errors with the same log line, so retries bound what they explain.
+    const retries = lines.filter((l) => l.includes('trace model unavailable')).length;
+    log.reasks = { turns: turns.length, extraCalls: extra, reviews, modelRetries: retries, asked };
+    saveFile(folder, 'log.json', JSON.stringify(log, null, 2));
+    expect(refused).toEqual([]);
+    expect(turns.length).toBe([...runs.values()].reduce((n, r) => n + r.turns.length, 0));
+    if (retries === 0) expect(extra - reviews).toBe(0);
+    else expect(extra - reviews).toBeLessThanOrEqual(retries);
+  });
+
+  it('finalizes each run inside its last turn, as the eager server does', () => {
+    for (const run of runs.values()) {
+      const final = last(run.turns);
+      // The first view the panel had of the run's last turn already holds how the run ended, not finalizing.
+      expect((final?.decided as { ended?: { status: string } | null } | null)?.ended?.status, run.runId).toMatch(/^(completed|abandoned|aborted)$/);
+    }
+    expect(waves.filter((w) => w.error === 'wave_in_progress')).toEqual([]);
   });
 
   it('sends real JPEG screenshots within a turn\'s 1.5 MiB', () => {

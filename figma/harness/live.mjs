@@ -3,7 +3,7 @@
 // through uv) that turns the fake file's exports into real JPEGs, and
 // writing the run's files.
 import { spawn } from 'node:child_process';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
@@ -11,7 +11,11 @@ import { fileURLToPath } from 'node:url';
 const here = dirname(fileURLToPath(import.meta.url));
 const SCRIPT = join(here, 'wireframe.py');
 
-/** TRACE_LIVE_URL turns the live run on; TRACE_LIVE_OUT is where runs are written (default harness/live/, gitignored). */
+/**
+ * TRACE_LIVE_URL turns the live run on; TRACE_LIVE_OUT is where runs are
+ * written (default harness/live/, gitignored); TRACE_LIVE_SERVER_LOG is the
+ * live server's log, which the run reads its refusals and model retries from.
+ */
 export function liveConfig() {
   const url = process.env.TRACE_LIVE_URL?.trim() || null;
   return {
@@ -19,7 +23,13 @@ export function liveConfig() {
     out: process.env.TRACE_LIVE_OUT?.trim() || join(here, 'live'),
     // The live server's dev auth acts as this header's user.
     user: process.env.TRACE_LIVE_USER?.trim() || 'live-designer',
+    serverLog: process.env.TRACE_LIVE_SERVER_LOG?.trim() || null,
   };
+}
+
+/** A text file as it is now. */
+export function readText(path) {
+  return readFileSync(path, 'utf8');
 }
 
 /** Writes a file under `folder`, making its directories. */
