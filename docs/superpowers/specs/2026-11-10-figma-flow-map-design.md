@@ -39,6 +39,21 @@ When a test run is launched, the prototype becomes a **flow map**: a state diagr
 | Is the persona told it is testing an early design | No. The screens are the real product to it, so no prompt says "prototype" or "early design". Only the gap message says something is missing. |
 | On the canvas | Nothing is drawn on the canvas. The **Follow persona** viewport moves and the paths stay until cleared (both kept from the earlier demo discussion). |
 
+## Wire format, as built (supersedes the shapes in this spec's examples)
+
+The backend was built and live-tested first, and the plugin matches it. The exact JSON is in the backend's `docs/studies-api.md` ("Figma flow map"). Where it differs from the sections below:
+
+- **Storage:** every version is a row in `Archetype_Test.flow_maps`, unique on `(study_id, version)`, and the current one is mirrored on the study as `flow_map`.
+- **Commit:** `POST /flow-map` is synchronous, answering 200 `{built, flowMap}`, within a 90 s deadline.
+  - A model failure, or running past the deadline, gives 502 `flow_map_unavailable` with "Couldn't read the flow of '<name>': <reason>."
+  - The stored map is reused when the hash of the posted nodes, edges and candidates matches.
+  - "Launch with drawn connections only" is `drawnOnly: true`. It stores `by: "bulk_gap"`, and the next rebuild asks those again.
+- **Share keys:** each candidate carries an optional `shareKey`. Candidates sharing one get a single reading, which lists every node and layer key it covers.
+- **Claims:** the claim **answer** carries `flowMapVersion`, the current version, which the run plays. The panel commits just before its claims. A claim works without a map, as with an older panel.
+- **The turn:** `last.inferred` is a reading id, required with `already_here`, `accepted`, `missing` and an inferred `navigated`. `last.missing` is the gap's label, and may be empty for an unlabeled icon. There is no single `last.reading`.
+- **Edit:** `PATCH .../readings/<id>` takes `{kind, to?, version}`. `version` is required, and the edit is compare-and-set (409 `flow_map_changed`).
+- **Not yet:** the `map_miss` run note is a follow-up.
+
 ## The flow map
 
 Each version is an immutable row in `Archetype_Test.study_flow_maps`, keyed `(study_id, version)` and unique on that pair.
