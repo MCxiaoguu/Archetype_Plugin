@@ -104,6 +104,22 @@ const MAX_COMMITS = 3;
 
 /** The longest node name a commit carries (the backend's); a longer one is cut, ending in an ellipsis. */
 const MAX_NODE_NAME = 200;
+/** The most nodes, edges and candidates a commit may carry (the backend's). */
+export const MAX_MAP_NODES = 300;
+export const MAX_MAP_EDGES = 5000;
+export const MAX_MAP_CANDIDATES = 5000;
+
+/** Why a flow is bigger than a flow map can be, in the designer's words; null when it fits. */
+export function oversized(flow: FlowRead): string | null {
+  if (flow.nodes.length > MAX_MAP_NODES) return `This prototype has ${flow.nodes.length} screens, and a flow map holds at most ${MAX_MAP_NODES}. Move the screens this test doesn't need to another page.`;
+  if (flow.edges.length > MAX_MAP_EDGES) return `This prototype has ${flow.edges.length} drawn connections, and a flow map holds at most ${MAX_MAP_EDGES}.`;
+  if (flow.candidates.length <= MAX_MAP_CANDIDATES) return null;
+  const count = new Map<string, number>();
+  for (const c of flow.candidates) count.set(c.node, (count.get(c.node) ?? 0) + 1);
+  const names = new Map(flow.nodes.map((n) => [n.id, n.name]));
+  const most = [...count].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([id, k]) => `'${names.get(id) as string}' (${k})`);
+  return `This prototype has ${flow.candidates.length} elements without a connection to read, and a flow map holds at most ${MAX_MAP_CANDIDATES}. The most are on ${most.join(', ')}.`;
+}
 
 /** What the panel commits of a read flow, on top of `baseVersion`. */
 export function commitBody(flow: FlowRead, baseVersion: number | null, drawnOnly: boolean): FlowMapCommit {
@@ -258,6 +274,9 @@ async function run(study: StudyTrace, deps: RunnerDeps, results: SessionResult[]
    */
   async function commit(drawnOnly: boolean): Promise<void> {
     const flow = await bridge.call('trace-candidates', { docHash: current.doc.docHash });
+    // A flow the backend can't take fails here, saying where, rather than as its refusal of the commit.
+    const tooBig = oversized(flow);
+    if (tooBig) throw new Error(tooBig);
     for (let attempt = 1; ; attempt++) {
       latest ??= await currentVersion();
       const body = commitBody(flow, latest, drawnOnly);

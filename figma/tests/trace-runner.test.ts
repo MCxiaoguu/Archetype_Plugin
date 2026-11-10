@@ -730,6 +730,20 @@ describe('committing the flow map before claims', () => {
     expect(result).toMatchObject({ stop: 'done' });
   });
 
+  it('fails before committing a flow bigger than a flow map holds, naming the screens with the most to read', async () => {
+    const main = await mainThread();
+    const read = main.bridge.call;
+    const nodes = [{ id: '1:2', kind: 'frame', name: 'Dashboard', pageId: '0:1', heading: '', text: '' }, { id: '2:20', kind: 'frame', name: 'Connect bank', pageId: '0:1', heading: '', text: '' }];
+    const candidate = (node: string, i: number) => ({ node, layerKey: `9:${i}`, shareKey: `L:${node}:9:${i}`, label: `Row ${i}`, role: 'button', box: [0, 0, 1, 1], nearText: '' });
+    const candidates = [...Array.from({ length: 4000 }, (_, i) => candidate('2:20', i)), ...Array.from({ length: 1001 }, (_, i) => candidate('1:2', i))];
+    main.bridge.call = (async (type: string, payload: unknown, options?: unknown) =>
+      type === 'trace-candidates' ? { docHash: main.doc.docHash, nodes, edges: [], candidates } : (read as (...a: unknown[]) => Promise<unknown>)(type, payload, options)) as typeof read;
+    const { error, commits, claims } = await runner(shortWalk, { main, runs: [{ runId: 'r1', status: 'queued' }], fails: true });
+    expect(String(error)).toBe("Error: This prototype has 5001 elements without a connection to read, and a flow map holds at most 5000. The most are on 'Connect bank' (4000), 'Dashboard' (1001).");
+    expect(commits).toEqual([]);
+    expect(claims).toEqual([]);
+  });
+
   it('fails loudly on a commit Archetype refuses for another reason', async () => {
     const { error, claims } = await runner(shortWalk, {
       runs: [{ runId: 'r1', status: 'queued' }],
