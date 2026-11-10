@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ApiClient, ApiError, normaliseBase, pollDeviceFlow, type DeviceCode, type FetchLike } from '../src/lib/api';
+import { ApiClient, ApiError, normaliseBase, pollDeviceFlow, TURN_TIMEOUT_MS, type DeviceCode, type FetchLike, type TurnBody } from '../src/lib/api';
 
 type Call = { url: string; init: RequestInit };
 
@@ -241,5 +241,121 @@ describe('device flow', () => {
     const { fetch } = mockFetch([{ status: 200, body: { nope: true } }]);
     const api = new ApiClient({ baseUrl: 'http://x', getToken: () => null, fetch });
     expect(await api.pollDeviceToken('d')).toMatchObject({ kind: 'failed', code: 'bad_response' });
+  });
+});
+
+describe('trace runs', () => {
+  const body: TurnBody = {
+    owner: 'p_7f3a',
+    turn: 2,
+    screen: { url: 'figma-trace://Billing%20flow/2-20?node-id=2-20', title: 'Billing settings', frameId: '2:20', overlays: [], viewport: [390, 844], scroll: { x: 0, y: 0, maxX: 0, maxY: 0 } },
+    screenshot_b64: '/9j/4AAQ',
+    elements: [{ id: 'e1', label: 'Connect bank', role: 'button', box: [24, 220, 200, 44] }],
+    visible_text_excerpt: 'Billing settings · Connect bank',
+    last: { action: { type: 'click', element: 'e1' }, outcome: 'navigated', target: 'Billing (e1)' },
+    flags: [],
+    elapsed_s: 4.2,
+    client_ts: '2026-11-10T10:00:02Z',
+  };
+
+  it('claims, posts and reads turns, aborts and asks for the next wave on the backend routes', async () => {
+    const { fetch, calls } = mockFetch([
+      { status: 200, body: { runId: 'r 1', sessionId: 'plugin-abc', claimedAt: 'now', brief: 'b', persona: { name: 'Tom' }, instructions: { targetUrl: 'figma-trace://x', goal: 'g' } } },
+      { status: 202, body: { turn: 2, status: 'thinking' } },
+      { status: 200, body: { turn: 2, status: 'thinking' } },
+      { status: 200, body: { runId: 'r 1', status: 'aborted', abortReason: 'render_failed' } },
+      { status: 201, body: { studyId: 's1', wave: 2, created: true, runs: [{ runId: 'r9', archetypeId: 'a1', archetypeName: 'Impatient', repeatIndex: 0 }] } },
+    ]);
+    const api = new ApiClient({ baseUrl: 'https://api.x.com', getToken: () => 't', fetch });
+    const browser = { engine: 'figma-trace' as const, version: '0.7.0', viewport: [390, 844] as [number, number] };
+    expect(await api.claimRun('r 1', { browser, owner: 'p_7f3a' })).toMatchObject({ runId: 'r 1', sessionId: 'plugin-abc' });
+    expect(await api.postTurn('r 1', body)).toEqual({ turn: 2, status: 'thinking' });
+    expect(await api.getTurn('r 1', 2)).toEqual({ turn: 2, status: 'thinking' });
+    expect(await api.abortRun('r 1', { owner: 'p_7f3a', code: 'render_failed', detail: 'The export was empty twice.' })).toEqual({ runId: 'r 1', status: 'aborted', abortReason: 'render_failed' });
+    expect(await api.nextWave('s1')).toMatchObject({ wave: 2, runs: [{ runId: 'r9' }] });
+    expect(calls.map((c) => `${c.init.method} ${c.url.replace('https://api.x.com', '')}`)).toEqual([
+      'POST /api/plugin/runs/r%201/claim',
+      'POST /api/plugin/runs/r%201/turn',
+      'GET /api/plugin/runs/r%201/turn/2',
+      'POST /api/plugin/runs/r%201/abort',
+      'POST /api/studies/s1/runs/next',
+    ]);
+    expect(JSON.parse(calls[0]!.init.body as string)).toEqual({ browser: { engine: 'figma-trace', version: '0.7.0', viewport: [390, 844] }, owner: 'p_7f3a' });
+    expect(JSON.parse(calls[1]!.init.body as string)).toEqual(body);
+    expect(calls[2]!.init.body).toBeUndefined();
+    expect(JSON.parse(calls[3]!.init.body as string)).toEqual({ owner: 'p_7f3a', code: 'render_failed', detail: 'The export was empty twice.' });
+    expect(calls[4]!.init.body).toBe('{}');
+    expect(calls.every((c) => (c.init.headers as Record<string, string>).Authorization === 'Bearer t')).toBe(true);
+  });
+
+  it('returns the stored record of a re-posted turn and every turn the poll can see', async () => {
+    const ready = {
+      turn: 2, status: 'ready', action: { type: 'click', element: 'e1' }, ended: null,
+      state: { seq: 1, maxSteps: 22, unproductive: 0, maxUnproductiveSteps: 5, progress: 30, sentimentTrend: 'steady', reviewGiveUp: false, ended: false, endedReason: null },
+    };
+    const failed = { turn: 3, status: 'failed', error: { code: 'brain_invalid_action', message: 'action.element must be one of e1' }, ended: { status: 'aborted', reason: 'brain_invalid_action' } };
+    const ending = { ...ready, turn: 4, action: null, ended: { status: 'finalizing', reason: 'patience_exhausted_twice' } };
+    const { fetch } = mockFetch([{ status: 202, body: ready }, { status: 200, body: failed }, { status: 200, body: ending }]);
+    const api = new ApiClient({ baseUrl: 'http://x', getToken: () => 't', fetch });
+    expect(await api.postTurn('r1', body)).toEqual(ready);
+    expect(await api.getTurn('r1', 3)).toEqual(failed);
+    expect(await api.getTurn('r1', 4)).toEqual(ending);
+  });
+
+  it('tells the next wave from a finished study', async () => {
+    const { fetch } = mockFetch([{ status: 200, body: { studyId: 's1', done: true, reason: 'every archetype agrees', wave: 2 } }]);
+    const api = new ApiClient({ baseUrl: 'http://x', getToken: () => 't', fetch });
+    expect(await api.nextWave('s1')).toEqual({ studyId: 's1', done: true, reason: 'every archetype agrees', wave: 2 });
+  });
+
+  it('surfaces each 409 with its code, and the turn to post for turn_out_of_order', async () => {
+    const { fetch } = mockFetch([
+      { status: 409, body: { error: 'turn_out_of_order', message: 'turn 3 is out of order: this run takes turn 2 next.', expected: 2 } },
+      { status: 409, body: { error: 'not_owner', message: 'run r1 belongs to another panel; stop this session.' } },
+      { status: 409, body: { error: 'run_ended', message: 'run r1 is aborted; stop this session.' } },
+      { status: 409, body: { error: 'run_ended', message: 'run r1 is finalizing.' } },
+      { status: 409, body: { error: 'wave_in_progress', message: 'Wave 1 is still running.' } },
+      { status: 404, body: { error: 'turn_not_found', message: 'run r1 has no turn 9.' } },
+    ]);
+    const api = new ApiClient({ baseUrl: 'http://x', getToken: () => 't', fetch });
+    const out = (await api.postTurn('r1', { ...body, turn: 3 }).catch((e) => e)) as ApiError;
+    expect(out).toBeInstanceOf(ApiError);
+    expect(out).toMatchObject({ status: 409, code: 'turn_out_of_order', expected: 2, message: 'turn 3 is out of order: this run takes turn 2 next.' });
+    expect(await api.postTurn('r1', body).catch((e) => e)).toMatchObject({ status: 409, code: 'not_owner', expected: null });
+    expect(await api.getTurn('r1', 2).catch((e) => e)).toMatchObject({ status: 409, code: 'run_ended' });
+    expect(await api.abortRun('r1', { owner: 'p', code: 'turn_timeout', detail: 'No answer after 180 s.' }).catch((e) => e)).toMatchObject({ status: 409, code: 'run_ended' });
+    expect(await api.nextWave('s1').catch((e) => e)).toMatchObject({ status: 409, code: 'wave_in_progress' });
+    expect(await api.getTurn('r1', 9).catch((e) => e)).toMatchObject({ status: 404, code: 'turn_not_found' });
+  });
+
+  it('gives a turn post 60 s by default, because a backend may decide the turn inside the request', async () => {
+    vi.useFakeTimers();
+    try {
+      const fetch: FetchLike = (_url, init) =>
+        new Promise((_res, rej) => init?.signal?.addEventListener('abort', () => rej(new DOMException('aborted', 'AbortError'))));
+      const api = new ApiClient({ baseUrl: 'http://x', getToken: () => 't', fetch });
+      expect(TURN_TIMEOUT_MS).toBe(60_000);
+      let settled = false;
+      const post = api.postTurn('r1', body);
+      post.catch(() => {
+        settled = true;
+      });
+      await vi.advanceTimersByTimeAsync(59_999);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(post).rejects.toMatchObject({ code: 'timeout' });
+
+      let longSettled = false;
+      const long = api.postTurn('r1', body, { timeoutMs: 180_000 });
+      long.catch(() => {
+        longSettled = true;
+      });
+      await vi.advanceTimersByTimeAsync(179_999);
+      expect(longSettled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(long).rejects.toMatchObject({ code: 'timeout' });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
