@@ -19,8 +19,8 @@
   --border-strong: #2e2e3d;
   --text:          #e7e7ee;
   --text-dim:      #9b9ba8;
-  --text-faint:    #6b6b7a;
-  --violet:        #7c5cff;
+  --text-faint:    #80808d; /* 4.6:1 or better on every Relay background */
+  --violet:        #7859f6; /* white text on it is 4.6:1 */
   --violet-bright: #977dff;
   --violet-dim:    #5b3fd6;
   --violet-ghost:  rgba(124, 92, 255, 0.12);
@@ -87,7 +87,8 @@ code, pre, kbd { font-family: var(--mono); }
   color: #ffffff;
 }
 .btn-primary:hover {
-  background: var(--violet-bright);
+  /* White text on --violet-bright is 3.1:1, so hover keeps the background and glows instead. */
+  background: var(--violet);
   box-shadow: 0 0 24px rgba(124, 92, 255, 0.35);
 }
 
@@ -176,7 +177,7 @@ code, pre, kbd { font-family: var(--mono); }
   font-weight: 600;
   transition: background var(--transition);
 }
-.nav-cta:hover { background: var(--violet-bright); }
+.nav-cta:hover { background: var(--violet); box-shadow: 0 0 24px rgba(124, 92, 255, 0.35); }
 
 /* ---------------------------------------------------
    Hero
@@ -379,7 +380,6 @@ code, pre, kbd { font-family: var(--mono); }
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  opacity: 0.85;
   transition: color var(--transition), opacity var(--transition);
 }
 .logo-word:hover { color: var(--text-dim); opacity: 1; }
@@ -809,7 +809,7 @@ code, pre, kbd { font-family: var(--mono); }
 .tok-kw  { color: #c792ea; }
 .tok-str { color: #9ece8c; }
 .tok-fn  { color: #82aaff; }
-.tok-com { color: #565666; font-style: italic; }
+.tok-com { color: #7b7b88; font-style: italic; }
 .tok-num { color: #f5b544; }
 .tok-prop{ color: #7fdbca; }
 
@@ -1081,7 +1081,7 @@ code, pre, kbd { font-family: var(--mono); }
   color: var(--text-faint);
   margin-top: 22px;
 }
-.form-foot a { color: var(--violet-bright); }
+.form-foot a { color: var(--violet-bright); text-decoration: underline; }
 
 /* ---------------------------------------------------
    Onboarding
@@ -1364,6 +1364,7 @@ code, pre, kbd { font-family: var(--mono); }
   margin-bottom: 14px;
 }
 .legal-wrap ul { margin-left: 22px; list-style: disc; }
+.legal-wrap p a, .legal-wrap li a { text-decoration: underline; }
 .legal-wrap ul li { margin-bottom: 8px; }
 
 /* ---------------------------------------------------
@@ -1476,3 +1477,6 @@ select.form-input {
   .app-sidebar { position: static; height: auto; }
   .annual-row { flex-direction: column; align-items: flex-start; }
 }
+
+/* Code samples scroll sideways on small screens; tabindex on each pre lets keyboard users scroll them. */
+pre[tabindex]:focus-visible { outline: 2px solid var(--violet-bright); outline-offset: 2px; }

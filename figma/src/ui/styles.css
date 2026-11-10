@@ -22,10 +22,25 @@
   --accent-soft: rgba(0, 0, 255, 0.06);
   --accent-line: rgba(0, 0, 255, 0.28);
   --on-accent: #ffffff;
+  /* Focus rings and selected outlines: 3:1 against the panel in both themes. */
+  --ring: var(--accent-text);
+  /* Field outlines: Figma's border token is about 1.2:1, too faint to find a field by. */
+  --field-border: rgba(0, 0, 0, 0.45);
   --radius: 6px;
   --font: Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
   --mono: 'Roboto Mono', 'SF Mono', Menlo, Consolas, monospace;
   color-scheme: light;
+}
+
+/* Figma's light theme text tokens for secondary, success, warning and danger text fall under the
+   4.5:1 that this panel's 10 to 11 px text needs (secondary is 3.9:1 on white, success 2.9:1, and
+   danger 3.8:1 on its own tint), so the light theme uses slightly darker shades of the same hues.
+   The dark theme tokens already pass and keep Figma's values. */
+html.figma-light {
+  --text-2: rgba(0, 0, 0, 0.62);
+  --ok: #0e7a3e;
+  --warn: #9a5200;
+  --danger: #c42b0e;
 }
 
 html.figma-dark {
@@ -33,6 +48,7 @@ html.figma-dark {
   --accent-text: #a3a3ff;
   --accent-soft: rgba(120, 120, 255, 0.14);
   --accent-line: rgba(140, 140, 255, 0.42);
+  --field-border: rgba(255, 255, 255, 0.45);
   --danger-bg: var(--figma-color-bg-danger-tertiary, rgba(255, 90, 60, 0.14));
   --warn-bg: var(--figma-color-bg-warning-tertiary, rgba(255, 180, 60, 0.14));
   --ok-bg: var(--figma-color-bg-success-tertiary, rgba(60, 200, 120, 0.14));
@@ -55,7 +71,7 @@ ol, ul { list-style: none; }
 button, input, textarea, select { font: inherit; color: inherit; }
 button { cursor: pointer; }
 button:disabled { cursor: default; }
-:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: 4px; }
+:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; border-radius: 4px; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .muted { color: var(--text-2); }
 .small { font-size: 11px; }
@@ -70,6 +86,7 @@ button:disabled { cursor: default; }
 .main { min-height: 0; }
 .screen { height: 100%; display: flex; flex-direction: column; min-height: 0; }
 .scroll { flex: 1; overflow-y: auto; padding: 12px 16px 20px; display: flex; flex-direction: column; gap: 16px; }
+.scroll:focus-visible { outline-offset: -2px; border-radius: 0; }
 
 .topbar {
   display: flex; align-items: center; gap: 8px; padding: 0 8px 0 12px;
@@ -137,7 +154,7 @@ button:disabled { cursor: default; }
 .banner > svg { flex: none; margin-top: 1px; }
 .banner-body { flex: 1; min-width: 0; }
 .banner-error { background: var(--danger-bg); color: var(--danger); }
-.banner-error .banner-body { color: var(--text); }
+.banner-error .banner-body, .banner-error .btn { color: var(--text); }
 .banner-warn { background: var(--warn-bg); }
 .banner-warn > svg { color: var(--warn); }
 .banner-success { background: var(--ok-bg); }
@@ -161,13 +178,13 @@ html.figma-dark .toast { background: #f0f0f0; color: #1e1e1e; }
 .field { display: flex; flex-direction: column; gap: 4px; }
 .field label, fieldset legend { font-weight: 500; color: var(--text); }
 input[type='text'], input[type='url'], input[type='password'], textarea, select {
-  width: 100%; border: 1px solid var(--border); border-radius: 5px; background: var(--bg);
+  width: 100%; border: 1px solid var(--field-border); border-radius: 5px; background: var(--bg);
   padding: 7px 8px; font-size: 11px; line-height: 16px; transition: border-color 0.12s;
 }
 textarea { resize: vertical; min-height: 48px; }
-input::placeholder, textarea::placeholder { color: var(--text-3); }
+input::placeholder, textarea::placeholder { color: var(--text-2); }
 input:hover, textarea:hover, select:hover { border-color: var(--figma-color-border-strong, #b3b3b3); }
-input:focus, textarea:focus, select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+input:focus, textarea:focus, select:focus { outline: none; border-color: var(--ring); box-shadow: 0 0 0 1px var(--ring); }
 .has-error input, .has-error textarea, .has-error select { border-color: var(--danger); }
 .field-hint { color: var(--text-2); }
 .field-hint strong { color: var(--text); font-weight: 500; }
@@ -233,13 +250,13 @@ details[open] > :not(summary) { margin-top: 8px; }
 .sizes legend { grid-column: 1 / -1; margin-bottom: 4px; padding: 0; }
 .size {
   position: relative; display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; cursor: pointer;
-  border: 1px solid var(--border); border-radius: var(--radius);
+  border: 1px solid var(--field-border); border-radius: var(--radius);
 }
 .size input { position: absolute; opacity: 0; pointer-events: none; }
 .size-name { font-weight: 600; }
 .size-detail { color: var(--text-2); }
-.size.is-on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); background: var(--accent-soft); }
-.size:focus-within { outline: 2px solid var(--accent); outline-offset: 1px; }
+.size.is-on { border-color: var(--ring); box-shadow: 0 0 0 1px var(--ring); background: var(--accent-soft); }
+.size:focus-within { outline: 2px solid var(--ring); outline-offset: 1px; }
 
 /* Sign in */
 
@@ -256,7 +273,7 @@ details[open] > :not(summary) { margin-top: 8px; }
 }
 .signin > .banner { margin: 0 20px 12px; }
 .signin-actions { padding: 16px 20px 20px; display: flex; flex-direction: column; gap: 10px; border-top: 1px solid var(--border); }
-.fineprint { color: var(--text-3); font-size: 10px; line-height: 14px; }
+.fineprint { color: var(--text-2); font-size: 10px; line-height: 14px; }
 .signin-code-card { margin: auto 20px; padding: 24px 0; display: flex; flex-direction: column; gap: 14px; align-items: flex-start; }
 .user-code {
   font-family: var(--mono); font-size: 30px; line-height: 36px; letter-spacing: 0.16em; font-weight: 600;
@@ -299,7 +316,7 @@ details[open] > :not(summary) { margin-top: 8px; }
 .stage-done:not(:last-child)::after { background: var(--accent-line); }
 .stage-mark {
   flex: none; width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center;
-  font-size: 10px; font-weight: 600; border: 1.5px solid var(--border); color: var(--text-3); background: var(--bg); z-index: 1;
+  font-size: 10px; font-weight: 600; border: 1.5px solid var(--border); color: var(--text-2); background: var(--bg); z-index: 1;
 }
 .stage-done .stage-mark { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
 .stage-active .stage-mark { border-color: var(--accent-line); }
@@ -307,7 +324,7 @@ details[open] > :not(summary) { margin-top: 8px; }
 .stage-failed .stage-mark { border-color: var(--danger); color: var(--danger); }
 .stage-body { display: flex; flex-direction: column; gap: 1px; padding-top: 2px; min-width: 0; }
 .stage-title { font-weight: 600; display: flex; gap: 8px; align-items: baseline; }
-.stage-todo .stage-title { color: var(--text-3); font-weight: 500; }
+.stage-todo .stage-title { color: var(--text-2); font-weight: 500; }
 .stage-time { color: var(--text-2); font-weight: 400; font-variant-numeric: tabular-nums; }
 .stage-hint { color: var(--text-2); }
 
@@ -357,7 +374,7 @@ details[open] > :not(summary) { margin-top: 8px; }
 .findings { display: flex; flex-direction: column; gap: 6px; }
 .finding { border: 1px solid var(--border); border-radius: var(--radius); padding: 9px 10px; display: flex; flex-direction: column; gap: 4px; }
 .finding-top { display: flex; align-items: center; justify-content: space-between; }
-.finding-id { color: var(--text-3); font-family: var(--mono); font-size: 10px; }
+.finding-id { color: var(--text-2); font-family: var(--mono); font-size: 10px; }
 .finding-title { font-weight: 500; font-size: 12px; line-height: 17px; }
 .sev { font-size: 10px; line-height: 16px; font-weight: 600; padding: 0 6px; border-radius: 3px; text-transform: capitalize; }
 .sev-0, .sev-1 { background: var(--bg-2); color: var(--text-2); }
@@ -374,7 +391,7 @@ button.drop-name:hover { color: var(--accent-text); text-decoration: underline; 
 .changes { display: flex; flex-direction: column; gap: 8px; counter-reset: c; }
 .changes li { counter-increment: c; padding-left: 20px; position: relative; display: flex; flex-direction: column; gap: 2px; }
 .changes li::before { content: counter(c); position: absolute; left: 0; top: 0; font-weight: 600; color: var(--accent-text); }
-.caveat { color: var(--text-3); font-size: 10px; line-height: 14px; }
+.caveat { color: var(--text-2); font-size: 10px; line-height: 14px; }
 
 /* History */
 
@@ -405,7 +422,7 @@ button.drop-name:hover { color: var(--accent-text); text-decoration: underline; 
 /* Resize handle */
 
 .resize {
-  position: absolute; right: 0; bottom: 0; width: 16px; height: 16px; display: grid; place-items: center;
-  cursor: nwse-resize; color: var(--text-3); z-index: 6; touch-action: none;
+  position: absolute; right: 0; bottom: 0; width: 24px; height: 24px; display: grid; place-items: center;
+  cursor: nwse-resize; color: var(--text-2); z-index: 6; touch-action: none;
 }
 .resize:hover { color: var(--text); }

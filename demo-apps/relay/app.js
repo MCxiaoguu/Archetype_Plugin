@@ -141,9 +141,27 @@
       demoOverlay.classList.remove("hidden");
       if (demoForm) demoForm.classList.remove("hidden");
       if (demoSuccess) demoSuccess.classList.add("hidden");
+      var first = document.getElementById("demo-email");
+      if (first) first.focus();
     };
-    var closeModal = function () { demoOverlay.classList.add("hidden"); };
+    var closeModal = function () {
+      demoOverlay.classList.add("hidden");
+      demoBtn.focus();
+    };
     demoBtn.addEventListener("click", openModal);
+    // Keyboard: Escape closes the dialog and Tab stays inside it while it is open.
+    demoOverlay.addEventListener("keydown", function (ev) {
+      if (ev.key === "Escape") { ev.preventDefault(); closeModal(); return; }
+      if (ev.key !== "Tab") return;
+      var items = Array.prototype.filter.call(
+        demoOverlay.querySelectorAll("button, input, [tabindex='-1']"),
+        function (el) { return el.offsetParent !== null && el.tabIndex >= 0; }
+      );
+      if (!items.length) return;
+      var firstEl = items[0], lastEl = items[items.length - 1];
+      if (ev.shiftKey && document.activeElement === firstEl) { ev.preventDefault(); lastEl.focus(); }
+      else if (!ev.shiftKey && document.activeElement === lastEl) { ev.preventDefault(); firstEl.focus(); }
+    });
     demoOverlay.addEventListener("click", function (ev) {
       if (ev.target === demoOverlay) closeModal();
     });
@@ -153,7 +171,11 @@
       demoForm.addEventListener("submit", function (ev) {
         ev.preventDefault();
         demoForm.classList.add("hidden");
-        if (demoSuccess) demoSuccess.classList.remove("hidden");
+        if (demoSuccess) {
+          demoSuccess.classList.remove("hidden");
+          var msg = demoSuccess.querySelector("h3");
+          if (msg) { msg.setAttribute("tabindex", "-1"); msg.focus(); }
+        }
       });
     }
   }

@@ -62,10 +62,11 @@ export function Progress({ state, fx }: { state: AppState; fx: Effects }) {
 
   return (
     <div class="screen progress">
-      <div class="scroll">
+      {/* Focusable so keyboard users can scroll it: nothing inside takes focus while tests run. */}
+      <div class="scroll" tabIndex={0} role="region" aria-labelledby="progress-title">
         <header class="study-head">
           <p class="eyebrow">{st.record ? `${st.record.startName} to ${st.record.goalName}` : 'Launching'}</p>
-          <h1 class="study-title">{title}</h1>
+          <h1 class="study-title" id="progress-title">{title}</h1>
         </header>
 
         {st.error && (
