@@ -760,6 +760,53 @@ describe('a whole study through the runner', () => {
     expectUntouched(fake, before);
     expect([...first.failures, ...second.failures]).toEqual([]);
   }, 30_000);
+
+  it('resumes every run from its turn 0 save when the plugin closes before any turn was played', async () => {
+    const script: ScriptStep[] = [
+      { expect: 'Dashboard', click: 'Billing', hold: 'reopened' },
+      { expect: 'Billing settings', give_up: 'Billing has no bank here.' },
+    ];
+    mock.trace.addStudy({ studyId: 'study-turn0', waves: [[{ runId: 'run-z-one', script }, { runId: 'run-z-two', script }]] });
+    const fake = fakeFile();
+    const first = openPlugin(fake);
+    const doc = await first.bridge.call('trace-read', { importLibraryVariants: true });
+    const clock = panelClock();
+    // Both runs have posted turn 1 and wait for it: the plugin closes before either played a turn.
+    const closing = async (ms: number) => {
+      if (['run-z-one', 'run-z-two'].every((id) => mock.trace.runs.get(id)?.turns.has(1))) first.close();
+      await clock.sleep(ms);
+    };
+    expect(await study(first, doc, 'study-turn0', { sleep: closing })).toMatchObject({ stop: 'cancelled' });
+
+    // What each saved is the state a fresh start gives, through the real storage.
+    const second = openPlugin(fake);
+    const reread = await second.bridge.call('trace-read', { importLibraryVariants: true });
+    const { sessions } = await second.bridge.call('trace-load', { studyId: 'study-turn0' });
+    const turn0 = (runId: string): SavedSession => ({ owner: OWNER, runId, turn: 0, state: start(doc, '1:2'), lastOutcome: null, timerEffects: [], loopFrames: [] });
+    expect([...sessions].sort((a, b) => a.runId.localeCompare(b.runId))).toEqual([turn0('run-z-one'), turn0('run-z-two')]);
+
+    for (const runId of ['run-z-one', 'run-z-two']) mock.trace.release(runId, 'reopened');
+    const result = await study(second, reread, 'study-turn0');
+    expect(result).toMatchObject({ stop: 'done' });
+    expect(result.sessions.map((r) => [r.runId, r.ended]).sort()).toEqual([
+      ['run-z-one', { status: 'finalizing', reason: 'give_up' }],
+      ['run-z-two', { status: 'finalizing', reason: 'give_up' }],
+    ]);
+    for (const runId of ['run-z-one', 'run-z-two']) {
+      // Not claimed again; turn 1 went out again from the saved start, as the fresh start had sent it, with no last.
+      expect(refusalsOf(runId)).toEqual([]);
+      expect(postsOf(runId).map((p) => p.turn)).toEqual([1, 1, 2]);
+      const [fresh, resumed] = postsOf(runId).filter((p) => p.turn === 1).map((p) => p.body as unknown as TurnBody);
+      expect(resumed?.last).toBeNull();
+      expect(resumed?.screen).toEqual(fresh?.screen);
+      expect(resumed?.elements).toEqual(fresh?.elements);
+      expect(resumed?.visible_text_excerpt).toBe(fresh?.visible_text_excerpt);
+      expect(picture(resumed?.screenshot_b64)).toEqual(picture(fresh?.screenshot_b64));
+      expect(mock.trace.runs.get(runId)?.status).toBe('abandoned');
+    }
+    expect(await second.bridge.call('trace-load', { studyId: 'study-turn0' })).toEqual({ sessions: [] });
+    expect([...first.failures, ...second.failures]).toEqual([]);
+  }, 30_000);
 });
 
 // --- The mock backend itself: the rules of trace_turn_service.py ------------
@@ -831,7 +878,17 @@ describe('the mock backend', () => {
     clock += 5_000;
     expect(await api.claimRun('run-claim', { browser, owner: OWNER })).toEqual(briefing);
     expect(await refused(api.claimRun('run-claim', { browser, owner: 'panel-other' }))).toMatchObject({ status: 409, code: 'already_claimed' });
+    // The rest of 2f16ec9's rule: an owner is needed, and a figma-trace engine when a browser is sent.
+    expect(await refused(api.request('POST', '/api/plugin/runs/run-claim/claim', { browser }))).toMatchObject({ status: 409, code: 'already_claimed' });
+    expect(await refused(api.request('POST', '/api/plugin/runs/run-claim/claim', { browser: { ...browser, engine: 'chrome' }, owner: OWNER }))).toMatchObject({ status: 409, code: 'already_claimed' });
+    expect(await api.request('POST', '/api/plugin/runs/run-claim/claim', { owner: OWNER })).toEqual(briefing);
     expect(await refused(api.claimRun('run-nobody', { browser, owner: OWNER }))).toMatchObject({ status: 404, code: 'run_not_found' });
+  });
+
+  it('refuses a repeat claim of a run that ended, even from its own owner', async () => {
+    const runId = await claimed([]);
+    await api.abortRun(runId, { owner: OWNER, code: 'render_failed', detail: 'x' });
+    expect(await refused(api.claimRun(runId, { browser, owner: OWNER }))).toMatchObject({ status: 409, code: 'already_claimed' });
   });
 
   it('refuses a repeat claim of a run that is finalizing, even from its own owner', async () => {
