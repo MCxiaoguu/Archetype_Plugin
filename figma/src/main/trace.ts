@@ -199,11 +199,19 @@ export function createTraceMain(api: PluginAPI, post: (msg: MainToUi) => void): 
    * page. Synchronous, so the close handler can run it.
    */
   function removeLeftovers(): number {
-    const leftovers = new Set<SceneNode>([...heldContainers()].filter((n) => !n.removed));
-    for (const node of api.currentPage.children) if (isScratch(node)) leftovers.add(node);
-    for (const node of leftovers) node.remove();
-    if (leftovers.size) api.commitUndo();
-    return leftovers.size;
+    // By id: Figma can give the same node back as another object.
+    const leftovers = new Map<string, SceneNode>();
+    for (const node of heldContainers()) if (!node.removed) leftovers.set(node.id, node);
+    for (const node of api.currentPage.children) if (!leftovers.has(node.id) && isScratch(node)) leftovers.set(node.id, node);
+    let removed = 0;
+    for (const node of leftovers.values()) {
+      // Gone already when it was removed through another object for it.
+      if (node.removed) continue;
+      node.remove();
+      removed++;
+    }
+    if (removed) api.commitUndo();
+    return removed;
   }
 
   return { handle, removeLeftovers };

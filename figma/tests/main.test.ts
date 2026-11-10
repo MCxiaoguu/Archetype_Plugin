@@ -527,6 +527,24 @@ describe('trace requests on the main thread', () => {
     expect(scratch()).toEqual([]);
   });
 
+  it('removes a container once when Figma hands it back as another object for the same node', async () => {
+    const t = traceMain();
+    const doc = (await t.ask({ type: 'trace-read', requestId: 'r', importLibraryVariants: false })).result as ProtoDoc;
+    const page = t.api.currentPage as unknown as FakeNode;
+    const scratch = () => [...t.nodes.values()].filter((n) => !n.removed && isScratch(n as unknown as BaseNode));
+    const rendering = t.ask({ type: 'trace-render', requestId: 'r1', doc, state: start(doc, '1:2') });
+    for (let i = 0; i < 100 && scratch().length === 0; i++) await Promise.resolve();
+    const [held] = scratch();
+    expect(held).toBeDefined();
+    // The page's children give a new wrapper per read, as Figma's API objects can be: the same node, another object.
+    const childrenOf = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(page), 'children')?.get as (this: FakeNode) => FakeNode[];
+    Object.defineProperty(page, 'children', { configurable: true, get: () => childrenOf.call(page).map((n) => (n === held ? new Proxy(n, {}) : n)) });
+    expect(() => t.controller.removeLeftovers()).not.toThrow();
+    expect(held?.removed).toBe(true);
+    expect(t.world.log?.filter((l) => l === `remove ${held?.id}`)).toHaveLength(1);
+    await rendering;
+  });
+
   it('knows the frame of a hidden layer inside an instance, which Figma only shows with invisible children reachable', async () => {
     const t = traceMain();
     // As in Figma: with skipInvisibleInstanceChildren on, a hidden layer inside an instance can't be got by id.
