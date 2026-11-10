@@ -17,6 +17,7 @@
 
 import { activeMode, type ExprScope, findVariable, readVariable } from '../lib/proto/expr';
 import type { Box, ProtoDoc, RawLayer, RoleHint, ScrollOffset, Size, TraceState, VariableLiteral, RGBA } from '../lib/proto/model';
+import { scrollRange } from '../lib/proto/scroll';
 import { reactionsFor } from '../lib/proto/variants';
 import { pageOf } from './document';
 import { exclusive, recordScratchNode, SCRATCH_KEY, SCRATCH_VALUE } from './scratch';
@@ -493,7 +494,7 @@ function scrollOf(r: Render, copy: Copy, node: SceneNode, key: string, origin: R
     right = Math.max(right, b.x - own.x + offset.x + b.width);
     bottom = Math.max(bottom, b.y - own.y + offset.y + b.height);
   }
-  return { direction: node.overflowDirection, maxX: Math.max(0, right - own.width), maxY: Math.max(0, bottom - own.height) };
+  return { direction: node.overflowDirection, maxX: scrollRange(right - own.width), maxY: scrollRange(bottom - own.height) };
 }
 
 /**

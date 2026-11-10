@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { settle, start, viewportFor } from '../src/lib/proto/engine';
 import { EngineError } from '../src/lib/proto/errors';
-import type { OverflowDirection, OverlayPosition, ProtoAction, TraceAction, TraceState } from '../src/lib/proto/model';
+import type { OverflowDirection, OverlayPosition, ProtoAction, ProtoFrame, TraceAction, TraceState } from '../src/lib/proto/model';
 import { pageRange } from '../src/lib/proto/scroll';
 import {
   A,
@@ -51,11 +51,9 @@ describe('viewportFor', () => {
     expect(() => viewportFor(protoDoc([A]), 'nope')).toThrow(EngineError);
   });
 
-  it('leaves the page a range of what the rounding cut, never below zero', () => {
+  it('leaves the page no scroll range for what the rounding cut', () => {
     const cut = frame('S', 1280, 818.4);
-    const range = pageRange(cut, viewportFor(protoDoc([cut]), 'S'));
-    expect(range.maxX).toBe(0);
-    expect(range.maxY).toBeCloseTo(0.4, 6);
+    expect(pageRange(cut, viewportFor(protoDoc([cut]), 'S'))).toEqual({ maxX: 0, maxY: 0 });
     const over = frame('S', 1279.6, 818.6);
     expect(pageRange(over, viewportFor(protoDoc([over]), 'S'))).toEqual({ maxX: 0, maxY: 0 });
   });
@@ -560,6 +558,27 @@ describe('scroll', () => {
   });
 
   it.each([
+    { what: 'under half a pixel', height: 818.4, viewport: 818 },
+    { what: 'by a fraction the viewport rounded up to', height: 818.6, viewport: 819 },
+    { what: 'by 0.4 px past a capped viewport', height: 900.4, viewport: 900 },
+  ])('a page that overflows $what does not scroll: scroll_at_end', ({ height, viewport }) => {
+    const doc = protoDoc([frame('S', 1280, height)]);
+    const s = start(doc, 'S');
+    expect(s.viewport).toEqual({ width: 1280, height: viewport });
+    const { state, outcome } = act(doc, s, scroll('down'), [layer('S', null, [0, 0, 1280, height])]);
+    expect(outcome).toBe('scroll_at_end');
+    expect(state.scroll).toEqual({});
+  });
+
+  it('a page that overflows by 1.6 px scrolls by a whole 2 px range', () => {
+    const doc = protoDoc([frame('S', 1280, 901.6)]);
+    const { state, outcome } = act(doc, start(doc, 'S'), scroll('down'), [layer('S', null, [0, 0, 1280, 901.6])]);
+    expect(outcome).toBe('scrolled');
+    expect(state.scroll.S).toEqual({ x: 0, y: 2, areas: {} });
+    expect(pageRange(doc.frames[0] as ProtoFrame, state.viewport)).toEqual({ maxX: 0, maxY: 2 });
+  });
+
+  it.each([
     { amount: undefined, y: 760 },
     { amount: 'page' as const, y: 760 },
     { amount: 'half' as const, y: 422 },
@@ -592,6 +611,17 @@ describe('scroll', () => {
     it('does not move on the other axis: the page scrolls instead', () => {
       const { state } = act(doc, start(doc, 'T'), scroll('down', 'card'), [tallRoot(), carousel, card]);
       expect(state.scroll.T).toEqual({ x: 0, y: 760, areas: {} });
+    });
+
+    it('scrolls a range measured in fractions only to whole pixels, and not at all under half a pixel', () => {
+      const measured = (maxX: number) => layer('car', 'T', [0, 100, 400, 200], { scroll: { direction: 'HORIZONTAL', maxX, maxY: 0 } });
+      const short = protoDoc([frame('T', 400, 800)]);
+      const layers = (maxX: number) => [layer('T', null, [0, 0, 400, 800]), measured(maxX), card];
+      expect(act(short, start(short, 'T'), scroll('right', 'card'), layers(0.4)).outcome).toBe('scroll_at_end');
+      const once = act(short, start(short, 'T'), scroll('right', 'card'), layers(600.4)).state;
+      const twice = act(short, once, scroll('right', 'card'), layers(600.4));
+      expect(twice.state.scroll.T?.areas.car).toEqual({ x: 600, y: 0 });
+      expect(act(short, twice.state, scroll('right', 'card'), layers(600.4)).outcome).toBe('scroll_at_end');
     });
 
     it('stays put when nothing around it can move on that axis', () => {
