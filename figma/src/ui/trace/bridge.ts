@@ -98,7 +98,7 @@ export class BridgeTimeout extends Error {
 
 export interface Bridge {
   call<K extends TraceCallType>(type: K, payload: TraceCalls[K]['request'], options?: { timeoutMs?: number }): Promise<TraceCalls[K]['reply']>;
-  /** Stops listening and rejects every call still waiting. */
+  /** Stops listening and rejects every call still waiting, renders queued to be sent included. */
   close(): void;
 }
 
@@ -109,14 +109,32 @@ interface Waiting {
   timer: ReturnType<typeof setTimeout>;
 }
 
+/**
+ * The bridge to the main thread. Renders go one at a time: the main thread
+ * renders one state at a time anyway, so a render waits here, not there,
+ * and its timeout counts from when it is sent, measuring the render alone.
+ * A render that timed out keeps its place until its answer comes, so no
+ * other render (its retry least of all) runs beside it.
+ */
 export function createBridge(transport: BridgeTransport): Bridge {
   // Unique across bridges and panel reloads: a reply meant for another one never matches.
   const prefix = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
   let next = 0;
   let closed = false;
   const waiting = new Map<string, Waiting>();
+  /** The render the main thread is on: answered yet or not, it holds the place of the next. */
+  let rendering: string | null = null;
+  /** Renders waiting to be sent, in order, with how to refuse them when the bridge closes. */
+  const renders: Array<{ send: () => void; refuse: (err: Error) => void }> = [];
+
+  function renderDone(requestId: string) {
+    if (rendering !== requestId) return;
+    rendering = null;
+    renders.shift()?.send();
+  }
 
   const stop = transport.listen((msg) => {
+    renderDone(msg.requestId);
     const call = waiting.get(msg.requestId);
     // No one waits: the call timed out (and was rejected then) or is another bridge's.
     if (!call) return;
@@ -126,24 +144,32 @@ export function createBridge(transport: BridgeTransport): Bridge {
     else call.reject(new BridgeError(call.type, msg.message, msg.code ?? null));
   });
 
+  function send<K extends TraceCallType>(type: K, payload: TraceCalls[K]['request'], timeoutMs: number, resolve: (result: unknown) => void, reject: (err: Error) => void) {
+    const requestId = `${prefix}-${++next}`;
+    if (type === 'trace-render') rendering = requestId;
+    const timer = setTimeout(() => {
+      waiting.delete(requestId);
+      reject(new BridgeTimeout(type, timeoutMs));
+    }, timeoutMs);
+    waiting.set(requestId, { type, resolve, reject, timer });
+    try {
+      transport.send({ type, requestId, ...payload } as TraceRequestMessage);
+    } catch (err) {
+      waiting.delete(requestId);
+      clearTimeout(timer);
+      reject(err instanceof Error ? err : new BridgeError(type, String(err)));
+      renderDone(requestId);
+    }
+  }
+
   return {
     call<K extends TraceCallType>(type: K, payload: TraceCalls[K]['request'], options: { timeoutMs?: number } = {}) {
       if (closed) return Promise.reject(new BridgeError(type, 'The trace bridge is closed.'));
       const timeoutMs = options.timeoutMs ?? BRIDGE_TIMEOUT_MS;
-      const requestId = `${prefix}-${++next}`;
       return new Promise<TraceCalls[K]['reply']>((resolve, reject) => {
-        const timer = setTimeout(() => {
-          waiting.delete(requestId);
-          reject(new BridgeTimeout(type, timeoutMs));
-        }, timeoutMs);
-        waiting.set(requestId, { type, resolve: resolve as (result: unknown) => void, reject, timer });
-        try {
-          transport.send({ type, requestId, ...payload } as TraceRequestMessage);
-        } catch (err) {
-          waiting.delete(requestId);
-          clearTimeout(timer);
-          reject(err instanceof Error ? err : new BridgeError(type, String(err)));
-        }
+        const go = () => send(type, payload, timeoutMs, resolve as (result: unknown) => void, reject);
+        if (type !== 'trace-render' || rendering === null) go();
+        else renders.push({ send: go, refuse: reject });
       });
     },
     close() {
@@ -154,6 +180,8 @@ export function createBridge(transport: BridgeTransport): Bridge {
         call.reject(new BridgeError(call.type, 'The trace bridge was closed before the Figma document answered.'));
         waiting.delete(requestId);
       }
+      for (const queued of renders.splice(0)) queued.refuse(new BridgeError('trace-render', 'The trace bridge was closed before the render was sent.'));
+      rendering = null;
     },
   };
 }

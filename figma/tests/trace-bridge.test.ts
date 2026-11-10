@@ -136,6 +136,100 @@ describe('trace bridge', () => {
   });
 });
 
+describe('renders through the bridge', () => {
+  const render = (bridge: ReturnType<typeof createBridge>, n: number) => bridge.call('trace-render', { docHash: DOC.docHash, state: { frameId: `f${n}` } as never });
+  const renderIds = (main: ReturnType<typeof fakeMain>) => main.sent.filter((m) => m.type === 'trace-render').map((m) => m.requestId);
+
+  /** A main thread that takes `ms` per render, one at a time, as its queue does. */
+  function slowMain(ms: number) {
+    const main = fakeMain();
+    let busy = Promise.resolve();
+    const send = main.transport.send;
+    main.transport.send = (msg) => {
+      send(msg);
+      if (msg.type !== 'trace-render') return;
+      busy = busy.then(() => new Promise<void>((done) => setTimeout(() => {
+        main.reply({ type: 'trace-result', requestId: msg.requestId, result: { image: new Uint8Array([1]), layers: [], viewport: { width: 1, height: 1 }, notes: [] } });
+        done();
+      }, ms)));
+    };
+    return main;
+  }
+
+  it('sends one render at a time, timing each from when it is sent, so five sessions with slow renders all get theirs', async () => {
+    vi.useFakeTimers();
+    // Each render takes 10 s on the main thread: the fifth would wait 40 s there, past the 30 s timeout, if all went at once.
+    const main = slowMain(10_000);
+    const bridge = createBridge(main.transport);
+    const done: unknown[] = [];
+    const renders = [1, 2, 3, 4, 5].map((n) => render(bridge, n).then((r) => done.push(r), (err: unknown) => done.push(err)));
+    expect(renderIds(main)).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(50_000);
+    await Promise.all(renders);
+    expect(done).toHaveLength(5);
+    expect(done.filter((r) => r instanceof Error)).toEqual([]);
+    expect(renderIds(main)).toHaveLength(5);
+  });
+
+  it('lets other calls through while a render is under way', async () => {
+    const main = fakeMain();
+    const bridge = createBridge(main.transport);
+    void render(bridge, 1);
+    void render(bridge, 2);
+    const load = bridge.call('trace-load', { studyId: 's1' });
+    expect(main.sent.map((m) => m.type)).toEqual(['trace-render', 'trace-load']);
+    main.reply({ type: 'trace-result', requestId: main.sent[1]!.requestId, result: { sessions: [] } });
+    await expect(load).resolves.toEqual({ sessions: [] });
+  });
+
+  it('sends nothing more after a render that timed out until its answer comes, so a retry never runs beside it', async () => {
+    vi.useFakeTimers();
+    const main = fakeMain();
+    const bridge = createBridge(main.transport);
+    const first = render(bridge, 1).catch((e: unknown) => e);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(await first).toBeInstanceOf(BridgeTimeout);
+    // The session tries again: queued behind the render the main thread is still on.
+    const retry = render(bridge, 1);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(renderIds(main)).toHaveLength(1);
+    // Its late answer reaches no one, and lets the retry go, timed from now.
+    main.reply({ type: 'trace-error', requestId: renderIds(main)[0]!, message: 'Export failed' });
+    expect(renderIds(main)).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(29_999);
+    main.reply({ type: 'trace-result', requestId: renderIds(main)[1]!, result: { image: new Uint8Array([1]), layers: [], viewport: { width: 1, height: 1 }, notes: [] } });
+    await expect(retry).resolves.toMatchObject({ viewport: { width: 1, height: 1 } });
+  });
+
+  it('rejects the queued renders too when it closes', async () => {
+    const main = fakeMain();
+    const bridge = createBridge(main.transport);
+    const sent = render(bridge, 1).catch((e: unknown) => e);
+    const queued = render(bridge, 2).catch((e: unknown) => e);
+    bridge.close();
+    expect(await sent).toBeInstanceOf(BridgeError);
+    expect(await queued).toBeInstanceOf(BridgeError);
+    expect(renderIds(main)).toHaveLength(1);
+  });
+
+  it('frees the slot when a render cannot be sent', async () => {
+    let fail = true;
+    const sent: TraceRequestMessage[] = [];
+    const bridge = createBridge({
+      send: (msg) => {
+        if (fail) throw new DOMException('could not be cloned', 'DataCloneError');
+        sent.push(msg);
+      },
+      listen: () => () => undefined,
+    });
+    await expect(render(bridge, 1)).rejects.toMatchObject({ name: 'DataCloneError' });
+    fail = false;
+    void render(bridge, 2).catch(() => undefined);
+    expect(sent).toHaveLength(1);
+    bridge.close();
+  });
+});
+
 describe('panel transport', () => {
   it('sends on the typed channel and passes on only well formed trace replies', () => {
     const sent: UiToMain[] = [];

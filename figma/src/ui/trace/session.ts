@@ -314,9 +314,10 @@ export async function runSession(run: SessionRun, deps: SessionDeps): Promise<Se
 
   /**
    * One render, retried once (spec, Error handling); the second failure
-   * aborts with both reasons. The bridge's 30 s timeout counts from the
-   * request, so it includes the time the render waits on the main thread
-   * behind other sessions' renders.
+   * aborts with both reasons. The bridge sends renders one at a time and
+   * times each from when it is sent, so the time a render waits behind
+   * other sessions' renders doesn't count; a retry after a timeout waits
+   * until the main thread answered the first.
    */
   async function render(): Promise<TraceRenderReply> {
     let first: unknown;
