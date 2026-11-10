@@ -12,7 +12,7 @@ import type { ProtoDoc, RawLayer, TraceState } from '../lib/proto/model';
 import { pageOf, topFrameOf } from './document';
 import { readProto } from './protoReader';
 import { createRenderer } from './renderer';
-import { exclusive, isScratch, recordScratchNode, SCRATCH_KEY, SCRATCH_VALUE } from './scratch';
+import { exclusive, heldContainers, isScratch, recordScratchNode, SCRATCH_KEY, SCRATCH_VALUE } from './scratch';
 import * as store from './storage';
 import { changedProtoFrames } from './watch';
 
@@ -21,7 +21,7 @@ export const SCRATCH_CHECK_REASON = 'Duplicate to your drafts to test';
 
 const isText = (v: unknown): v is string => typeof v === 'string';
 const isObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
-const isSize = (v: unknown): boolean => isObject(v) && Number.isFinite(v.width) && Number.isFinite(v.height);
+const messageOf = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
 /** A payload the main thread can't use: `handle` answers it with trace-error. */
 function bad(what: string): never {
@@ -35,11 +35,10 @@ function checkDoc(doc: unknown): ProtoDoc {
   return doc as unknown as ProtoDoc;
 }
 
-function checkState(state: unknown, what = 'state'): TraceState {
-  if (!isObject(state) || !isText(state.frameId) || !isText(state.docHash) || !Array.isArray(state.overlays) || !isSize(state.viewport)) {
-    bad(`a ${what} that is not a trace state (it needs frameId, docHash, overlays and viewport)`);
-  }
-  return state as unknown as TraceState;
+function checkState(state: unknown): TraceState {
+  const problem = store.traceStateProblem(state);
+  if (problem) bad(`a state that is not a trace state (${problem})`);
+  return state as TraceState;
 }
 
 function checkId(value: unknown, what: string): string {
@@ -49,18 +48,14 @@ function checkId(value: unknown, what: string): string {
 
 function checkSession(session: unknown, runId: string): SavedSession | null {
   if (session === null) return null;
-  if (!isObject(session)) bad('a session that is not an object or null');
-  if (!isText(session.owner) || !session.owner) bad('a session without its owner');
-  if (session.runId !== runId) bad(`a session whose runId is not the run it is saved under (${runId})`);
-  if (!Number.isInteger(session.turn) || (session.turn as number) < 0) bad('a session whose turn is not a whole number from 0');
-  checkState(session.state, 'session state');
-  if (session.lastOutcome !== null && !isObject(session.lastOutcome)) bad('a session whose lastOutcome is not an object or null');
-  return session as unknown as SavedSession;
+  const problem = store.savedSessionProblem(session, runId);
+  if (problem) bad(`a session for ${runId} where ${problem}`);
+  return session as SavedSession;
 }
 
 export interface TraceMain {
   handle(msg: TraceRequestMessage): Promise<void>;
-  /** Removes scratch containers a crash left on the current page. Returns how many. */
+  /** Removes the scratch containers renders hold now and those a crash left on the current page. Returns how many. */
   removeLeftovers(): number;
 }
 
@@ -91,6 +86,13 @@ export function createTraceMain(api: PluginAPI, post: (msg: MainToUi) => void): 
   async function read(importLibraryVariants: unknown): Promise<ProtoDoc> {
     if (typeof importLibraryVariants !== 'boolean') bad('importLibraryVariants that is not true or false');
     const doc = await readProto(api, api.currentPage, { importLibraryVariants });
+    // A reaction key can name a hidden layer inside an instance, which Figma gives by id only with invisible instance children reachable.
+    await exclusive(api, () => learn(doc));
+    return doc;
+  }
+
+  /** The frames to watch and the node ids the trace knows, from a ProtoDoc just read. */
+  async function learn(doc: ProtoDoc): Promise<void> {
     frames = new Set(doc.frames.map((f) => f.id));
     known = new Map();
     for (const frame of doc.frames) {
@@ -113,7 +115,6 @@ export function createTraceMain(api: PluginAPI, post: (msg: MainToUi) => void): 
         if (variant.componentId) remember(variant.componentId, set.frameId);
       }
     }
-    return doc;
   }
 
   /** The layers a render measured, under the frame each was drawn in. */
@@ -131,21 +132,23 @@ export function createTraceMain(api: PluginAPI, post: (msg: MainToUi) => void): 
     }
   }
 
-  /** Makes and removes an empty container: a view only file refuses the first step. */
+  /**
+   * Makes and removes an empty container: a view only file refuses the
+   * first step. Any other failure is not a view only file, so it goes back
+   * as a trace-error.
+   */
   function scratchCheck(): ScratchCheckReply {
     let container: FrameNode;
     try {
       container = api.createFrame();
-    } catch {
-      return { ok: false, reason: SCRATCH_CHECK_REASON };
+    } catch (err) {
+      return { ok: false, reason: SCRATCH_CHECK_REASON, detail: messageOf(err) };
     }
     recordScratchNode(container.id);
     try {
       container.setPluginData(SCRATCH_KEY, SCRATCH_VALUE);
       container.locked = true;
       return { ok: true, reason: null };
-    } catch {
-      return { ok: false, reason: SCRATCH_CHECK_REASON };
     } finally {
       container.remove();
       api.commitUndo();
@@ -186,15 +189,21 @@ export function createTraceMain(api: PluginAPI, post: (msg: MainToUi) => void): 
     try {
       post({ type: 'trace-result', requestId, result: await answer(msg) });
     } catch (err) {
-      post({ type: 'trace-error', requestId, message: err instanceof Error ? err.message : String(err) });
+      post({ type: 'trace-error', requestId, message: messageOf(err) });
     }
   }
 
+  /**
+   * Removes the containers renders are drawing in (the plugin is closing
+   * mid-render), wherever they are, and marked ones a crash left on this
+   * page. Synchronous, so the close handler can run it.
+   */
   function removeLeftovers(): number {
-    const leftovers = api.currentPage.children.filter((n) => isScratch(n));
+    const leftovers = new Set<SceneNode>([...heldContainers()].filter((n) => !n.removed));
+    for (const node of api.currentPage.children) if (isScratch(node)) leftovers.add(node);
     for (const node of leftovers) node.remove();
-    if (leftovers.length) api.commitUndo();
-    return leftovers.length;
+    if (leftovers.size) api.commitUndo();
+    return leftovers.size;
   }
 
   return { handle, removeLeftovers };

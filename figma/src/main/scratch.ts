@@ -29,6 +29,25 @@ export function scratchNodeIds(): ReadonlySet<string> {
   return made;
 }
 
+const drawing = new Set<FrameNode>();
+
+/**
+ * The containers renders are drawing in right now. When the plugin closes
+ * mid-render, the close handler removes them by reference, on whatever page
+ * they are: the designer may have moved to another page since.
+ */
+export function holdContainer(container: FrameNode): void {
+  drawing.add(container);
+}
+
+export function releaseContainer(container: FrameNode): void {
+  drawing.delete(container);
+}
+
+export function heldContainers(): ReadonlySet<FrameNode> {
+  return drawing;
+}
+
 const queues = new WeakMap<PluginAPI, Promise<unknown>>();
 
 /**

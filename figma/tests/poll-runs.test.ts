@@ -94,18 +94,18 @@ describe('persona rows', () => {
     ]);
   });
 
-  it('shows what the sessions and the runner say, and a pause only while it lasts', () => {
+  it('shows what the sessions and the runner say, each once, and the runner only while it is paused', () => {
     const LOST = 'Lost touch with Archetype. Retrying.';
     const live = (runId: string, phase: LiveRun['phase'], notices: string[]): LiveRun => ({ runId, phase, frameName: 'Dashboard', turn: 1, notices });
     const sessions = {
       r1: live('r1', 'paused', [LOST, 'Keep this tab visible, or use the desktop app.']),
-      r2: live('r2', 'acting', [LOST, 'This file changed while the test ran.']),
+      r2: live('r2', 'acting', ['This file changed while the test ran.']),
+      r3: live('r3', 'paused', [LOST]),
     };
-    expect(panelNotices(sessions, { phase: 'running', notice: null }, [LOST])).toEqual([LOST, 'Keep this tab visible, or use the desktop app.', 'This file changed while the test ran.']);
-    const back = { ...sessions, r1: { ...sessions.r1, phase: 'thinking' as const } };
-    expect(panelNotices(back, null, [LOST])).toEqual(['Keep this tab visible, or use the desktop app.', 'This file changed while the test ran.']);
-    expect(panelNotices({}, { phase: 'paused', notice: LOST }, [LOST])).toEqual([LOST]);
-    expect(panelNotices({}, { phase: 'next_wave', notice: null }, [LOST])).toEqual([]);
+    expect(panelNotices(sessions, { phase: 'running', notice: null })).toEqual([LOST, 'Keep this tab visible, or use the desktop app.', 'This file changed while the test ran.']);
+    expect(panelNotices({}, { phase: 'paused', notice: LOST })).toEqual([LOST]);
+    expect(panelNotices({}, { phase: 'next_wave', notice: null })).toEqual([]);
+    expect(panelNotices({}, null)).toEqual([]);
   });
 
   it('says what a single finished try did', () => {

@@ -8,14 +8,15 @@
  * Every failure is visible (spec, Error handling): a failure that is not the
  * persona's doing aborts the run with its code; losing the network or the
  * sign in pauses and retries, never aborting on its own; once the backend
- * has set `ended` the session never aborts.
+ * has set `ended` the session never aborts. When the panel closes (the
+ * signal), the session stops where it is, so the run can resume.
  */
 
 import { ApiError, TURN_TIMEOUT_MS, type AbortCode, type ApiClient, type TimerEffect, type TurnBody, type TurnEnded, type TurnFlag, type TurnLast, type TurnView } from '../../lib/api';
 import type { SavedSession, TraceRenderReply } from '../../lib/messages';
 import { listElements } from '../../lib/proto/elements';
 import { apply, settle, start, type EngineEffect } from '../../lib/proto/engine';
-import { EngineError } from '../../lib/proto/errors';
+import { EngineError, type EngineErrorCode } from '../../lib/proto/errors';
 import type { Element, ElementTarget, ProtoDoc, RawLayer, TraceAction, TraceState } from '../../lib/proto/model';
 import { pageOffset, pageRange } from '../../lib/proto/scroll';
 import { stepUrl } from '../../lib/proto/url';
@@ -78,8 +79,12 @@ export interface SessionResult {
   runId: string;
   /** How the run ended: as the backend said, or as this panel aborted it. Null when the session stopped without one. */
   ended: TurnEnded | null;
-  /** `ended`: the backend ended the run. `aborted`: this panel aborted it. The rest stop without aborting. */
-  stop: 'ended' | 'aborted' | 'not_owner' | 'run_ended' | 'run_not_found';
+  /**
+   * `ended`: the backend ended the run. `aborted`: this panel aborted it.
+   * `cancelled`: the panel closed, and the run resumes when it reopens. The
+   * rest stop without aborting.
+   */
+  stop: 'ended' | 'aborted' | 'cancelled' | 'not_owner' | 'run_ended' | 'run_not_found';
   message: string | null;
 }
 
@@ -90,9 +95,11 @@ export interface SessionDeps {
   sleep: (ms: number) => Promise<void>;
   onStatus: (status: SessionStatus) => void;
   /** Subscribes to the main thread's trace-file-changed; returns the unsubscribe. */
-  watchFile?: (onChange: (frameIds: string[]) => void) => () => void;
+  watchFile: (onChange: (frameIds: string[]) => void) => () => void;
   /** How long a turn post may take; a backend deciding inside the request needs longer. */
   postTurnTimeoutMs?: number;
+  /** Fires when the panel closes: the session stops without aborting or forgetting the run. */
+  signal?: AbortSignal;
 }
 
 type DecidedView = Exclude<TurnView, { status: 'thinking' }>;
@@ -117,8 +124,15 @@ class Stop extends Error {
   }
 }
 
+/** The panel is closing: stop where the run is. */
+class Cancel extends Error {
+  constructor() {
+    super('The panel closed.');
+  }
+}
+
 /** EngineError codes, as the run is aborted for them. */
-const ENGINE_ABORT: Record<string, AbortCode> = {
+const ENGINE_ABORT: Record<EngineErrorCode, AbortCode> = {
   doc_changed: 'file_changed',
   invalid_doc: 'engine_error',
   invalid_layers: 'engine_error',
@@ -130,10 +144,11 @@ const ENGINE_ABORT: Record<string, AbortCode> = {
 const ELEMENT_ACTIONS: ReadonlySet<string> = new Set(['click', 'hover', 'drag', 'type']);
 
 const cap = (text: string, limit: number) => (text.length > limit ? text.slice(0, limit) : text);
+const messageOf = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
 function engineAbort(err: unknown, what: string): Abort {
-  if (err instanceof EngineError) return new Abort(ENGINE_ABORT[err.code as string] ?? 'engine_error', `${what}: ${err.message}`);
-  return new Abort('engine_error', `${what}: ${err instanceof Error ? err.message : String(err)}`);
+  if (err instanceof EngineError) return new Abort(ENGINE_ABORT[err.code], `${what}: ${err.message}`);
+  return new Abort('engine_error', `${what}: ${messageOf(err)}`);
 }
 
 /**
@@ -146,7 +161,9 @@ export function pauseFor(err: unknown): string | null {
   if (err.code === 'network' || err.code === 'timeout') return NOTICE.offline;
   if (err.code === 'auth_unavailable') return err.message;
   if (err.status === 401) return NOTICE.signIn;
-  if (err.status >= 500) return NOTICE.offline;
+  // Throttled, or an answer the panel couldn't read (a proxy's page): the backend's words say which.
+  if (err.status === 429 || err.code === 'bad_response') return `${err.message} Retrying.`;
+  if (err.status >= 500) return `${err.message}${err.requestId ? ` (reference ${err.requestId})` : ''} Retrying.`;
   return null;
 }
 
@@ -214,6 +231,19 @@ export async function runSession(run: SessionRun, deps: SessionDeps): Promise<Se
       status();
     }
   };
+  /** A notice that no longer holds: Archetype answers again, a save went through. */
+  const clearNotice = (text: string | null) => {
+    const i = text === null ? -1 : notices.indexOf(text);
+    if (i >= 0) {
+      notices.splice(i, 1);
+      status();
+    }
+  };
+  const checkCancel = () => {
+    if (deps.signal?.aborted) throw new Cancel();
+  };
+  /** Set while a save fails: what the designer is told about it. */
+  let saveNotice: string | null = null;
   const setPhase = (next: SessionPhase) => {
     phase = next;
     status();
@@ -223,6 +253,7 @@ export async function runSession(run: SessionRun, deps: SessionDeps): Promise<Se
   async function wait(ms: number): Promise<number> {
     const before = deps.now();
     await deps.sleep(ms);
+    checkCancel();
     const took = deps.now() - before;
     if (took - ms > LATE_TIMER_MS && !lateNoticed) {
       lateNoticed = true;
@@ -235,15 +266,23 @@ export async function runSession(run: SessionRun, deps: SessionDeps): Promise<Se
   async function call<T>(work: () => Promise<T>): Promise<T> {
     let delay = RETRY_FIRST_MS;
     const before = phase;
+    let shown: string | null = null;
     for (;;) {
+      checkCancel();
       try {
         const result = await work();
+        clearNotice(shown);
         if (phase === 'paused') setPhase(before);
         return result;
       } catch (err) {
+        checkCancel();
         const why = pauseFor(err);
         if (!why) throw err;
-        notice(why);
+        if (why !== shown) {
+          clearNotice(shown);
+          shown = why;
+          notice(why);
+        }
         if (phase !== 'paused') setPhase('paused');
         await wait(delay);
         delay = Math.min(delay * 2, RETRY_MAX_MS);
@@ -251,29 +290,50 @@ export async function runSession(run: SessionRun, deps: SessionDeps): Promise<Se
     }
   }
 
+  /**
+   * One render, retried once (spec, Error handling); the second failure
+   * aborts with both reasons. The bridge's 30 s timeout counts from the
+   * request, so it includes the time the render waits on the main thread
+   * behind other sessions' renders.
+   */
   async function render(): Promise<TraceRenderReply> {
+    let first: unknown;
     try {
       return await bridge.call('trace-render', { doc, state });
-    } catch {
-      // One retry (spec, Error handling): the second failure aborts with its reason.
-      try {
-        return await bridge.call('trace-render', { doc, state });
-      } catch (second) {
-        throw new Abort('render_failed', second instanceof Error ? second.message : String(second));
-      }
+    } catch (err) {
+      // A bridge the closing panel shut: no retry.
+      checkCancel();
+      first = err;
+    }
+    try {
+      return await bridge.call('trace-render', { doc, state });
+    } catch (second) {
+      const [a, b] = [messageOf(first), messageOf(second)];
+      throw new Abort('render_failed', a === b ? b : `${b} (the first try: ${a})`);
     }
   }
 
+  /** Saves where the run is, retried once; a save that fails says why, until one goes through. */
   async function save(session: SavedSession | null): Promise<void> {
     const payload = { studyId: run.studyId, runId: run.runId, session };
-    try {
-      await bridge.call('trace-save', payload);
-    } catch {
+    let failure: unknown;
+    for (let attempt = 0; attempt < 2; attempt++) {
       try {
         await bridge.call('trace-save', payload);
-      } catch {
-        notice(NOTICE.notSaved);
+        clearNotice(saveNotice);
+        saveNotice = null;
+        return;
+      } catch (err) {
+        // The panel is closing: the run resumes from the save before this one.
+        if (deps.signal?.aborted) return;
+        failure = err;
       }
+    }
+    const text = `${NOTICE.notSaved} ${messageOf(failure)}`;
+    if (text !== saveNotice) {
+      clearNotice(saveNotice);
+      saveNotice = text;
+      notice(text);
     }
   }
 
@@ -329,9 +389,19 @@ export async function runSession(run: SessionRun, deps: SessionDeps): Promise<Se
     for (const id of frames ?? []) if (!loopFrames.includes(id)) loopFrames.push(id);
   }
 
+  /**
+   * A turn the backend already holds, read instead of posted. Its decision
+   * names elements of the screen as it was then: once the file changed,
+   * those ids may name other layers, so it can't be replayed.
+   */
+  function held(): Promise<TurnView> {
+    if (fileChanged) throw new Abort('file_changed', `The backend holds turn ${turn}, decided on the file before it changed, so the panel can't replay it.`);
+    return call(() => api.getTurn(run.runId, turn));
+  }
+
   /** Posts the turn, or for a turn the backend already holds, only reads it. */
   async function post(turnBody: TurnBody): Promise<TurnView> {
-    if (turn < backendHas) return call(() => api.getTurn(run.runId, turn));
+    if (turn < backendHas) return held();
     try {
       return await call(() => api.postTurn(run.runId, turnBody, { timeoutMs: deps.postTurnTimeoutMs ?? TURN_TIMEOUT_MS }));
     } catch (err) {
@@ -341,7 +411,7 @@ export async function runSession(run: SessionRun, deps: SessionDeps): Promise<Se
         // read the turns it holds, from this one on, instead of posting them.
         if (err.expected > turn) {
           backendHas = err.expected;
-          return call(() => api.getTurn(run.runId, turn));
+          return held();
         }
         throw new Abort('panel_state_lost', `The backend expects turn ${err.expected}, but this panel is on turn ${turn}.`);
       }
@@ -370,12 +440,14 @@ export async function runSession(run: SessionRun, deps: SessionDeps): Promise<Se
       if (err.code === 'run_ended') throw new Stop({ ended: null, stop: 'run_ended', message: err.message });
       if (err.code === 'run_not_found') throw new Stop({ ended: null, stop: 'run_not_found', message: err.message });
       if (err.code === 'turn_not_found') throw new Abort('panel_state_lost', err.message);
-      throw new Abort('engine_error', `The backend refused turn ${turn}: ${err.message}`);
+      // The backend refused the turn (a 400), or answered with a code the panel has no rule for: its words are the reason.
+      throw new Abort('engine_error', err.message);
     }
     throw err;
   }
 
   async function oneTurn(): Promise<void> {
+    checkCancel();
     setPhase('acting');
     let settled;
     try {
@@ -437,77 +509,110 @@ export async function runSession(run: SessionRun, deps: SessionDeps): Promise<Se
       target: targetOf(action, listed.elements),
       ...(applied.outcome === 'unsupported' ? { unsupported: unsupportedDetail(applied.effects) } : {}),
     };
-    await save({ owner: run.owner, runId: run.runId, turn, state, lastOutcome: last });
+    await save({ owner: run.owner, runId: run.runId, turn, state, lastOutcome: last, timerEffects: [...pendingEffects], loopFrames: [...loopFrames] });
     turn += 1;
     status();
   }
 
+  /**
+   * Aborts the run. The backend refuses an abort of a run that ended, is
+   * finalizing, or is another panel's: then the run's turn says how it
+   * ended, if it has one, and the session stops with that.
+   */
   async function abort(code: AbortCode, detail: string): Promise<SessionResult> {
     try {
       await call(() => api.abortRun(run.runId, { owner: run.owner, code, detail: cap(detail, 500) }));
+      return { runId: run.runId, ended: { status: 'aborted', reason: code }, stop: 'aborted', message: detail };
     } catch (err) {
-      // Ended meanwhile (the watchdog, another abort): the run is over either way.
       if (!(err instanceof ApiError && (err.code === 'run_ended' || err.code === 'not_owner'))) throw err;
+      const view = await call(() => api.getTurn(run.runId, turn)).catch((readErr: unknown) => {
+        // A turn the panel never posted (a render that failed first).
+        if (readErr instanceof ApiError && readErr.code === 'turn_not_found') return null;
+        throw readErr;
+      });
+      if (view && view.status !== 'thinking' && view.ended) {
+        return { runId: run.runId, ended: view.ended, stop: 'ended', message: view.status === 'failed' ? view.error.message : null };
+      }
+      return { runId: run.runId, ended: null, stop: err.code === 'not_owner' ? 'not_owner' : 'run_ended', message: err.message };
     }
-    return { runId: run.runId, ended: { status: 'aborted', reason: code }, stop: 'aborted', message: detail };
   }
 
-  const unwatch = deps.watchFile?.(() => {
+  /** Sets the first state: the saved one of a run this panel owns, or the start frame's. */
+  function begin() {
+    const resume = run.resume;
+    if (!resume) {
+      try {
+        state = start(doc, run.startFrameId);
+      } catch (err) {
+        throw engineAbort(err, 'Starting the prototype failed');
+      }
+      return;
+    }
+    state = resume.state;
+    pendingEffects = [...resume.timerEffects];
+    loopFrames = [...resume.loopFrames];
+    const missing = [state.frameId, ...state.overlays.map((o) => o.frameId)].filter((id) => !doc.frames.some((f) => f.id === id));
+    if (missing.length) throw new Abort('file_changed', `The frames this persona was on are gone from the file (${missing.join(', ')}).`);
+    // The backend refuses a turn after the first without `last`: this save can't go on.
+    if (resume.turn >= 1 && !resume.lastOutcome) throw new Abort('panel_state_lost', `The save of turn ${resume.turn} has no outcome for the next turn to report.`);
+    if (state.docHash !== doc.docHash) {
+      // The flow changed while the panel was closed: go on in it as it is now, and say so.
+      fileChanged = true;
+      notice(NOTICE.fileChanged);
+      state = { ...state, docHash: doc.docHash };
+    }
+  }
+
+  const cancelled = (): SessionResult => ({ runId: run.runId, ended: null, stop: 'cancelled', message: null });
+
+  /**
+   * How the session ends. A Stop is the backend's word; anything else is not
+   * the persona's doing and aborts the run: an Abort with its code, or the
+   * panel itself breaking (a bug) with engine_error, after which the error
+   * is thrown on, so it stays loud. An abort the backend refuses for good is
+   * thrown too, naming both.
+   */
+  async function end(err: unknown): Promise<SessionResult> {
+    if (err instanceof Cancel) return cancelled();
+    if (err instanceof Stop) {
+      ended = err.result.ended;
+      await save(null);
+      setPhase('ended');
+      return { runId: run.runId, ...err.result };
+    }
+    const failure = err instanceof Abort ? err : new Abort('engine_error', `The panel failed on turn ${turn}: ${messageOf(err)}`);
+    let result: SessionResult;
+    try {
+      result = await abort(failure.code, failure.message);
+    } catch (abortErr) {
+      if (abortErr instanceof Cancel) return cancelled();
+      await save(null);
+      setPhase('ended');
+      throw new Error(`${failure.message} Aborting run ${run.runId} failed too, so it stays open until Archetype's watchdog ends it: ${messageOf(abortErr)}`);
+    }
+    ended = result.ended;
+    await save(null);
+    setPhase('ended');
+    if (!(err instanceof Abort)) throw err;
+    return result;
+  }
+
+  const unwatch = deps.watchFile(() => {
     fileChanged = true;
     notice(NOTICE.fileChanged);
   });
   try {
-    if (run.resume) {
-      if (run.resume.owner !== run.owner || run.resume.runId !== run.runId) {
-        throw new Error(`The saved session of ${run.resume.runId} belongs to another panel or run.`);
-      }
-      state = run.resume.state;
-      const missing = [state.frameId, ...state.overlays.map((o) => o.frameId)].filter((id) => !doc.frames.some((f) => f.id === id));
-      if (missing.length) {
-        const result = await abort('file_changed', `The frames this persona was on are gone from the file (${missing.join(', ')}).`);
-        await save(null);
-        return result;
-      }
-      if (state.docHash !== doc.docHash) {
-        // The flow changed while the panel was closed: go on in it as it is now, and say so.
-        fileChanged = true;
-        notice(NOTICE.fileChanged);
-        state = { ...state, docHash: doc.docHash };
-      }
-    } else {
-      try {
-        state = start(doc, run.startFrameId);
-      } catch (err) {
-        const failure = engineAbort(err, 'Starting the prototype failed');
-        const result = await abort(failure.code, failure.message);
-        ended = result.ended;
-        setPhase('ended');
-        return result;
-      }
+    if (run.resume && (run.resume.owner !== run.owner || run.resume.runId !== run.runId)) {
+      throw new Error(`The saved session of ${run.resume.runId} belongs to another panel or run.`);
     }
-    status();
-
-    for (;;) {
-      try {
-        await oneTurn();
-      } catch (err) {
-        if (err instanceof Stop) {
-          ended = err.result.ended;
-          await save(null);
-          setPhase('ended');
-          return { runId: run.runId, ...err.result };
-        }
-        if (err instanceof Abort) {
-          const result = await abort(err.code, err.message);
-          ended = result.ended;
-          await save(null);
-          setPhase('ended');
-          return result;
-        }
-        throw err;
-      }
+    try {
+      begin();
+      status();
+      for (;;) await oneTurn();
+    } catch (err) {
+      return await end(err);
     }
   } finally {
-    unwatch?.();
+    unwatch();
   }
 }

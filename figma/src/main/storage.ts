@@ -104,9 +104,43 @@ export async function saveDraft(api: PluginAPI, draft: Partial<Draft>): Promise<
   await api.clientStorage.setAsync(KEYS.draft(id), draft);
 }
 
+const isObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
+const isText = (v: unknown): v is string => typeof v === 'string';
+
+/** What is wrong with a trace state, or null: the fields rendering and resuming rely on. */
+export function traceStateProblem(state: unknown): string | null {
+  const ok =
+    isObject(state) && isText(state.frameId) && isText(state.docHash) && Array.isArray(state.overlays) &&
+    isObject(state.viewport) && Number.isFinite(state.viewport.width) && Number.isFinite(state.viewport.height);
+  return ok ? null : 'it needs frameId, docHash, overlays and viewport';
+}
+
+/** What is wrong with a saved session of `runId`, or null. */
+export function savedSessionProblem(session: unknown, runId: string): string | null {
+  if (!isObject(session)) return 'it is not an object';
+  if (!isText(session.owner) || !session.owner) return 'it has no owner';
+  if (session.runId !== runId) return `its runId is not the run it is saved under (${runId})`;
+  if (!Number.isInteger(session.turn) || (session.turn as number) < 0) return 'its turn is not a whole number from 0';
+  const state = traceStateProblem(session.state);
+  if (state) return `its state is not a trace state (${state})`;
+  if (session.lastOutcome !== null && !isObject(session.lastOutcome)) return 'its lastOutcome is not an object or null';
+  if (!Array.isArray(session.timerEffects) || !session.timerEffects.every((e) => isObject(e) && isText(e.type) && isText(e.detail))) {
+    return 'its timerEffects are not a list of {type, detail}';
+  }
+  if (!Array.isArray(session.loopFrames) || !session.loopFrames.every(isText)) return 'its loopFrames are not a list of frame ids';
+  return null;
+}
+
+/** A study's stored sessions. Stored data the plugin can't read is refused, never written over. */
 async function traceSessions(api: PluginAPI, key: string): Promise<Record<string, SavedSession>> {
-  const stored = await api.clientStorage.getAsync(key);
-  return stored && typeof stored === 'object' ? (stored as Record<string, SavedSession>) : {};
+  const stored: unknown = await api.clientStorage.getAsync(key);
+  if (stored === undefined) return {};
+  if (!isObject(stored)) throw new Error(`The trace sessions stored under ${key} are not an object, so the plugin leaves them as they are.`);
+  for (const [runId, session] of Object.entries(stored)) {
+    const problem = savedSessionProblem(session, runId);
+    if (problem) throw new Error(`The trace session of run ${runId} stored under ${key} can't be read: ${problem}.`);
+  }
+  return stored as Record<string, SavedSession>;
 }
 
 /**

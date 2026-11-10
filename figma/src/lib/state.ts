@@ -35,8 +35,8 @@ export interface ActiveStudy {
 /** What stands between the form and a launch (spec, Data flow 1). */
 export type LaunchGate =
   | { kind: 'checking' }
-  /** The file can't be edited, so nothing can be rendered. */
-  | { kind: 'blocked'; reason: string }
+  /** The file can't be edited, so nothing can be rendered. `detail` is what Figma said. */
+  | { kind: 'blocked'; reason: string; detail: string }
   /** Testing the flow would import these library components into the file: the designer confirms first. */
   | { kind: 'confirm-import'; components: string[] };
 

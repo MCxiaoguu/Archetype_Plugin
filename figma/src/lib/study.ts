@@ -1,18 +1,9 @@
 import { buildProtoUrl, checkShareLink, LINK_PROBLEM_TEXT } from './links';
 import { BLOCKER_TEXT, type Preflight } from './preflight';
+import type { RunSize, StudyForm } from './form';
 import type { DocSnapshot } from './types';
 
-export type RunSize = 'quick' | 'thorough';
-
-export interface StudyForm {
-  startId: string | null;
-  goalId: string | null;
-  goal: string;
-  who: string;
-  product: string;
-  link: string;
-  size: RunSize;
-}
+export type { RunSize, StudyForm } from './form';
 
 export const EMPTY_FORM: StudyForm = {
   startId: null,

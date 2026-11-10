@@ -32,7 +32,7 @@ function newOwner(): string {
 
 export interface EffectsDeps {
   /** The trace runner's line to the main thread; postMessage by default. */
-  bridge?: Pick<Bridge, 'call'>;
+  bridge?: Pick<Bridge, 'call'> & Partial<Pick<Bridge, 'close'>>;
 }
 
 /**
@@ -50,6 +50,8 @@ export function createEffects(store: Store, deps: EffectsDeps = {}) {
   /** Studies whose runner is going: one runner per study, through retries and sign ins. */
   const runners = new Set<string>();
   const fileWatchers = new Set<(frameIds: string[]) => void>();
+  /** Fires when the panel closes: every session stops where it is, to resume when it reopens. */
+  const closing = new AbortController();
 
   const api = () => {
     const s = store.get();
@@ -138,7 +140,7 @@ export function createEffects(store: Store, deps: EffectsDeps = {}) {
     try {
       const check = await bridge().call('trace-scratch-check', {});
       if (!check.ok) {
-        store.dispatch({ type: 'gate', gate: { kind: 'blocked', reason: check.reason } });
+        store.dispatch({ type: 'gate', gate: { kind: 'blocked', reason: check.reason, detail: check.detail } });
         return;
       }
       doc = await bridge().call('trace-read', { importLibraryVariants: importConfirmed });
@@ -256,6 +258,7 @@ export function createEffects(store: Store, deps: EffectsDeps = {}) {
             fileWatchers.add(onChange);
             return () => fileWatchers.delete(onChange);
           },
+          signal: closing.signal,
         },
       );
     })()
@@ -343,6 +346,17 @@ export function createEffects(store: Store, deps: EffectsDeps = {}) {
     watch();
   }
 
+  /**
+   * The panel is closing. The sessions stop without aborting or forgetting
+   * their runs, before the bridge goes: a call it rejects then is the close,
+   * not a failed render.
+   */
+  function closePanel() {
+    watchGen++;
+    closing.abort();
+    traceBridge?.close?.();
+  }
+
   function newTest() {
     watchGen++;
     toMain({ type: 'forget-last' });
@@ -405,6 +419,7 @@ export function createEffects(store: Store, deps: EffectsDeps = {}) {
     launch: () => launch(),
     confirmImport,
     cancelImport,
+    closePanel,
     retry,
     openStudy,
     newTest,

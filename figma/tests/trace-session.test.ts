@@ -5,7 +5,8 @@ import { listElements } from '../src/lib/proto/elements';
 import { apply, start } from '../src/lib/proto/engine';
 import { EngineError, type EngineErrorCode } from '../src/lib/proto/errors';
 import type { ProtoDoc, TraceAction, TraceState } from '../src/lib/proto/model';
-import { NOTICE, runSession, type SessionRun, type SessionStatus } from '../src/ui/trace/session';
+import { NOTICE, runSession, type SessionResult, type SessionRun, type SessionStatus } from '../src/ui/trace/session';
+import { BridgeError } from '../src/ui/trace/bridge';
 import type { FakeNode } from './fake-figma';
 import { clock, click, DONE, farside, lastOf, mainThread, type Decision, type Fake } from './trace-fakes';
 
@@ -80,10 +81,16 @@ async function play(
     main?: Awaited<ReturnType<typeof mainThread>>;
     watchFile?: (onChange: (frameIds: string[]) => void) => () => void;
     postTurnTimeoutMs?: number;
+    /** Changes the fake backend after it is made, before the session starts. */
+    tweak?: (server: ReturnType<typeof backend>) => void;
+    signal?: AbortSignal;
+    /** The session is meant to throw: the error comes back with everything else. */
+    fails?: boolean;
   } = {},
 ) {
   const main = options.main ?? (await mainThread(options.edit));
   const server = backend(brain, options);
+  options.tweak?.(server);
   const time = clock(options.late);
   const statuses: SessionStatus[] = [];
   const run: SessionRun = {
@@ -96,16 +103,25 @@ async function play(
     resume: null,
     ...options.run?.(main.doc),
   };
-  const result = await runSession(run, {
-    bridge: main.bridge,
-    api: server.api,
-    now: time.now,
-    sleep: time.sleep,
-    onStatus: (s) => statuses.push(s),
-    watchFile: options.watchFile,
-    postTurnTimeoutMs: options.postTurnTimeoutMs,
-  });
-  return { result, statuses, ...server, ...main, time };
+  let result: SessionResult | null = null;
+  let error: unknown = null;
+  try {
+    result = await runSession(run, {
+      bridge: main.bridge,
+      api: server.api,
+      now: time.now,
+      sleep: time.sleep,
+      onStatus: (s) => statuses.push(s),
+      watchFile: options.watchFile ?? (() => () => {}),
+      postTurnTimeoutMs: options.postTurnTimeoutMs,
+      signal: options.signal,
+    });
+  } catch (err) {
+    if (!options.fails) throw err;
+    error = err;
+  }
+  if (options.fails && !error) throw new Error('The session was meant to throw');
+  return { result: result as SessionResult, error, statuses, ...server, ...main, time };
 }
 
 // --- The loop -------------------------------------------------------------------
@@ -258,6 +274,8 @@ describe('resuming a run this panel owns', () => {
       turn: 4,
       state: { ...start(main.doc, '2:10'), ...change },
       lastOutcome: { action: { type: 'click', element: 'e1' }, outcome: 'nothing_happened', target: 'Back (e1)' },
+      timerEffects: [],
+      loopFrames: [],
     };
   }
 
@@ -280,11 +298,34 @@ describe('resuming a run this panel owns', () => {
   it('aborts with file_changed when the frame it was on is gone', async () => {
     const main = await mainThread();
     const resume = await saved(main, { frameId: '9:99' });
-    const { result, aborted, posted, saves } = await play(() => DONE, { main, run: () => ({ resume }) });
+    const { result, aborted, posted, saves, statuses } = await play(() => DONE, { main, run: () => ({ resume }) });
     expect(aborted).toEqual([{ owner: 'p_7f3a', code: 'file_changed', detail: expect.stringContaining('9:99') }]);
     expect(result).toMatchObject({ stop: 'aborted', ended: { status: 'aborted', reason: 'file_changed' } });
     expect(posted).toEqual([]);
     expect(saves).toEqual([null]);
+    expect(lastOf(statuses)).toMatchObject({ phase: 'ended', ended: { status: 'aborted', reason: 'file_changed' } });
+  });
+
+  it('aborts with panel_state_lost when a saved turn has no outcome to report', async () => {
+    const main = await mainThread();
+    const resume = { ...(await saved(main)), lastOutcome: null };
+    const { aborted, posted, result, statuses } = await play(() => DONE, { main, run: () => ({ resume }) });
+    expect(aborted).toEqual([{ owner: 'p_7f3a', code: 'panel_state_lost', detail: expect.stringContaining('turn 4') }]);
+    expect(posted).toEqual([]);
+    expect(result).toMatchObject({ stop: 'aborted', ended: { reason: 'panel_state_lost' } });
+    expect(lastOf(statuses).phase).toBe('ended');
+  });
+
+  it('keeps what a wait fired for the next turn through a resume', async () => {
+    const waitLink = (fake: Fake) => {
+      (fake.nodes.get('1:2') as FakeNode).reactions = [{ trigger: { type: 'AFTER_TIMEOUT', timeout: 5 }, actions: [{ type: 'URL', url: 'https://help.example.com/late' }] }];
+    };
+    const wait = (b: TurnBody): Decision => (b.turn === 1 ? { action: { type: 'wait', seconds: 6 } } : DONE);
+    const whole = await play(wait, { edit: waitLink });
+    const afterWait = whole.saves[0] as SavedSession;
+    expect(afterWait).toMatchObject({ turn: 1, timerEffects: [{ type: 'left_prototype', detail: 'https://help.example.com/late' }], loopFrames: [] });
+    const reopened = await play(wait, { main: await mainThread(waitLink), run: () => ({ resume: afterWait }) });
+    expect(reopened.posted[0]!.last).toEqual(whole.posted[1]!.last);
   });
 });
 
@@ -344,16 +385,23 @@ describe('when things go wrong', () => {
     }
   });
 
-  it('catches up with turns the backend already holds after turn_out_of_order', async () => {
-    // The panel reopened on turn 1's save, but turn 2 is decided and turn 3 posted.
+  /** The panel reopened on turn 1's save, but turn 2 is decided and turn 3 posted. */
+  async function heldTurns(change: Partial<TraceState> = {}) {
     const main = await mainThread();
     const dash = start(main.doc, '1:2');
     const shown = await main.bridge.call('trace-render', { doc: main.doc, state: dash });
     const listed = listElements(shown.layers, dash);
     const billing = listed.elements.find((e) => e.label === 'Billing')!;
     const after1 = apply(main.doc, dash, { type: 'click', element: billing.id }, shown.layers, listed.targets).state;
-    const resume: SavedSession = { owner: 'p_7f3a', runId: 'r1', turn: 1, state: after1, lastOutcome: { action: { type: 'click', element: billing.id }, outcome: 'navigated', target: `Billing (${billing.id})` } };
-
+    const resume: SavedSession = {
+      owner: 'p_7f3a',
+      runId: 'r1',
+      turn: 1,
+      state: { ...after1, ...change },
+      lastOutcome: { action: { type: 'click', element: billing.id }, outcome: 'navigated', target: `Billing (${billing.id})` },
+      timerEffects: [],
+      loopFrames: [],
+    };
     const server = backend((b) => (b.turn === 3 ? DONE : { action: null }));
     server.decisions.set(2, { action: { type: 'click', element: 'e2' } }); // "Connect a bank", decided before the panel closed
     server.api.postTurn.mockImplementationOnce(async () => {
@@ -362,13 +410,26 @@ describe('when things go wrong', () => {
     const time = clock();
     const result = await runSession(
       { runId: 'r1', studyId: 's1', owner: 'p_7f3a', doc: main.doc, shareKey: null, startFrameId: '1:2', resume },
-      { bridge: main.bridge, api: server.api, now: time.now, sleep: time.sleep, onStatus: () => {} },
+      { bridge: main.bridge, api: server.api, now: time.now, sleep: time.sleep, onStatus: () => {}, watchFile: () => () => {} },
     );
+    return { result, server };
+  }
+
+  it('catches up with turns the backend already holds after turn_out_of_order', async () => {
+    const { result, server } = await heldTurns();
     expect(result.stop).toBe('ended');
     // Turn 2 was read, not posted again; turn 3 was posted on the screen turn 2's action led to.
     expect(server.api.getTurn.mock.calls.map((c) => c[1])).toEqual([2, 3]);
     expect(server.posted.map((b) => [b.turn, b.screen.title, b.last?.target])).toEqual([[3, 'Connect bank', 'Connect a bank (e2)']]);
     expect(server.aborted).toEqual([]);
+  });
+
+  it('aborts with file_changed rather than replay the turns the backend holds on a file that changed', async () => {
+    // The held decision names an element of the screen as it was: a changed file may list another layer under that id.
+    const { result, server } = await heldTurns({ docHash: 'before the edit' });
+    expect(server.aborted).toEqual([{ owner: 'p_7f3a', code: 'file_changed', detail: expect.stringContaining('turn 2') }]);
+    expect(server.api.getTurn).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ stop: 'aborted', ended: { reason: 'file_changed' } });
   });
 
   it('aborts with panel_state_lost when the backend expects a turn this panel already passed', async () => {
@@ -387,15 +448,128 @@ describe('when things go wrong', () => {
     // as thinking: 180 s of that would be turn_timeout), then the polls going on.
     expect(time.waits).toEqual([1000, 2000, 4000, 8000, 16000, 30000, 30000, 30000, 30000, 30000, 30000, 1500, 2250, 3000]);
     expect(statuses.some((s) => s.phase === 'paused')).toBe(true);
-    const notices = lastOf(statuses).notices ?? [];
-    expect(notices).toContain(NOTICE.offline);
-    expect(notices).toContain(auth.message);
+    const seen = statuses.flatMap((s) => s.notices);
+    expect(seen).toContain(NOTICE.offline);
+    expect(seen).toContain(auth.message);
+    // Once Archetype answers again, the panel stops saying it lost touch.
+    expect(lastOf(statuses).notices).toEqual([]);
   });
 
   it('pauses on a signed out panel and goes on once signed in again', async () => {
     const { result, statuses } = await play(() => DONE, { postErrors: [new ApiError(401, 'signed_out', 'Sign in to Archetype first.')] });
     expect(result.stop).toBe('ended');
-    expect(lastOf(statuses).notices).toContain(NOTICE.signIn);
+    expect(statuses.some((s) => s.phase === 'paused' && s.notices.includes(NOTICE.signIn))).toBe(true);
+    expect(lastOf(statuses).notices).toEqual([]);
+  });
+
+  it('pauses on a busy backend, an answer it cannot read and a server error, saying why, until it answers', async () => {
+    const busy = new ApiError(429, 'rate_limited', 'Too many requests. Slow down.');
+    const unreadable = new ApiError(200, 'bad_response', 'Archetype at http://backend.test sent an answer the panel could not read (HTTP 200).');
+    const broken = new ApiError(502, 'http_502', 'Archetype had a problem.', { requestId: 'req-9' });
+    const { result, aborted, statuses } = await play(() => DONE, { getErrors: [busy, unreadable, broken] });
+    expect(result.stop).toBe('ended');
+    expect(aborted).toEqual([]);
+    const seen = statuses.flatMap((s) => s.notices);
+    expect(seen.some((n) => n.includes('Too many requests. Slow down.'))).toBe(true);
+    expect(seen.some((n) => n.includes('could not read (HTTP 200)'))).toBe(true);
+    expect(seen.some((n) => n.includes('Archetype had a problem.') && n.includes('req-9'))).toBe(true);
+    expect(lastOf(statuses).notices).toEqual([]);
+  });
+
+  it("aborts with the backend's own words when it refuses a turn, and stops when the run is gone", async () => {
+    const refused = await play(() => DONE, { postErrors: [new ApiError(400, 'invalid_turn', 'last is required after turn 1.')] });
+    expect(refused.aborted).toEqual([{ owner: 'p_7f3a', code: 'engine_error', detail: 'last is required after turn 1.' }]);
+    const gone = await play(() => DONE, { postErrors: [new ApiError(404, 'run_not_found', 'No run r1 for this user.')] });
+    expect(gone.result).toEqual({ runId: 'r1', ended: null, stop: 'run_not_found', message: 'No run r1 for this user.' });
+    expect(gone.aborted).toEqual([]);
+  });
+
+  it("does not report an abort the backend refused, and stops as the run's turn says", async () => {
+    // The decider died after it marked the run finalizing; the panel's 180 s then ran out.
+    const refused = new ApiError(409, 'run_ended', 'run r1 is finalizing, so it can no longer be aborted.');
+    const finalizing = await play(() => DONE, {
+      thinking: Infinity,
+      tweak: (server) => {
+        server.api.abortRun.mockImplementationOnce(async () => {
+          server.api.getTurn.mockImplementation(async (_runId: string, n: number) => ({ turn: n, status: 'ready', action: { type: 'done', claim: 'My bank is connected.' }, state: STATE, ended: { status: 'finalizing', reason: 'done' } }));
+          throw refused;
+        });
+      },
+    });
+    expect(finalizing.result).toEqual({ runId: 'r1', ended: { status: 'finalizing', reason: 'done' }, stop: 'ended', message: null });
+    expect(finalizing.aborted).toEqual([]);
+    expect(lastOf(finalizing.statuses)).toMatchObject({ phase: 'ended', ended: { status: 'finalizing', reason: 'done' } });
+
+    const theirs = new ApiError(409, 'not_owner', 'run r1 belongs to another panel.');
+    const other = await play(() => DONE, { thinking: Infinity, aborts: [theirs] });
+    expect(other.result).toEqual({ runId: 'r1', ended: null, stop: 'not_owner', message: 'run r1 belongs to another panel.' });
+    expect(other.saves).toEqual([null]);
+  });
+
+  it('aborts the run with engine_error when the panel itself breaks, and still fails loudly', async () => {
+    const broken = new TypeError("Cannot read properties of null (reading 'turn')");
+    const { error, aborted, saves, statuses } = await play(() => DONE, { postErrors: [broken], fails: true });
+    expect(error).toBe(broken);
+    expect(aborted).toEqual([{ owner: 'p_7f3a', code: 'engine_error', detail: expect.stringContaining("Cannot read properties of null (reading 'turn')") }]);
+    expect(saves).toEqual([null]);
+    expect(lastOf(statuses)).toMatchObject({ phase: 'ended', ended: { status: 'aborted', reason: 'engine_error' } });
+  });
+
+  it('fails loudly, naming both reasons, when the backend refuses the abort for good', async () => {
+    const main = await mainThread();
+    main.renders.failures = 2;
+    const gone = new ApiError(404, 'run_not_found', 'No run r1 for this user.');
+    const { error, saves, statuses } = await play(() => DONE, { main, aborts: [gone], fails: true });
+    expect((error as Error).message).toContain('The export of the screen came back empty');
+    expect((error as Error).message).toContain('No run r1 for this user.');
+    expect(saves).toEqual([null]);
+    expect(lastOf(statuses).phase).toBe('ended');
+  });
+
+  it('keeps both reasons when a render fails twice for different ones', async () => {
+    const main = await mainThread();
+    main.renders.errors = ['The export timed out', "The frame 2:20 isn't in the file any more"];
+    const { aborted } = await play(() => DONE, { main });
+    expect(aborted).toEqual([{ owner: 'p_7f3a', code: 'render_failed', detail: "The frame 2:20 isn't in the file any more (the first try: The export timed out)" }]);
+  });
+
+  it('says why progress could not be saved, and stops saying so once a save works', async () => {
+    const main = await mainThread();
+    main.saveErrors.push('Storage is full', 'Storage is full');
+    const { statuses, result } = await play((b) => (b.turn < 3 ? { action: click(b, b.turn === 1 ? 'Billing' : 'Connect a bank') } : DONE), { main });
+    expect(result.stop).toBe('ended');
+    expect(statuses.some((s) => s.notices.includes(`${NOTICE.notSaved} Storage is full`))).toBe(true);
+    expect(lastOf(statuses).notices.filter((n) => n.startsWith(NOTICE.notSaved))).toEqual([]);
+  });
+
+  it('stops for the panel closing without aborting the run or forgetting where it was', async () => {
+    const closing = new AbortController();
+    const brain = (b: TurnBody): Decision => {
+      if (b.turn === 2) closing.abort();
+      return b.turn === 1 ? { action: click(b, 'Billing') } : DONE;
+    };
+    const { result, aborted, saves } = await play(brain, { signal: closing.signal });
+    expect(result).toEqual({ runId: 'r1', ended: null, stop: 'cancelled', message: null });
+    expect(aborted).toEqual([]);
+    expect(saves.map((s) => s?.turn)).toEqual([1]);
+  });
+
+  it('takes a bridge closed after the panel closed for the close, not a failed render', async () => {
+    const closing = new AbortController();
+    const main = await mainThread();
+    const call = main.bridge.call;
+    let renders = 0;
+    main.bridge.call = (async (type: string, payload: never, options?: { timeoutMs?: number }) => {
+      if (type === 'trace-render' && ++renders === 2) closing.abort();
+      if (closing.signal.aborted) throw new BridgeError(type as 'trace-render', 'The trace bridge is closed.');
+      return call(type as never, payload, options);
+    }) as typeof call;
+    const { result, aborted, saves } = await play((b) => (b.turn === 1 ? { action: click(b, 'Billing') } : DONE), { main, signal: closing.signal });
+    expect(result.stop).toBe('cancelled');
+    expect(aborted).toEqual([]);
+    expect(saves.map((s) => s?.turn)).toEqual([1]);
+    // Not retried: the bridge is shut for good.
+    expect(renders).toBe(2);
   });
 
   it('aborts with brain_invalid_action when the decision names an element that is not on the screen', async () => {

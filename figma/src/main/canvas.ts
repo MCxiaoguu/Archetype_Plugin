@@ -1,5 +1,5 @@
 import { PIN_PREFIX } from '../lib/messages';
-import type { Pin } from '../lib/report';
+import type { Pin } from '../lib/types';
 import { pageOf, topLevelFrames } from './document';
 
 type Annotated = SceneNode & { annotations: ReadonlyArray<Annotation> };

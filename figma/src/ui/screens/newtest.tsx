@@ -292,7 +292,9 @@ export function NewTest({ state, store, fx }: { state: AppState; store: Store; f
       </div>
       {state.gate?.kind === 'blocked' && (
         <div class="gate">
-          <Banner kind="error">{state.gate.reason}</Banner>
+          <Banner kind="error">
+            {state.gate.reason}. <span class="muted">Figma said: {state.gate.detail}</span>
+          </Banner>
         </div>
       )}
       {state.gate?.kind === 'confirm-import' && (
