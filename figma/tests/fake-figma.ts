@@ -239,6 +239,8 @@ export class FakeNode {
 
   remove(): void {
     this.w.log?.push(`remove ${this.id}`);
+    // Figma refuses to remove a node that is gone already.
+    if (this.removed) throw new Error(`The node ${this.id} does not exist`);
     this.w.changed?.('DELETE', this);
     if (this.parent) this.parent.kids = this.parent.kids.filter((k) => k !== this);
     this.parent = null;

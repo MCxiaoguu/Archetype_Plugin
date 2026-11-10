@@ -6,7 +6,7 @@ import type { MainToUi, SavedSession, TraceRequestMessage, UiToMain } from '../s
 import { start } from '../src/lib/proto/engine';
 import type { ProtoDoc } from '../src/lib/proto/model';
 import type { RunnerStatus } from '../src/lib/runs';
-import { isScratch, SCRATCH_KEY, SCRATCH_VALUE } from '../src/main/scratch';
+import { heldContainers, isScratch, SCRATCH_KEY, SCRATCH_VALUE } from '../src/main/scratch';
 import { createTraceMain } from '../src/main/trace';
 import { createBridge, panelTransport } from '../src/ui/trace/bridge';
 import { runStudy, WAVE_RETRY_MS, type RunnerResult } from '../src/ui/trace/runner';
@@ -41,16 +41,26 @@ const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 1));
 function openPlugin(fake: Fake) {
   const listeners = new Set<(msg: MainToUi) => void>();
   const posted: MainToUi[] = [];
+  /** The type of every request the panel sent, in order. */
+  const sent: string[] = [];
   const failures: unknown[] = [];
+  /** The requests the main thread is answering, also after the plugin closed: the fake can't stop them as Figma does. */
+  const answering = new Set<Promise<void>>();
   let open = true;
   /** trace-save requests held back, to reach the main thread together. */
   let held: { count: number; which: (msg: TraceRequestMessage) => boolean; saves: TraceRequestMessage[] } | null = null;
   /** When set, the other trace-saves reach the main thread one at a time, each after the one before was answered. */
   let serial: Promise<void> | null = null;
+  const answer = (msg: TraceRequestMessage): Promise<void> => {
+    // handle answers every request itself; a throw means a request it could not answer at all.
+    const work = main.handle(msg).catch((err: unknown) => void failures.push(err));
+    answering.add(work);
+    void work.then(() => answering.delete(work));
+    return work;
+  };
   const deliver = (msgs: TraceRequestMessage[]) =>
     setTimeout(() => {
-      // handle answers every request itself; a throw means a request it could not answer at all.
-      if (open) for (const msg of msgs) main.handle(msg).catch((err: unknown) => failures.push(err));
+      if (open) for (const msg of msgs) void answer(msg);
     }, 0);
   const main = createTraceMain(fake.api, (msg) => {
     posted.push(msg);
@@ -61,6 +71,7 @@ function openPlugin(fake: Fake) {
   });
   const toMain = (msg: UiToMain) => {
     const copy = structuredClone(msg) as TraceRequestMessage;
+    sent.push(copy.type);
     if (held && copy.type === 'trace-save' && held.which(copy)) {
       held.saves.push(copy);
       if (held.saves.length < held.count) return;
@@ -70,7 +81,7 @@ function openPlugin(fake: Fake) {
       return;
     }
     if (serial && copy.type === 'trace-save') {
-      serial = serial.then(() => (open ? main.handle(copy) : undefined)).catch((err: unknown) => void failures.push(err));
+      serial = serial.then(() => (open ? answer(copy) : undefined));
       return;
     }
     deliver([copy]);
@@ -90,9 +101,14 @@ function openPlugin(fake: Fake) {
     main,
     bridge,
     posted,
+    sent,
     failures,
     watchFile,
     signal: closing.signal,
+    /** Resolves once the main thread answered every request it took, the ones under way when the plugin closed too. */
+    async settled() {
+      while (answering.size) await Promise.all([...answering]);
+    },
     /** Holds the next `count` trace-saves (of those `which` picks) until all of them are sent, then delivers them in one task. */
     holdSaves(count: number, which: (msg: TraceRequestMessage) => boolean = () => true) {
       held = { count, which, saves: [] };
@@ -101,10 +117,17 @@ function openPlugin(fake: Fake) {
     serialSaves() {
       serial = Promise.resolve();
     },
-    /** The plugin closes: the sessions are told, then the panel's bridge and the main thread stop together. */
+    /**
+     * The plugin closes, as Figma closes it: the panel fires its signal and
+     * shuts the bridge (effects.closePanel), then the main thread's close
+     * handler removes what renders hold (figma.on('close') in code.ts), and
+     * nothing more reaches either side.
+     */
     close() {
+      if (!open) return;
       closing.abort();
       bridge.close();
+      main.removeLeftovers();
       open = false;
     },
   };
@@ -429,6 +452,44 @@ const closeWhen = (plugin: Plugin, when: () => boolean) => async () => {
   await tick();
 };
 
+describe('closing the plugin mid-render', () => {
+  it('stops the session without a retry or an abort, and the close handler removes the container the render held', async () => {
+    mock.trace.addStudy({ studyId: 'study-close-render', waves: [[{ runId: 'run-close-render', script: GOLDEN }]] });
+    const fake = fakeFile();
+    const plugin = openPlugin(fake);
+    const doc = await plugin.bridge.call('trace-read', { importLibraryVariants: true });
+    const before = snapshot(fake);
+    await claim('run-close-render');
+    // The designer closes the plugin while turn 1's screen is being exported.
+    let held: FrameNode[] = [];
+    let goneAtClose = false;
+    fake.world.exportFails = () => {
+      held = [...heldContainers()];
+      plugin.close();
+      goneAtClose = held.every((n) => n.removed);
+      return null;
+    };
+    const result = await persona(plugin, doc, 'run-close-render');
+
+    expect(result).toEqual({ runId: 'run-close-render', ended: null, stop: 'cancelled', message: null });
+    // The close handler removed the container the render was drawing in, there and then.
+    expect(held).toHaveLength(1);
+    expect(goneAtClose).toBe(true);
+    expect(plugin.sent.filter((type) => type === 'trace-render')).toHaveLength(1);
+    expect(postsOf('run-close-render')).toEqual([]);
+    expect(refusalsOf('run-close-render')).toEqual([]);
+    expect(mock.trace.runs.get('run-close-render')).toMatchObject({ status: 'running', abortReason: null });
+    // The render the close interrupted ends on the fake (Figma's would stop): nothing it held or made stays.
+    await plugin.settled();
+    await tick();
+    expect(heldContainers().size).toBe(0);
+    expect(fake.world.log?.filter((line) => line === `remove ${held[0]?.id}`)).toHaveLength(1);
+    expect(scratchOn(fake)).toEqual([]);
+    expect(snapshot(fake)).toEqual(before);
+    expect(plugin.failures).toEqual([]);
+  }, 30_000);
+});
+
 describe('a wave whose sessions save at once', () => {
   // Review C1: trace-save reads, changes and writes one key per study, so two
   // saves reaching the main thread together must not keep only one session.
@@ -445,7 +506,8 @@ describe('a wave whose sessions save at once', () => {
     for (const runId of ['run-a', 'run-b']) await claim(runId);
     // Both personas' turn 1 saves reach the main thread in one task.
     first.holdSaves(2);
-    const closing = (runId: string) => closeWhen(first, () => !!mock.trace.runs.get(runId)?.turns.has(2));
+    // The plugin closes once both are thinking about turn 2, so no render is under way.
+    const closing = (runId: string) => closeWhen(first, () => ['run-a', 'run-b'].every((id) => mock.trace.runs.get(id)?.turns.has(2)));
     const started = ['run-a', 'run-b'].map((runId) =>
       runSession(
         { runId, studyId: 'study-together', owner: OWNER, doc, shareKey: null, startFrameId: '1:2', resume: null },
