@@ -452,4 +452,10 @@ button.fm-persona { cursor: pointer; }
 button.fm-persona:hover { background: var(--bg-hover); }
 .fm-persona.following { border-color: var(--accent); color: var(--accent-text); }
 .fm-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.fm-editor { display: flex; flex-direction: column; gap: 10px; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius); }
+.fm-edit-frame { font-weight: 600; }
+.fm-edit-list { display: flex; flex-direction: column; gap: 4px; margin-top: 4px; }
+.fm-edit-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.fm-edit-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fm-edit-row select { flex: none; max-width: 55%; font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: 4px; padding: 2px 4px; }
 

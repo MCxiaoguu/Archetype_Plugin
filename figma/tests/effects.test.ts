@@ -352,6 +352,41 @@ describe('panel effects', () => {
     expect(calls.filter((c) => c === 'POST /api/plugin/runs/r1/claim')).toHaveLength(1);
   });
 
+  it("edits a reading on the version the card shows, and loads the map again when it moved meanwhile", async () => {
+    const reading = (id: string, kind: string, to: string | null) => ({ id, shareKey: `L:2:20:${id}`, nodes: ['2:20'], layerKeys: ['2:27'], label: 'Use routing number instead', role: 'text', kind, to, by: 'model', reason: 'r' });
+    const mapOf = (version: number, kind: string, to: string | null) => ({ studyId: 's13', version, baseVersion: version - 1 || null, inputHash: 'h', docHash: 'd', nodes: [], edges: [], readings: [reading('r4', kind, to)], dropped: [], completedAt: 'c', model: null, buildId: null });
+    const patches: unknown[] = [];
+    let current = 2;
+    installFetch((method, path, body) => {
+      if (path === '/api/studies/s13/flow-map/readings/r4' && method === 'PATCH') {
+        patches.push(body);
+        const b = body as { baseVersion: number; kind: string; to?: string };
+        if (b.baseVersion !== current) return [409, { error: 'flow_map_changed', message: `baseVersion ${b.baseVersion} is not current (${current}).` }];
+        current += 1;
+        return [200, { map: mapOf(current, b.kind, b.to ?? null) }];
+      }
+      if (path === '/api/studies/s13/flow-map/readings/r9') return [404, { error: 'reading_not_found', message: 'Flow map version 3 has no reading r9.' }];
+      if (path === '/api/studies/s13/flow-map') return [200, { map: mapOf(current, 'gap', null) }];
+      return [404, { error: 'x', message: path }];
+    }, { maps: false });
+    const { store, fx } = initStore('tok', undefined, { studies: [traceStudy('s13', 'complete')], lastStudyId: 's13' });
+    store.dispatch({ type: 'flow-map', studyId: 's13', map: mapOf(2, 'gap', null) as never });
+
+    await fx.editReading('r4', 'edge', '2:30');
+    expect(patches).toEqual([{ baseVersion: 2, kind: 'edge', to: '2:30' }]);
+    expect(store.get().study?.flow.map).toMatchObject({ version: 3, readings: [{ id: 'r4', kind: 'edge', to: '2:30' }] });
+
+    // Another edit came first: the panel loads the map it made, and says so.
+    current = 4;
+    await fx.editReading('r4', 'control', null);
+    expect(patches[1]).toEqual({ baseVersion: 3, kind: 'control' });
+    expect(store.get().study?.flow.map?.version).toBe(4);
+    expect(store.get().notice?.text).toMatch(/changed meanwhile \(now version 4\).*Set the reading on it again/);
+
+    await fx.editReading('r9', 'gap', null);
+    expect(store.get().study?.flow.error).toBe('The reading was not saved: Flow map version 3 has no reading r9.');
+  });
+
   it('follows a persona on the canvas, once per node it reaches, until the designer stops', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const main = await mainThread();

@@ -1447,5 +1447,56 @@ describe('the flow map of the fake Farside page', () => {
     expect(mock.trace.runs.get('run-map-resume')).toMatchObject({ status: 'completed', flowMapVersion: 1 });
     expect(refusalsOf('run-map-resume')).toEqual([]);
   }, 30_000);
+
+  it("plays the designer's edit in the runs claimed after it, while the run under way keeps its version", async () => {
+    const ROUTING: ScriptStep[] = [
+      { expect: 'Dashboard', click: 'Billing' },
+      { expect: 'Billing settings', click: 'Connect a bank' },
+      { expect: 'Connect bank', click: 'Use routing number instead' },
+    ];
+    mock.trace.addStudy({
+      studyId: 'study-map-edit',
+      waves: [
+        // Its debrief holds the wave open until the designer's edit is in.
+        [{ runId: 'run-edit-1', script: [...ROUTING, { expect: 'Connect bank', give_up: 'No page for routing numbers.', debrief: 'edited' }] }],
+        [{ runId: 'run-edit-2', script: [...ROUTING, { expect: 'Verify phone', done: 'The routing number took me on.' }] }],
+      ],
+      flowMap: { read: FARSIDE },
+    });
+    const fake = fakeFile();
+    const plugin = openPlugin(fake);
+    const doc = await plugin.bridge.call('trace-read', { importLibraryVariants: true });
+    const clock = panelClock();
+    let edited = false;
+    // While wave 1 finishes, before wave 2 is claimed, the designer sets the routing link to open Verify phone.
+    const sleep = async (ms: number) => {
+      if (!edited && mock.trace.runs.get('run-edit-1')?.finalizing) {
+        edited = true;
+        const map = (await client.getFlowMap('study-map-edit')).map;
+        const routing = map.readings.find((r) => r.label === 'Use routing number instead');
+        if (!routing) throw new Error('The map has no reading of the routing link');
+        expect((await client.editReading('study-map-edit', routing.id, { baseVersion: map.version, kind: 'edge', to: '2:30' })).map).toMatchObject({
+          version: 2, baseVersion: 1, buildId: null, readings: expect.arrayContaining([expect.objectContaining({ id: routing.id, kind: 'edge', to: '2:30', by: 'designer', reason: 'Set by the designer.' })]),
+        });
+        mock.trace.release('run-edit-1', 'edited');
+      }
+      await clock.sleep(ms);
+    };
+    expect(await study(plugin, doc, 'study-map-edit', { sleep })).toMatchObject({ stop: 'done' });
+    expect(edited).toBe(true);
+    expect(mock.trace.runs.get('run-edit-1')).toMatchObject({ status: 'abandoned', flowMapVersion: 1 });
+    expect(mock.trace.runs.get('run-edit-2')).toMatchObject({ status: 'completed', flowMapVersion: 2 });
+    expect(bodiesOf('run-edit-2').pop()?.last).toMatchObject({ outcome: 'navigated', reading: expect.stringMatching(/^r\d+$/) });
+    expect(refusalsOf('run-edit-1', 'run-edit-2')).toEqual([]);
+
+    // The edit is compare-and-set, takes a frame for an edge, and names a reading of the current version.
+    const err = (p: Promise<unknown>) => p.then(() => null, (e: unknown) => e as ApiError);
+    const map = (await client.getFlowMap('study-map-edit')).map;
+    const first = map.readings[0] as (typeof map.readings)[number];
+    expect(await err(client.editReading('study-map-edit', first.id, { baseVersion: 1, kind: 'gap' }))).toMatchObject({ status: 409, code: 'flow_map_changed' });
+    expect(await err(client.editReading('study-map-edit', first.id, { baseVersion: map.version, kind: 'edge', to: '3:1' }))).toMatchObject({ status: 400, code: 'invalid_flow_map' });
+    expect(await err(client.editReading('study-map-edit', first.id, { baseVersion: map.version, kind: 'gap', to: '1:2' }))).toMatchObject({ status: 400, code: 'invalid_flow_map' });
+    expect(await err(client.editReading('study-map-edit', 'r999', { baseVersion: map.version, kind: 'gap' }))).toMatchObject({ status: 404, code: 'reading_not_found' });
+  }, 30_000);
 });
 

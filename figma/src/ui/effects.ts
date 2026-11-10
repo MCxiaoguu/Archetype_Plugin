@@ -3,6 +3,7 @@ import { continueLaunch } from '../lib/launch';
 import { isSafeWebUrl, studyWebUrl, type MainToUi, type Settings, type StudyRecord } from '../lib/messages';
 import { isStudyDone, pollDelay } from '../lib/poll';
 import { runPreflight } from '../lib/preflight';
+import type { ReadingKind } from '../lib/proto/flow';
 import { buildReportView, type StudyReport } from '../lib/report';
 import { indexFrames } from '../lib/frames';
 import { buildStudyRequest, shareKeyOf, validateForm } from '../lib/study';
@@ -289,6 +290,7 @@ export function createEffects(store: Store, deps: EffectsDeps = {}) {
   async function loadFlow(gen: number, { paths }: { paths: boolean }) {
     const id = store.get().study?.id;
     if (!id) return;
+    let what = 'The flow map did not load';
     try {
       const map = await api()
         .getFlowMap(id)
@@ -300,12 +302,39 @@ export function createEffects(store: Store, deps: EffectsDeps = {}) {
       if (gen !== watchGen) return;
       store.dispatch({ type: 'flow-map', studyId: id, map });
       if (!paths) return;
+      what = 'The paths did not load';
       const { runs } = await api().getPaths(id);
       if (gen !== watchGen) return;
       if (!Array.isArray(runs)) throw new Error('Archetype sent paths the panel cannot read.');
       store.dispatch({ type: 'flow-paths', studyId: id, paths: runs });
     } catch (err) {
-      if (gen === watchGen) store.dispatch({ type: 'flow-error', studyId: id, message: message(err) });
+      if (gen === watchGen) store.dispatch({ type: 'flow-error', studyId: id, message: `${what}: ${message(err)}` });
+    }
+  }
+
+  /**
+   * Edit map: sets one reading of the version the card shows, which writes
+   * the next version; runs claimed after it play that one. A map that moved
+   * meanwhile is loaded again, for the designer to set the reading on it.
+   */
+  async function editReading(readingId: string, kind: ReadingKind, to: string | null) {
+    const st = store.get().study;
+    const map = st?.flow.map;
+    if (!st?.id || !map) return;
+    const id = st.id;
+    if (kind === 'edge' && !to) throw new Error(`An edge reading needs the frame it goes to (reading ${readingId}).`);
+    try {
+      try {
+        const { map: next } = await api().editReading(id, readingId, { baseVersion: map.version, kind, ...(kind === 'edge' ? { to: to as string } : {}) });
+        store.dispatch({ type: 'flow-map', studyId: id, map: next });
+      } catch (err) {
+        if (!(err instanceof ApiError && err.code === 'flow_map_changed')) throw err;
+        const { map: current } = await api().getFlowMap(id);
+        store.dispatch({ type: 'flow-map', studyId: id, map: current });
+        store.dispatch({ type: 'notice', notice: { kind: 'info', text: `The flow map changed meanwhile (now version ${current.version}), so the panel loaded it again. Set the reading on it again.` } });
+      }
+    } catch (err) {
+      store.dispatch({ type: 'flow-error', studyId: id, message: `The reading was not saved: ${message(err)}` });
     }
   }
 
@@ -420,6 +449,7 @@ export function createEffects(store: Store, deps: EffectsDeps = {}) {
     retryMap,
     followPersona,
     clearPaths,
+    editReading,
     retry,
     openStudy,
     newTest,

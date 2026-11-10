@@ -8,8 +8,9 @@
  * paths hides them until the panel opens the study again.
  */
 
-import { useEffect, useMemo } from 'preact/hooks';
+import { useEffect, useMemo, useState } from 'preact/hooks';
 import { edgeKey, graphOf, layoutFlow, liveMarks, NODE_HEIGHT, NODE_WIDTH, pastMarks, type Marks, type Walker } from '../../lib/flowLayout';
+import type { FlowMap, FlowReading, ReadingKind } from '../../lib/proto/flow';
 import type { LiveRun } from '../../lib/runs';
 import type { FlowCard } from '../../lib/state';
 import type { Effects } from '../effects';
@@ -34,6 +35,73 @@ function useShots(shots: Record<string, Uint8Array>): Record<string, string> {
   }, [shots]);
   useEffect(() => () => Object.values(urls).forEach((u) => URL.revokeObjectURL(u)), [urls]);
   return urls;
+}
+
+/** A reading as the editor's select holds it: gap, control, or `edge:<frame>`. */
+const choiceOf = (r: FlowReading) => (r.kind === 'edge' ? `edge:${r.to as string}` : r.kind);
+
+/**
+ * Edit map (spec, Editing): every reading, frame by frame (on the first
+ * frame it appears on), set to a link to a chosen frame, a control or a
+ * gap. One edit writes the next version, which runs claimed after it play.
+ */
+function MapEditor({ map, order, fx }: { map: FlowMap; order: string[]; fx: Pick<Effects, 'editReading'> }) {
+  const [saving, setSaving] = useState<string | null>(null);
+  const frames = map.nodes.filter((n) => n.kind === 'frame');
+  const nameOf = new Map(map.nodes.map((n) => [n.id, n.name]));
+  const byNode = new Map<string, FlowReading[]>();
+  for (const r of map.readings) {
+    const first = r.nodes[0] as string;
+    byNode.set(first, [...(byNode.get(first) ?? []), r]);
+  }
+  const set = async (r: FlowReading, choice: string) => {
+    const [kind, to] = choice.startsWith('edge:') ? ['edge', choice.slice(5)] : [choice, null];
+    setSaving(r.id);
+    try {
+      await fx.editReading(r.id, kind as ReadingKind, to);
+    } finally {
+      setSaving(null);
+    }
+  };
+  if (map.readings.length === 0) return <p class="muted small">This map has no readings: every element of the prototype is wired.</p>;
+  return (
+    <div class="fm-editor">
+      <p class="muted small">Version {map.version}. Runs that start after an edit play the new version; runs under way keep theirs.</p>
+      {order
+        .filter((id) => byNode.has(id))
+        .map((id) => (
+          <div class="fm-edit-node">
+            <p class="fm-edit-frame">{nameOf.get(id)}</p>
+            <ul class="fm-edit-list">
+              {(byNode.get(id) as FlowReading[]).map((r) => {
+                const more = new Set(r.nodes).size - 1;
+                return (
+                  <li class="fm-edit-row">
+                    <span class="fm-edit-label" title={r.reason}>
+                      {r.label || r.role}
+                      {more > 0 && <span class="muted small"> (and {more} more {more === 1 ? 'screen' : 'screens'})</span>}
+                      {r.by === 'designer' && <span class="muted small"> · yours</span>}
+                    </span>
+                    <select
+                      aria-label={`What "${r.label || r.role}" does`}
+                      value={choiceOf(r)}
+                      disabled={saving !== null}
+                      onChange={(e) => void set(r, (e.target as HTMLSelectElement).value)}
+                    >
+                      <option value="gap">No page yet</option>
+                      <option value="control">A control</option>
+                      {frames.map((f) => (
+                        <option value={`edge:${f.id}`}>{f.id === id ? 'Stays on this screen' : `Opens ${f.name}`}</option>
+                      ))}
+                    </select>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        ))}
+    </div>
+  );
 }
 
 /** The personas of a study walking its map in this panel, in the study's order, from their sessions. */
@@ -63,8 +131,9 @@ export function FlowMapCard({
   /** Running: tokens follow the live sessions; otherwise the stored paths. */
   live: boolean;
   goal: string | null;
-  fx: Pick<Effects, 'followPersona' | 'clearPaths'>;
+  fx: Pick<Effects, 'followPersona' | 'clearPaths' | 'editReading'>;
 }) {
+  const [editing, setEditing] = useState(false);
   const shots = useShots(flow.shots);
   const map = flow.map;
   const layout = useMemo(() => {
@@ -76,7 +145,7 @@ export function FlowMapCard({
   if (flow.error && !map) {
     return (
       <Section title="Flow map" id="flowmap">
-        <Banner kind="error">The flow map did not load: {flow.error}</Banner>
+        <Banner kind="error">{flow.error}</Banner>
       </Section>
     );
   }
@@ -95,13 +164,19 @@ export function FlowMapCard({
       title="Flow map"
       id="flowmap"
       aside={
-        anything && (
-          <button type="button" class="link-btn quiet" onClick={() => fx.clearPaths()}>
-            Clear paths
+        <span class="row gap-s">
+          {anything && (
+            <button type="button" class="link-btn quiet" onClick={() => fx.clearPaths()}>
+              Clear paths
+            </button>
+          )}
+          <button type="button" class="link-btn quiet" aria-expanded={editing} onClick={() => setEditing(!editing)}>
+            {editing ? 'Done editing' : 'Edit map'}
           </button>
-        )
+        </span>
       }
     >
+      {editing && <MapEditor map={map} order={layout.nodes.map((n) => n.id)} fx={fx} />}
       <div class="fm-scroll">
         <svg
           class="fm"
@@ -194,7 +269,11 @@ export function FlowMapCard({
           {flow.followNote ? `. ${flow.followNote}.` : ' on the canvas.'}
         </p>
       )}
-      {flow.error && <p class="muted small">The paths did not load: {flow.error}</p>}
+      {flow.error && (
+        <p class="muted small" role="alert">
+          {flow.error}
+        </p>
+      )}
     </Section>
   );
 }

@@ -847,7 +847,28 @@ function createFlowMaps({ clock }) {
     return [200, { map: shown(map) }];
   }
 
-  return { add, commit, build, get, latest, versionOf, studies };
+  /** PATCH /flow-map/readings/<id>: the designer's reading, compare-and-set on the version. */
+  function edit(studyId, readingId, body) {
+    if (!studies.has(studyId)) throw new Refused(409, 'not_a_plugin_study', `Study ${studyId} is not a plugin-mode study (execution plugin): only the Figma panel's studies have a flow map.`);
+    if (!isObject(body)) throw invalidMap('The body must be a JSON object {baseVersion, kind, to?}.');
+    for (const key of Object.keys(body)) if (!['baseVersion', 'kind', 'to'].includes(key)) throw invalidMap(`${key} is not a field of a reading edit: send baseVersion, kind and, for an edge, to.`);
+    if (!(Number.isInteger(body.baseVersion) && body.baseVersion >= 1)) throw invalidMap('baseVersion is required: the version the designer edited.');
+    if (!READING_KINDS.includes(body.kind)) throw invalidMap(`kind must be edge, control or gap (got ${repr(body.kind)}).`);
+    const current = latest(studyId);
+    if (!current) throw new Refused(404, 'flow_map_not_found', `Study ${studyId} has no flow map yet.`);
+    if (body.baseVersion !== current.version) throw new Refused(409, 'flow_map_changed', `baseVersion ${body.baseVersion} is not the current flow map version (${current.version}); reload the map and edit again.`);
+    const frames = new Set(current.nodes.filter((n) => n.kind === 'frame').map((n) => n.id));
+    if (body.kind === 'edge' && !(isText(body.to) && frames.has(body.to))) throw invalidMap(`to must be a frame node of the map for an edge (got ${repr(body.to)}).`);
+    if (body.kind !== 'edge' && body.to !== undefined) throw invalidMap('to is only allowed with kind edge.');
+    const reading = current.readings.find((r) => r.id === readingId);
+    if (!reading) throw new Refused(404, 'reading_not_found', `Flow map version ${current.version} has no reading ${readingId}.`);
+    const readings = current.readings.map((r) => (r.id === readingId ? { ...r, kind: body.kind, to: body.kind === 'edge' ? body.to : null, by: 'designer', reason: DESIGNER_REASON } : r));
+    const map = { ...structuredClone(current), version: current.version + 1, baseVersion: current.version, readings, buildId: null, completedAt: new Date(clock()).toISOString() };
+    studies.get(studyId).versions.push(map);
+    return [200, { map: shown(map) }];
+  }
+
+  return { add, commit, build, get, edit, latest, versionOf, studies };
 }
 
 function createTraceRuns({ clock, thinkingPolls }) {
@@ -1197,6 +1218,8 @@ function createTraceRuns({ clock, thinkingPolls }) {
         if (method === 'GET') return maps.get(decodeURIComponent(mapPath[1]), request.query ?? new URLSearchParams());
       }
       if (buildPath && method === 'GET' && studies.has(decodeURIComponent(buildPath[1]))) return maps.build(decodeURIComponent(buildPath[1]), decodeURIComponent(buildPath[2]));
+      const editPath = /^\/api\/studies\/([^/]+)\/flow-map\/readings\/([^/]+)$/.exec(path);
+      if (editPath && method === 'PATCH' && studies.has(decodeURIComponent(editPath[1]))) return maps.edit(decodeURIComponent(editPath[1]), decodeURIComponent(editPath[2]), body);
       const pathsPath = /^\/api\/studies\/([^/]+)\/paths$/.exec(path);
       if (pathsPath && method === 'GET' && studies.has(decodeURIComponent(pathsPath[1]))) {
         return [200, { runs: paths(decodeURIComponent(pathsPath[1])).map(({ misses, ...run }) => run) }];
