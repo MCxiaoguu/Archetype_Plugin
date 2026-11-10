@@ -19,7 +19,7 @@ figma.ui.onmessage = (msg: UiToMain) => {
 };
 
 figma.on('selectionchange', () => controller.pushSelection());
-// A container a crash left behind would stay on the canvas and in the designer's undo history.
+// A container a crash left behind would stay on the canvas.
 figma.on('close', () => controller.removeLeftovers());
 
 // Keep the flow graph fresh while the designer edits connections or names.

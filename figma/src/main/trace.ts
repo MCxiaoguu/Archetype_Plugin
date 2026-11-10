@@ -151,7 +151,6 @@ export function createTraceMain(api: PluginAPI, post: (msg: MainToUi) => void): 
       return { ok: true, reason: null };
     } finally {
       container.remove();
-      api.commitUndo();
     }
   }
 
@@ -215,7 +214,6 @@ export function createTraceMain(api: PluginAPI, post: (msg: MainToUi) => void): 
       node.remove();
       removed++;
     }
-    if (removed) api.commitUndo();
     return removed;
   }
 

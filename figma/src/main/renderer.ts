@@ -4,7 +4,8 @@
  * applies the state to the copies (variant overrides, modes, assigned
  * variable values, scroll), measures every layer of the copies, exports
  * the container, and removes it in a `finally`. The originals are never
- * touched. Renders and reads run one at a time, through one queue.
+ * touched, and what a render makes is gone when it ends. Renders and
+ * reads run one at a time, through one queue.
  *
  * Layers are measured under their logical keys, and with their logical
  * types: the original layer's, found by walking original and copy in
@@ -129,8 +130,6 @@ async function renderOnce(api: PluginAPI, doc: ProtoDoc, state: TraceState): Pro
     // Gone already when the plugin closed mid-render and the close handler removed it.
     if (!container.removed) container.remove();
     releaseContainer(container);
-    // So the designer's next undo can't bring the copies back.
-    api.commitUndo();
   }
 }
 

@@ -78,6 +78,6 @@ describe('plugin entry point', () => {
     figmaHandlers.get('close')?.();
     expect(page.children).not.toContain(container);
     expect(container.removed).toBe(true);
-    expect(api.commitUndo).toHaveBeenCalled();
+    expect(api.commitUndo).not.toHaveBeenCalled();
   });
 });

@@ -67,9 +67,9 @@ paste any token (local backends run with the development bypass).
 Tests run inside the panel, so nobody else has to open your prototype and no
 sharing is needed. The panel does need **edit access** to the file: to draw each
 screen a persona sees, it makes a temporary copy of the screen beside the canvas
-(locked, at x = -100 000), exports it and deletes it again, keeping it out of
-your undo history. In a view-only file the launch stops with "Duplicate to your
-drafts to test".
+(locked, at x = -100 000), exports it and deletes it again right away. The
+copies change nothing in your file. In a view-only file the launch stops with
+"Duplicate to your drafts to test".
 
 A share link is optional. With one, step URLs in the report use the file's key
 and the real prototype URL form, so they open the prototype. Without one they

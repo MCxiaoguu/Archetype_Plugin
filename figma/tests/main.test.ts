@@ -349,8 +349,9 @@ describe('trace requests on the main thread', () => {
     expect((await t.ask({ type: 'trace-load', requestId: 'q7', studyId: 's1' })).result).toEqual({ sessions: [] });
 
     expect(await t.ask({ type: 'trace-scratch-check', requestId: 'q8' })).toEqual({ type: 'trace-result', requestId: 'q8', result: { ok: true, reason: null } });
-    // Neither the render nor the check leaves a container on the canvas.
+    // Neither the render nor the check leaves a container on the canvas, or a step in the undo history.
     expect((t.api.currentPage as unknown as FakeNode).children.filter((n) => isScratch(n as unknown as BaseNode))).toEqual([]);
+    expect(t.api.commitUndo).not.toHaveBeenCalled();
     expect(t.api.notify).not.toHaveBeenCalled();
   });
 
@@ -372,6 +373,7 @@ describe('trace requests on the main thread', () => {
     expect(leftover.removed).toBe(true);
     expect(page.children).toContain(designers);
     expect(page.children.filter((n) => isScratch(n as unknown as BaseNode))).toEqual([]);
+    expect(t.api.commitUndo).not.toHaveBeenCalled();
     expect((await t.ask({ type: 'trace-cleanup', requestId: 'c2' })).result).toEqual({ removed: 0 });
   });
 

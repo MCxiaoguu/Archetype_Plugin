@@ -72,14 +72,14 @@ describe('render', () => {
       expect(scratchNodeIds().has(made.id)).toBe(true);
     });
 
-    it('is removed, and the undo step committed after, also when the export throws', async () => {
+    it('is removed also when the export throws, committing nothing to the undo history', async () => {
       const fake = await setup();
       fake.world.exportFails = 'throw';
       await expect(fake.renderer.render(fake.doc, state(fake.doc, '2:20'))).rejects.toThrow('Export failed');
       const made = fake.api.createFrame.mock.results[0]?.value as FakeNode;
       expect(made.removed).toBe(true);
-      const log = fake.world.log as string[];
-      expect(log.indexOf('commitUndo')).toBeGreaterThan(log.indexOf(`remove ${made.id}`));
+      // Made and removed in one go, a render changes nothing in the file, so it commits nothing.
+      expect(fake.api.commitUndo).not.toHaveBeenCalled();
     });
 
     it('fills the container with the page\'s prototype background', async () => {
@@ -158,8 +158,10 @@ describe('render', () => {
     it('renders one state at a time', async () => {
       const fake = await setup();
       await Promise.all([fake.renderer.render(fake.doc, state(fake.doc, '2:20')), fake.renderer.render(fake.doc, state(fake.doc, '1:2'))]);
-      const log = (fake.world.log as string[]).filter((l) => l.startsWith('create') || l === 'commitUndo');
-      expect(log.map((l) => l.split(' ')[0])).toEqual(['create', 'commitUndo', 'create', 'commitUndo']);
+      const containers = fake.api.createFrame.mock.results.map((r) => (r.value as FakeNode).id);
+      const log = (fake.world.log as string[]).filter((l) => containers.some((id) => l === `create ${id}` || l === `remove ${id}`));
+      expect(log).toEqual([`create ${containers[0]}`, `remove ${containers[0]}`, `create ${containers[1]}`, `remove ${containers[1]}`]);
+      expect(fake.api.commitUndo).not.toHaveBeenCalled();
     });
 
     it('never changes the originals', async () => {
