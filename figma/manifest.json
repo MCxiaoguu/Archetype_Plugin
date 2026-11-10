@@ -1,0 +1,14 @@
+{
+  "name": "Archetype",
+  "id": "archetype-figma-dev",
+  "api": "1.0.0",
+  "main": "dist/code.js",
+  "ui": "dist/ui.html",
+  "editorType": ["figma"],
+  "documentAccess": "dynamic-page",
+  "networkAccess": {
+    "allowedDomains": ["https://api.syntheticarchetype.com"],
+    "devAllowedDomains": ["http://localhost:5013", "http://localhost:5000"],
+    "reasoning": "The panel talks to the Archetype API to sign you in, create a persona study for the selected prototype flow, and read its results. It sends the prototype share link, the names of the screens on the path, the goal and the user description you type. It never sends file contents or images."
+  }
+}

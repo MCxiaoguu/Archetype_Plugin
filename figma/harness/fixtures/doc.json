@@ -1,0 +1,282 @@
+{
+  "fileName": "Farside billing",
+  "pageId": "0:1",
+  "pageName": "Prototype",
+  "frames": [
+    {
+      "id": "1:2",
+      "name": "Dashboard"
+    },
+    {
+      "id": "2:10",
+      "name": "Billing settings"
+    },
+    {
+      "id": "2:20",
+      "name": "Connect bank"
+    },
+    {
+      "id": "2:30",
+      "name": "Verify phone"
+    },
+    {
+      "id": "2:40",
+      "name": "Help: What is ACH"
+    },
+    {
+      "id": "2:50",
+      "name": "Bank connected"
+    },
+    {
+      "id": "3:1",
+      "name": "Bank sign in error",
+      "closesOnOutsideClick": true
+    },
+    {
+      "id": "3:5",
+      "name": "Plans"
+    },
+    {
+      "id": "4:1",
+      "name": "Old onboarding"
+    }
+  ],
+  "flowStarts": [
+    {
+      "nodeId": "1:2",
+      "name": "Connect a bank"
+    }
+  ],
+  "hotspots": [
+    {
+      "id": "1:7",
+      "name": "Billing",
+      "type": "TEXT",
+      "frameId": "1:2",
+      "trigger": "ON_CLICK",
+      "actions": [
+        {
+          "kind": "node",
+          "navigation": "NAVIGATE",
+          "destinationId": "2:10"
+        }
+      ]
+    },
+    {
+      "id": "1:8",
+      "name": "Rectangle 12",
+      "type": "RECTANGLE",
+      "frameId": "1:2",
+      "trigger": "ON_CLICK",
+      "actions": [
+        {
+          "kind": "node",
+          "navigation": "NAVIGATE",
+          "destinationId": "3:5"
+        }
+      ],
+      "textHint": null
+    },
+    {
+      "id": "2:11",
+      "name": "Connect a bank",
+      "type": "INSTANCE",
+      "frameId": "2:10",
+      "trigger": "ON_CLICK",
+      "actions": [
+        {
+          "kind": "node",
+          "navigation": "NAVIGATE",
+          "destinationId": "2:20"
+        }
+      ]
+    },
+    {
+      "id": "2:12",
+      "name": "icons8-help-32 1",
+      "type": "FRAME",
+      "frameId": "2:10",
+      "trigger": "ON_CLICK",
+      "actions": [
+        {
+          "kind": "node",
+          "navigation": "NAVIGATE",
+          "destinationId": "2:40"
+        }
+      ],
+      "textHint": null
+    },
+    {
+      "id": "2:13",
+      "name": "Back",
+      "type": "INSTANCE",
+      "frameId": "2:10",
+      "trigger": "ON_CLICK",
+      "actions": [
+        {
+          "kind": "back"
+        }
+      ]
+    },
+    {
+      "id": "2:21",
+      "name": "Sign in with your bank",
+      "type": "INSTANCE",
+      "frameId": "2:20",
+      "trigger": "ON_CLICK",
+      "actions": [
+        {
+          "kind": "node",
+          "navigation": "OVERLAY",
+          "destinationId": "3:1"
+        }
+      ]
+    },
+    {
+      "id": "2:22",
+      "name": "Continue",
+      "type": "INSTANCE",
+      "frameId": "2:20",
+      "trigger": "ON_CLICK",
+      "actions": [
+        {
+          "kind": "node",
+          "navigation": "NAVIGATE",
+          "destinationId": "2:30"
+        }
+      ]
+    },
+    {
+      "id": "2:23",
+      "name": "Frame 48",
+      "type": "FRAME",
+      "frameId": "2:20",
+      "trigger": "ON_CLICK",
+      "actions": [
+        {
+          "kind": "node",
+          "navigation": "NAVIGATE",
+          "destinationId": "9:99"
+        }
+      ],
+      "textHint": "Use routing number instead"
+    },
+    {
+      "id": "2:31",
+      "name": "Send code",
+      "type": "INSTANCE",
+      "frameId": "2:30",
+      "trigger": "ON_CLICK",
+      "actions": [
+        {
+          "kind": "node",
+          "navigation": "NAVIGATE",
+          "destinationId": "2:50"
+        }
+      ]
+    },
+    {
+      "id": "2:32",
+      "name": "Back",
+      "type": "INSTANCE",
+      "frameId": "2:30",
+      "trigger": "ON_CLICK",
+      "actions": [
+        {
+          "kind": "back"
+        }
+      ]
+    },
+    {
+      "id": "2:41",
+      "name": "Close",
+      "type": "INSTANCE",
+      "frameId": "2:40",
+      "trigger": "ON_CLICK",
+      "actions": [
+        {
+          "kind": "back"
+        }
+      ]
+    },
+    {
+      "id": "2:51",
+      "name": "Done",
+      "type": "INSTANCE",
+      "frameId": "2:50",
+      "trigger": "ON_CLICK",
+      "actions": [
+        {
+          "kind": "node",
+          "navigation": "NAVIGATE",
+          "destinationId": "1:2"
+        }
+      ]
+    },
+    {
+      "id": "3:2",
+      "name": "Try again",
+      "type": "INSTANCE",
+      "frameId": "3:1",
+      "trigger": "ON_CLICK",
+      "actions": [
+        {
+          "kind": "close"
+        }
+      ]
+    },
+    {
+      "id": "4:2",
+      "name": "Start",
+      "type": "INSTANCE",
+      "frameId": "4:1",
+      "trigger": "ON_CLICK",
+      "actions": [
+        {
+          "kind": "node",
+          "navigation": "NAVIGATE",
+          "destinationId": "1:2"
+        }
+      ]
+    }
+  ],
+  "destinations": {
+    "2:10": {
+      "exists": true,
+      "frameId": "2:10"
+    },
+    "3:5": {
+      "exists": true,
+      "frameId": "3:5"
+    },
+    "2:20": {
+      "exists": true,
+      "frameId": "2:20"
+    },
+    "2:40": {
+      "exists": true,
+      "frameId": "2:40"
+    },
+    "3:1": {
+      "exists": true,
+      "frameId": "3:1"
+    },
+    "2:30": {
+      "exists": true,
+      "frameId": "2:30"
+    },
+    "9:99": {
+      "exists": false,
+      "frameId": null
+    },
+    "2:50": {
+      "exists": true,
+      "frameId": "2:50"
+    },
+    "1:2": {
+      "exists": true,
+      "frameId": "1:2"
+    }
+  },
+  "truncated": false
+}

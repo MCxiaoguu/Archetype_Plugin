@@ -1,0 +1,2603 @@
+{
+  "studyId": "5d1c0e6a8b4f4c2e9a7d3f1b2c4e6a80",
+  "title": "Connect a business bank account so invoices can be paid by bank transfer",
+  "status": "complete",
+  "partial": false,
+  "runsTotal": 16,
+  "runsScored": 15,
+  "runsPending": 0,
+  "icp": {
+    "label": "Early stage SaaS founders",
+    "description": "Founders of 2 to 10 person B2B SaaS teams who do their own bookkeeping."
+  },
+  "task": {
+    "goal": "Connect a business bank account so invoices can be paid by bank transfer",
+    "url": "https://www.figma.com/proto/AbCdEfGh1234567890XyZ/Farside-billing?node-id=1-2&starting-point-node-id=1%3A2&scaling=scale-down",
+    "startPath": null
+  },
+  "success": {
+    "criterion": "Bank account shows as connected in billing settings",
+    "checks": [
+      {
+        "type": "text_visible",
+        "value": "Bank account connected",
+        "required": true
+      }
+    ]
+  },
+  "design": {
+    "mode": "ofat_stress",
+    "repeatPolicy": "confirm",
+    "archetypeBudget": 7,
+    "includeOppositePoles": false
+  },
+  "protocolVersion": 2,
+  "factors": [
+    {
+      "key": "trust_willingness_to_share",
+      "label": "Trust and willingness to share",
+      "source": "core",
+      "rank": 1,
+      "riskPole": "low",
+      "icpTypicalLevel": 2,
+      "lowAnchor": "Refuses to give personal data or payment until value is proven",
+      "highAnchor": "Shares email, phone, card freely",
+      "whyItMattersHere": "Connecting a bank means handing over account numbers and a phone code, and this ICP is wary of sharing before it works."
+    },
+    {
+      "key": "bank_details_readiness",
+      "label": "Bank details readiness",
+      "source": "task",
+      "rank": 2,
+      "riskPole": "low",
+      "icpTypicalLevel": 3,
+      "lowAnchor": "Starts the connection and stops to hunt for routing and account numbers",
+      "highAnchor": "Has every bank detail ready and finishes in one pass",
+      "whyItMattersHere": "Founders who must look up routing numbers mid flow stall at the bank form."
+    },
+    {
+      "key": "patience",
+      "label": "Patience",
+      "source": "core",
+      "rank": 3,
+      "riskPole": "low",
+      "icpTypicalLevel": 3,
+      "lowAnchor": "Abandons at the first real obstacle",
+      "highAnchor": "Will persist through repeated obstacles",
+      "whyItMattersHere": "The bank sign in can fail, and impatient founders quit at the first error."
+    },
+    {
+      "key": "product_familiarity",
+      "label": "Product familiarity",
+      "source": "core",
+      "rank": 4,
+      "riskPole": "low",
+      "icpTypicalLevel": 3,
+      "lowAnchor": "Never used this product or category",
+      "highAnchor": "Expert in this category and similar tools",
+      "whyItMattersHere": "Bank connection vocabulary (routing, ACH, micro deposits) confuses first timers."
+    }
+  ],
+  "archetypes": [
+    {
+      "archetypeId": "a7c30000000000000000000000000000",
+      "name": "Baseline founder",
+      "role": "baseline",
+      "pole": null,
+      "composite": false,
+      "variedFactors": [],
+      "factorVector": {
+        "trust_willingness_to_share": 2,
+        "bank_details_readiness": 3,
+        "patience": 3,
+        "product_familiarity": 3
+      },
+      "levels": {
+        "trust_willingness_to_share": "typical",
+        "bank_details_readiness": "typical",
+        "patience": "typical",
+        "product_familiarity": "typical"
+      },
+      "summaryOneLine": "Baseline founder: Maya, 34, runs a 6 person invoicing startup and does the books herself.",
+      "policySummary": {
+        "maxSteps": 22,
+        "maxUnproductiveSteps": 5,
+        "maxWaits": 2,
+        "refuses": [
+          "social_login"
+        ],
+        "line": "Gives up after 5 unproductive steps (22 at most); refuses social login"
+      },
+      "runs": [
+        "r5e20000000000000000000000000000",
+        "r5e20003000000000000000000000000",
+        "r5e20007000000000000000000000000"
+      ],
+      "posterior": {
+        "mean": 0.8,
+        "low90": 0.473,
+        "high90": 0.987
+      },
+      "completion": {
+        "k": 3,
+        "n": 3,
+        "rate": 1,
+        "posteriorMean": 0.8,
+        "low90": 0.473,
+        "high90": 0.987,
+        "basis": {
+          "checks": 3,
+          "actor": 0
+        },
+        "passK": 0.571,
+        "allPassed": true
+      },
+      "abandonment": [],
+      "metrics": {
+        "steps": 4,
+        "frustrationScore": 3,
+        "lostness": 0.25,
+        "hesitationCount": 0,
+        "trustRefusals": 0,
+        "unproductiveSteps": 0,
+        "durationS": 60,
+        "backtracks": 1,
+        "errorsSeen": 0,
+        "pagesVisited": 4,
+        "abandonedAtStep": null
+      },
+      "frictionTimeline": [
+        {
+          "step": 1,
+          "maxFriction": "none",
+          "maxFrictionRank": 0,
+          "runs": 3
+        },
+        {
+          "step": 2,
+          "maxFriction": "minor",
+          "maxFrictionRank": 1,
+          "runs": 3
+        },
+        {
+          "step": 3,
+          "maxFriction": "minor",
+          "maxFrictionRank": 1,
+          "runs": 3
+        },
+        {
+          "step": 4,
+          "maxFriction": "minor",
+          "maxFrictionRank": 1,
+          "runs": 3
+        },
+        {
+          "step": 5,
+          "maxFriction": "none",
+          "maxFrictionRank": 0,
+          "runs": 1
+        }
+      ],
+      "firstHesitationStep": null,
+      "dropOffPageType": null,
+      "quitReasons": {},
+      "variance": {
+        "n": 3,
+        "varianceRuns": 0,
+        "completed": 3,
+        "rate": 1,
+        "frustrationScore": {
+          "median": 3,
+          "min": 3,
+          "max": 6,
+          "range": 3
+        },
+        "steps": {
+          "median": 4,
+          "min": 4,
+          "max": 5,
+          "range": 1
+        },
+        "abandonedAtStep": null
+      }
+    },
+    {
+      "archetypeId": "a7c30001000000000000000000000000",
+      "name": "Low trust founder",
+      "role": "variant",
+      "pole": "risk",
+      "composite": false,
+      "variedFactors": [
+        "trust_willingness_to_share"
+      ],
+      "factorVector": {
+        "trust_willingness_to_share": 1,
+        "bank_details_readiness": 3,
+        "patience": 3,
+        "product_familiarity": 3
+      },
+      "levels": {
+        "trust_willingness_to_share": "risk",
+        "bank_details_readiness": "typical",
+        "patience": "typical",
+        "product_familiarity": "typical"
+      },
+      "summaryOneLine": "Low trust founder: Maya, 34, runs a 6 person invoicing startup and does the books herself.",
+      "policySummary": {
+        "maxSteps": 22,
+        "maxUnproductiveSteps": 5,
+        "maxWaits": 2,
+        "refuses": [
+          "phone",
+          "address",
+          "card",
+          "permissions",
+          "upload",
+          "social_login"
+        ],
+        "line": "Gives up after 5 unproductive steps (22 at most); refuses phone, address, card, permissions, upload, social login"
+      },
+      "runs": [
+        "r5e20001000000000000000000000000",
+        "r5e20008000000000000000000000000",
+        "r5e20012000000000000000000000000"
+      ],
+      "posterior": {
+        "mean": 0.2,
+        "low90": 0.013,
+        "high90": 0.527
+      },
+      "completion": {
+        "k": 0,
+        "n": 3,
+        "rate": 0,
+        "posteriorMean": 0.2,
+        "low90": 0.013,
+        "high90": 0.527,
+        "basis": {
+          "checks": 3,
+          "actor": 0
+        },
+        "passK": 0.029,
+        "allPassed": false
+      },
+      "abandonment": [
+        {
+          "runId": "r5e20001000000000000000000000000",
+          "step": 3,
+          "pageType": "verification",
+          "url": "https://www.figma.com/proto/AbCdEfGh1234567890XyZ/Farside-billing?node-id=2-30&starting-point-node-id=1%3A2&scaling=scale-down",
+          "quitReason": "trust_refused",
+          "inTheirWords": "They wanted my phone number before showing it works. No."
+        },
+        {
+          "runId": "r5e20008000000000000000000000000",
+          "step": 4,
+          "pageType": "verification",
+          "url": "https://www.figma.com/proto/AbCdEfGh1234567890XyZ/Farside-billing?node-id=2-30&starting-point-node-id=1%3A2&scaling=scale-down",
+          "quitReason": "trust_refused",
+          "inTheirWords": "A phone code to connect a bank? I do not share my number."
+        },
+        {
+          "runId": "r5e20012000000000000000000000000",
+          "step": 3,
+          "pageType": "verification",
+          "url": "https://www.figma.com/proto/AbCdEfGh1234567890XyZ/Farside-billing?node-id=2-30&starting-point-node-id=1%3A2&scaling=scale-down",
+          "quitReason": "trust_refused",
+          "inTheirWords": "Not giving my phone to a billing page."
+        }
+      ],
+      "metrics": {
+        "steps": 3,
+        "frustrationScore": 20,
+        "lostness": 0,
+        "hesitationCount": 1,
+        "trustRefusals": 1,
+        "unproductiveSteps": 1,
+        "durationS": 40,
+        "backtracks": 0,
+        "errorsSeen": 0,
+        "pagesVisited": 3,
+        "abandonedAtStep": 3
+      },
+      "frictionTimeline": [
+        {
+          "step": 1,
+          "maxFriction": "none",
+          "maxFrictionRank": 0,
+          "runs": 3
+        },
+        {
+          "step": 2,
+          "maxFriction": "none",
+          "maxFrictionRank": 0,
+          "runs": 3
+        },
+        {
+          "step": 3,
+          "maxFriction": "major",
+          "maxFrictionRank": 2,
+          "runs": 3
+        },
+        {
+          "step": 4,
+          "maxFriction": "major",
+          "maxFrictionRank": 2,
+          "runs": 1
+        }
+      ],
+      "firstHesitationStep": 3,
+      "dropOffPageType": "verification",
+      "quitReasons": {
+        "trustRefused": 3
+      },
+      "variance": {
+        "n": 3,
+        "varianceRuns": 0,
+        "completed": 0,
+        "rate": 0,
+        "frustrationScore": {
+          "median": 20,
+          "min": 20,
+          "max": 40,
+          "range": 20
+        },
+        "steps": {
+          "median": 3,
+          "min": 3,
+          "max": 4,
+          "range": 1
+        },
+        "abandonedAtStep": {
+          "median": 3,
+          "min": 3,
+          "max": 4,
+          "range": 1
+        }
+      }
+    },
+    {
+      "archetypeId": "a7c30002000000000000000000000000",
+      "name": "Unprepared founder",
+      "role": "variant",
+      "pole": "risk",
+      "composite": false,
+      "variedFactors": [
+        "bank_details_readiness"
+      ],
+      "factorVector": {
+        "trust_willingness_to_share": 2,
+        "bank_details_readiness": 1,
+        "patience": 3,
+        "product_familiarity": 3
+      },
+      "levels": {
+        "trust_willingness_to_share": "typical",
+        "bank_details_readiness": "risk",
+        "patience": "typical",
+        "product_familiarity": "typical"
+      },
+      "summaryOneLine": "Unprepared founder: Maya, 34, runs a 6 person invoicing startup and does the books herself.",
+      "policySummary": {
+        "maxSteps": 22,
+        "maxUnproductiveSteps": 5,
+        "maxWaits": 2,
+        "refuses": [
+          "social_login"
+        ],
+        "line": "Gives up after 5 unproductive steps (22 at most); refuses social login"
+      },
+      "runs": [
+        "r5e20002000000000000000000000000",
+        "r5e20009000000000000000000000000"
+      ],
+      "posterior": {
+        "mean": 0.5,
+        "low90": 0.135,
+        "high90": 0.865
+      },
+      "completion": {
+        "k": 1,
+        "n": 2,
+        "rate": 0.5,
+        "posteriorMean": 0.5,
+        "low90": 0.135,
+        "high90": 0.865,
+        "basis": {
+          "checks": 2,
+          "actor": 0
+        },
+        "passK": 0.3,
+        "allPassed": false
+      },
+      "abandonment": [
+        {
+          "runId": "r5e20009000000000000000000000000",
+          "step": 2,
+          "pageType": "form",
+          "url": "https://www.figma.com/proto/AbCdEfGh1234567890XyZ/Farside-billing?node-id=2-20&starting-point-node-id=1%3A2&scaling=scale-down",
+          "quitReason": "feature_not_found",
+          "inTheirWords": "I do not have the routing number and nothing tells me where it is."
+        }
+      ],
+      "metrics": {
+        "steps": 3.5,
+        "frustrationScore": 8,
+        "lostness": 0.125,
+        "hesitationCount": 1,
+        "trustRefusals": 0,
+        "unproductiveSteps": 1,
+        "durationS": 50,
+        "backtracks": 0.5,
+        "errorsSeen": 0,
+        "pagesVisited": 3,
+        "abandonedAtStep": 2
+      },
+      "frictionTimeline": [
+        {
+          "step": 1,
+          "maxFriction": "none",
+          "maxFrictionRank": 0,
+          "runs": 2
+        },
+        {
+          "step": 2,
+          "maxFriction": "major",
+          "maxFrictionRank": 2,
+          "runs": 2
+        },
+        {
+          "step": 3,
+          "maxFriction": "none",
+          "maxFrictionRank": 0,
+          "runs": 1
+        },
+        {
+          "step": 4,
+          "maxFriction": "minor",
+          "maxFrictionRank": 1,
+          "runs": 1
+        },
+        {
+          "step": 5,
+          "maxFriction": "none",
+          "maxFrictionRank": 0,
+          "runs": 1
+        }
+      ],
+      "firstHesitationStep": 2,
+      "dropOffPageType": "form",
+      "quitReasons": {
+        "featureNotFound": 1
+      },
+      "variance": {
+        "n": 2,
+        "varianceRuns": 0,
+        "completed": 1,
+        "rate": 0.5,
+        "frustrationScore": {
+          "median": 8,
+          "min": 6,
+          "max": 10,
+          "range": 4
+        },
+        "steps": {
+          "median": 3.5,
+          "min": 2,
+          "max": 5,
+          "range": 3
+        },
+        "abandonedAtStep": {
+          "median": 2,
+          "min": 2,
+          "max": 2,
+          "range": 0
+        }
+      }
+    },
+    {
+      "archetypeId": "a7c30003000000000000000000000000",
+      "name": "Impatient founder",
+      "role": "variant",
+      "pole": "risk",
+      "composite": false,
+      "variedFactors": [
+        "patience"
+      ],
+      "factorVector": {
+        "trust_willingness_to_share": 2,
+        "bank_details_readiness": 3,
+        "patience": 1,
+        "product_familiarity": 3
+      },
+      "levels": {
+        "trust_willingness_to_share": "typical",
+        "bank_details_readiness": "typical",
+        "patience": "risk",
+        "product_familiarity": "typical"
+      },
+      "summaryOneLine": "Impatient founder: Maya, 34, runs a 6 person invoicing startup and does the books herself.",
+      "policySummary": {
+        "maxSteps": 12,
+        "maxUnproductiveSteps": 2,
+        "maxWaits": 1,
+        "refuses": [
+          "social_login"
+        ],
+        "line": "Gives up after 2 unproductive steps (12 at most); refuses social login"
+      },
+      "runs": [
+        "r5e20004000000000000000000000000",
+        "r5e20010000000000000000000000000",
+        "r5e20014000000000000000000000000"
+      ],
+      "posterior": {
+        "mean": 0.4,
+        "low90": 0.098,
+        "high90": 0.751
+      },
+      "completion": {
+        "k": 1,
+        "n": 3,
+        "rate": 0.333,
+        "posteriorMean": 0.4,
+        "low90": 0.098,
+        "high90": 0.751,
+        "basis": {
+          "checks": 3,
+          "actor": 0
+        },
+        "passK": 0.114,
+        "allPassed": false
+      },
+      "abandonment": [
+        {
+          "runId": "r5e20004000000000000000000000000",
+          "step": 3,
+          "pageType": "form",
+          "url": "https://www.figma.com/proto/AbCdEfGh1234567890XyZ/Farside-billing?node-id=2-20&starting-point-node-id=1%3A2&scaling=scale-down",
+          "quitReason": "technical_error",
+          "inTheirWords": "It broke twice. I do not have time for this."
+        },
+        {
+          "runId": "r5e20014000000000000000000000000",
+          "step": 3,
+          "pageType": "form",
+          "url": "https://www.figma.com/proto/AbCdEfGh1234567890XyZ/Farside-billing?node-id=2-20&starting-point-node-id=1%3A2&scaling=scale-down",
+          "quitReason": "technical_error",
+          "inTheirWords": "Two errors in a row. Too slow, I am closing the tab."
+        }
+      ],
+      "metrics": {
+        "steps": 3,
+        "frustrationScore": 50,
+        "lostness": 0,
+        "hesitationCount": 0,
+        "trustRefusals": 0,
+        "unproductiveSteps": 2,
+        "durationS": 40,
+        "backtracks": 0,
+        "errorsSeen": 2,
+        "pagesVisited": 2,
+        "abandonedAtStep": 3
+      },
+      "frictionTimeline": [
+        {
+          "step": 1,
+          "maxFriction": "none",
+          "maxFrictionRank": 0,
+          "runs": 3
+        },
+        {
+          "step": 2,
+          "maxFriction": "major",
+          "maxFrictionRank": 2,
+          "runs": 3
+        },
+        {
+          "step": 3,
+          "maxFriction": "blocked",
+          "maxFrictionRank": 3,
+          "runs": 3
+        },
+        {
+          "step": 4,
+          "maxFriction": "none",
+          "maxFrictionRank": 0,
+          "runs": 1
+        }
+      ],
+      "firstHesitationStep": null,
+      "dropOffPageType": "form",
+      "quitReasons": {
+        "technicalError": 2
+      },
+      "variance": {
+        "n": 3,
+        "varianceRuns": 0,
+        "completed": 1,
+        "rate": 0.333,
+        "frustrationScore": {
+          "median": 50,
+          "min": 3,
+          "max": 50,
+          "range": 47
+        },
+        "steps": {
+          "median": 3,
+          "min": 3,
+          "max": 4,
+          "range": 1
+        },
+        "abandonedAtStep": {
+          "median": 3,
+          "min": 3,
+          "max": 3,
+          "range": 0
+        }
+      }
+    },
+    {
+      "archetypeId": "a7c30004000000000000000000000000",
+      "name": "Novice founder",
+      "role": "variant",
+      "pole": "risk",
+      "composite": false,
+      "variedFactors": [
+        "product_familiarity"
+      ],
+      "factorVector": {
+        "trust_willingness_to_share": 2,
+        "bank_details_readiness": 3,
+        "patience": 3,
+        "product_familiarity": 1
+      },
+      "levels": {
+        "trust_willingness_to_share": "typical",
+        "bank_details_readiness": "typical",
+        "patience": "typical",
+        "product_familiarity": "risk"
+      },
+      "summaryOneLine": "Novice founder: Maya, 34, runs a 6 person invoicing startup and does the books herself.",
+      "policySummary": {
+        "maxSteps": 22,
+        "maxUnproductiveSteps": 5,
+        "maxWaits": 2,
+        "refuses": [
+          "social_login"
+        ],
+        "line": "Gives up after 5 unproductive steps (22 at most); refuses social login"
+      },
+      "runs": [
+        "r5e20005000000000000000000000000"
+      ],
+      "posterior": {
+        "mean": 0.667,
+        "low90": 0.224,
+        "high90": 0.975
+      },
+      "completion": {
+        "k": 1,
+        "n": 1,
+        "rate": 1,
+        "posteriorMean": 0.667,
+        "low90": 0.224,
+        "high90": 0.975,
+        "basis": {
+          "checks": 1,
+          "actor": 0
+        },
+        "passK": 0.667,
+        "allPassed": true
+      },
+      "abandonment": [],
+      "metrics": {
+        "steps": 7,
+        "frustrationScore": 9,
+        "lostness": 0.5,
+        "hesitationCount": 2,
+        "trustRefusals": 0,
+        "unproductiveSteps": 2,
+        "durationS": 120,
+        "backtracks": 2,
+        "errorsSeen": 0,
+        "pagesVisited": 6,
+        "abandonedAtStep": null
+      },
+      "frictionTimeline": [
+        {
+          "step": 1,
+          "maxFriction": "none",
+          "maxFrictionRank": 0,
+          "runs": 1
+        },
+        {
+          "step": 2,
+          "maxFriction": "minor",
+          "maxFrictionRank": 1,
+          "runs": 1
+        },
+        {
+          "step": 3,
+          "maxFriction": "none",
+          "maxFrictionRank": 0,
+          "runs": 1
+        },
+        {
+          "step": 4,
+          "maxFriction": "minor",
+          "maxFrictionRank": 1,
+          "runs": 1
+        },
+        {
+          "step": 5,
+          "maxFriction": "none",
+          "maxFrictionRank": 0,
+          "runs": 1
+        },
+        {
+          "step": 6,
+          "maxFriction": "minor",
+          "maxFrictionRank": 1,
+          "runs": 1
+        },
+        {
+          "step": 7,
+          "maxFriction": "none",
+          "maxFrictionRank": 0,
+          "runs": 1
+        }
+      ],
+      "firstHesitationStep": 2,
+      "dropOffPageType": null,
+      "quitReasons": {},
+      "variance": {
+        "n": 1,
+        "varianceRuns": 0,
+        "completed": 1,
+        "rate": 1,
+        "frustrationScore": {
+          "median": 9,
+          "min": 9,
+          "max": 9,
+          "range": 0
+        },
+        "steps": {
+          "median": 7,
+          "min": 7,
+          "max": 7,
+          "range": 0
+        },
+        "abandonedAtStep": null
+      }
+    },
+    {
+      "archetypeId": "a7c30005000000000000000000000000",
+      "name": "Stress: low trust, unprepared, impatient, novice",
+      "role": "stress",
+      "pole": "risk",
+      "composite": false,
+      "variedFactors": [
+        "trust_willingness_to_share",
+        "bank_details_readiness",
+        "patience",
+        "product_familiarity"
+      ],
+      "factorVector": {
+        "trust_willingness_to_share": 1,
+        "bank_details_readiness": 1,
+        "patience": 1,
+        "product_familiarity": 1
+      },
+      "levels": {
+        "trust_willingness_to_share": "risk",
+        "bank_details_readiness": "risk",
+        "patience": "risk",
+        "product_familiarity": "risk"
+      },
+      "summaryOneLine": "Stress: low trust, unprepared, impatient, novice: Maya, 34, runs a 6 person invoicing startup and does the books herself.",
+      "policySummary": {
+        "maxSteps": 12,
+        "maxUnproductiveSteps": 2,
+        "maxWaits": 1,
+        "refuses": [
+          "phone",
+          "address",
+          "card",
+          "permissions",
+          "upload",
+          "social_login"
+        ],
+        "line": "Gives up after 2 unproductive steps (12 at most); refuses phone, address, card, permissions, upload, social login"
+      },
+      "runs": [
+        "r5e20006000000000000000000000000",
+        "r5e20011000000000000000000000000",
+        "r5e20015000000000000000000000000"
+      ],
+      "posterior": {
+        "mean": 0.2,
+        "low90": 0.013,
+        "high90": 0.527
+      },
+      "completion": {
+        "k": 0,
+        "n": 3,
+        "rate": 0,
+        "posteriorMean": 0.2,
+        "low90": 0.013,
+        "high90": 0.527,
+        "basis": {
+          "checks": 3,
+          "actor": 0
+        },
+        "passK": 0.029,
+        "allPassed": false
+      },
+      "abandonment": [
+        {
+          "runId": "r5e20006000000000000000000000000",
+          "step": 2,
+          "pageType": "form",
+          "url": "https://www.figma.com/proto/AbCdEfGh1234567890XyZ/Farside-billing?node-id=2-20&starting-point-node-id=1%3A2&scaling=scale-down",
+          "quitReason": "frustration",
+          "inTheirWords": "Broken, and I would need my phone and my bank numbers anyway."
+        },
+        {
+          "runId": "r5e20011000000000000000000000000",
+          "step": 2,
+          "pageType": "verification",
+          "url": "https://www.figma.com/proto/AbCdEfGh1234567890XyZ/Farside-billing?node-id=2-30&starting-point-node-id=1%3A2&scaling=scale-down",
+          "quitReason": "trust_refused",
+          "inTheirWords": "My phone number, before it even works? No."
+        },
+        {
+          "runId": "r5e20015000000000000000000000000",
+          "step": 2,
+          "pageType": "form",
+          "url": "https://www.figma.com/proto/AbCdEfGh1234567890XyZ/Farside-billing?node-id=2-20&starting-point-node-id=1%3A2&scaling=scale-down",
+          "quitReason": "frustration",
+          "inTheirWords": "I have none of this at hand. Another day."
+        }
+      ],
+      "metrics": {
+        "steps": 2,
+        "frustrationScore": 20,
+        "lostness": 0,
+        "hesitationCount": 1,
+        "trustRefusals": 0,
+        "unproductiveSteps": 1,
+        "durationS": 20,
+        "backtracks": 0,
+        "errorsSeen": 0,
+        "pagesVisited": 2,
+        "abandonedAtStep": 2
+      },
+      "frictionTimeline": [
+        {
+          "step": 1,
+          "maxFriction": "none",
+          "maxFrictionRank": 0,
+          "runs": 3
+        },
+        {
+          "step": 2,
+          "maxFriction": "blocked",
+          "maxFrictionRank": 3,
+          "runs": 3
+        }
+      ],
+      "firstHesitationStep": 2,
+      "dropOffPageType": "form",
+      "quitReasons": {
+        "frustration": 2,
+        "trustRefused": 1
+      },
+      "variance": {
+        "n": 3,
+        "varianceRuns": 0,
+        "completed": 0,
+        "rate": 0,
+        "frustrationScore": {
+          "median": 20,
+          "min": 10,
+          "max": 25,
+          "range": 15
+        },
+        "steps": {
+          "median": 2,
+          "min": 2,
+          "max": 2,
+          "range": 0
+        },
+        "abandonedAtStep": {
+          "median": 2,
+          "min": 2,
+          "max": 2,
+          "range": 0
+        }
+      }
+    }
+  ],
+  "runs": [
+    {
+      "runId": "r5e20000000000000000000000000000",
+      "archetypeId": "a7c30000000000000000000000000000",
+      "archetypeName": "Baseline founder",
+      "role": "baseline",
+      "wave": 1,
+      "repeatIndex": 0,
+      "status": "completed",
+      "included": true,
+      "excludedReason": null,
+      "purpose": "design",
+      "completed": true,
+      "basis": "checks",
+      "quitReason": null,
+      "inTheirWords": "Connected.",
+      "abandonedAtStep": null,
+      "steps": 4,
+      "frustrationScore": 3,
+      "lostness": 0.25,
+      "durationS": 60,
+      "browser": {
+        "engine": "playwright",
+        "version": "0.0.84",
+        "headless": true,
+        "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
+        "viewport": {
+          "width": 1280,
+          "height": 900
+        },
+        "profile": "isolated"
+      },
+      "integrity": {
+        "available": true,
+        "checkableSteps": 4,
+        "verified": 4,
+        "unverified": 0,
+        "unlogged": 0,
+        "score": 1,
+        "lowIntegrity": false,
+        "unverifiedSteps": []
+      },
+      "videoPath": "/Users/dev/.claude/plugins/data/archetype/browser/1/r5e20000.webm",
+      "findings": 1
+    },
+    {
+      "runId": "r5e20001000000000000000000000000",
+      "archetypeId": "a7c30001000000000000000000000000",
+      "archetypeName": "Low trust founder",
+      "role": "variant",
+      "wave": 1,
+      "repeatIndex": 0,
+      "status": "abandoned",
+      "included": true,
+      "excludedReason": null,
+      "purpose": "design",
+      "completed": false,
+      "basis": "checks",
+      "quitReason": "trust_refused",
+      "inTheirWords": "They wanted my phone number before showing it works. No.",
+      "abandonedAtStep": 3,
+      "steps": 3,
+      "frustrationScore": 20,
+      "lostness": 0,
+      "durationS": 40,
+      "browser": {
+        "engine": "playwright",
+        "version": "0.0.84",
+        "headless": true,
+        "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
+        "viewport": {
+          "width": 1280,
+          "height": 900
+        },
+        "profile": "isolated"
+      },
+      "integrity": {
+        "available": true,
+        "checkableSteps": 3,
+        "verified": 3,
+        "unverified": 0,
+        "unlogged": 0,
+        "score": 1,
+        "lowIntegrity": false,
+        "unverifiedSteps": []
+      },
+      "videoPath": "/Users/dev/.claude/plugins/data/archetype/browser/2/r5e20001.webm",
+      "findings": 1
+    },
+    {
+      "runId": "r5e20002000000000000000000000000",
+      "archetypeId": "a7c30002000000000000000000000000",
+      "archetypeName": "Unprepared founder",
+      "role": "variant",
+      "wave": 1,
+      "repeatIndex": 0,
+      "status": "completed",
+      "included": true,
+      "excludedReason": null,
+      "purpose": "design",
+      "completed": true,
+      "basis": "checks",
+      "quitReason": null,
+      "inTheirWords": "Connected.",
+      "abandonedAtStep": null,
+      "steps": 5,
+      "frustrationScore": 6,
+      "lostness": 0.25,
+      "durationS": 80,
+      "browser": {
+        "engine": "playwright",
+        "version": "0.0.84",
+        "headless": true,
+        "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
+        "viewport": {
+          "width": 1280,
+          "height": 900
+        },
+        "profile": "isolated"
+      },
+      "integrity": {
+        "available": true,
+        "checkableSteps": 5,
+        "verified": 5,
+        "unverified": 0,
+        "unlogged": 0,
+        "score": 1,
+        "lowIntegrity": false,
+        "unverifiedSteps": []
+      },
+      "videoPath": "/Users/dev/.claude/plugins/data/archetype/browser/3/r5e20002.webm",
+      "findings": 1
+    },
+    {
+      "runId": "r5e20003000000000000000000000000",
+      "archetypeId": "a7c30000000000000000000000000000",
+      "archetypeName": "Baseline founder",
+      "role": "baseline",
+      "wave": 1,
+      "repeatIndex": 1,
+      "status": "completed",
+      "included": true,
+      "excludedReason": null,
+      "purpose": "design",
+      "completed": true,
+      "basis": "checks",
+      "quitReason": null,
+      "inTheirWords": "Connected.",
+      "abandonedAtStep": null,
+      "steps": 5,
+      "frustrationScore": 6,
+      "lostness": 0.25,
+      "durationS": 80,
+      "browser": {
+        "engine": "playwright",
+        "version": "0.0.84",
+        "headless": true,
+        "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
+        "viewport": {
+          "width": 1280,
+          "height": 900
+        },
+        "profile": "isolated"
+      },
+      "integrity": {
+        "available": true,
+        "checkableSteps": 5,
+        "verified": 5,
+        "unverified": 0,
+        "unlogged": 0,
+        "score": 1,
+        "lowIntegrity": false,
+        "unverifiedSteps": []
+      },
+      "videoPath": "/Users/dev/.claude/plugins/data/archetype/browser/4/r5e20003.webm",
+      "findings": 1
+    },
+    {
+      "runId": "r5e20004000000000000000000000000",
+      "archetypeId": "a7c30003000000000000000000000000",
+      "archetypeName": "Impatient founder",
+      "role": "variant",
+      "wave": 1,
+      "repeatIndex": 0,
+      "status": "abandoned",
+      "included": true,
+      "excludedReason": null,
+      "purpose": "design",
+      "completed": false,
+      "basis": "checks",
+      "quitReason": "technical_error",
+      "inTheirWords": "It broke twice. I do not have time for this.",
+      "abandonedAtStep": 3,
+      "steps": 3,
+      "frustrationScore": 50,
+      "lostness": 0,
+      "durationS": 40,
+      "browser": {
+        "engine": "playwright",
+        "version": "0.0.84",
+        "headless": true,
+        "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
+        "viewport": {
+          "width": 1280,
+          "height": 900
+        },
+        "profile": "isolated"
+      },
+      "integrity": {
+        "available": true,
+        "checkableSteps": 3,
+        "verified": 3,
+        "unverified": 0,
+        "unlogged": 0,
+        "score": 1,
+        "lowIntegrity": false,
+        "unverifiedSteps": []
+      },
+      "videoPath": "/Users/dev/.claude/plugins/data/archetype/browser/1/r5e20004.webm",
+      "findings": 1
+    },
+    {
+      "runId": "r5e20005000000000000000000000000",
+      "archetypeId": "a7c30004000000000000000000000000",
+      "archetypeName": "Novice founder",
+      "role": "variant",
+      "wave": 1,
+      "repeatIndex": 0,
+      "status": "completed",
+      "included": true,
+      "excludedReason": null,
+      "purpose": "design",
+      "completed": true,
+      "basis": "checks",
+      "quitReason": null,
+      "inTheirWords": "Connected.",
+      "abandonedAtStep": null,
+      "steps": 7,
+      "frustrationScore": 9,
+      "lostness": 0.5,
+      "durationS": 120,
+      "browser": null,
+      "integrity": {
+        "available": false,
+        "checkableSteps": null,
+        "verified": null,
+        "unverified": null,
+        "unlogged": null,
+        "score": null,
+        "lowIntegrity": false,
+        "unverifiedSteps": []
+      },
+      "videoPath": null,
+      "findings": 2
+    },
+    {
+      "runId": "r5e20006000000000000000000000000",
+      "archetypeId": "a7c30005000000000000000000000000",
+      "archetypeName": "Stress: low trust, unprepared, impatient, novice",
+      "role": "stress",
+      "wave": 1,
+      "repeatIndex": 0,
+      "status": "abandoned",
+      "included": true,
+      "excludedReason": null,
+      "purpose": "design",
+      "completed": false,
+      "basis": "checks",
+      "quitReason": "frustration",
+      "inTheirWords": "Broken, and I would need my phone and my bank numbers anyway.",
+      "abandonedAtStep": 2,
+      "steps": 2,
+      "frustrationScore": 25,
+      "lostness": 0,
+      "durationS": 20,
+      "browser": {
+        "engine": "playwright",
+        "version": "0.0.84",
+        "headless": true,
+        "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
+        "viewport": {
+          "width": 1280,
+          "height": 900
+        },
+        "profile": "isolated"
+      },
+      "integrity": {
+        "available": true,
+        "checkableSteps": 2,
+        "verified": 2,
+        "unverified": 0,
+        "unlogged": 0,
+        "score": 1,
+        "lowIntegrity": false,
+        "unverifiedSteps": []
+      },
+      "videoPath": "/Users/dev/.claude/plugins/data/archetype/browser/3/r5e20006.webm",
+      "findings": 1
+    },
+    {
+      "runId": "r5e20007000000000000000000000000",
+      "archetypeId": "a7c30000000000000000000000000000",
+      "archetypeName": "Baseline founder",
+      "role": "baseline",
+      "wave": 1,
+      "repeatIndex": 2,
+      "status": "completed",
+      "included": true,
+      "excludedReason": null,
+      "purpose": "design",
+      "completed": true,
+      "basis": "checks",
+      "quitReason": null,
+      "inTheirWords": "Connected.",
+      "abandonedAtStep": null,
+      "steps": 4,
+      "frustrationScore": 3,
+      "lostness": 0.25,
+      "durationS": 60,
+      "browser": {
+        "engine": "playwright",
+        "version": "0.0.84",
+        "headless": true,
+        "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
+        "viewport": {
+          "width": 1280,
+          "height": 900
+        },
+        "profile": "isolated"
+      },
+      "integrity": {
+        "available": true,
+        "checkableSteps": 4,
+        "verified": 4,
+        "unverified": 0,
+        "unlogged": 0,
+        "score": 1,
+        "lowIntegrity": false,
+        "unverifiedSteps": []
+      },
+      "videoPath": "/Users/dev/.claude/plugins/data/archetype/browser/4/r5e20007.webm",
+      "findings": 0
+    },
+    {
+      "runId": "r5e20008000000000000000000000000",
+      "archetypeId": "a7c30001000000000000000000000000",
+      "archetypeName": "Low trust founder",
+      "role": "variant",
+      "wave": 2,
+      "repeatIndex": 1,
+      "status": "abandoned",
+      "included": true,
+      "excludedReason": null,
+      "purpose": "design",
+      "completed": false,
+      "basis": "checks",
+      "quitReason": "trust_refused",
+      "inTheirWords": "A phone code to connect a bank? I do not share my number.",
+      "abandonedAtStep": 4,
+      "steps": 4,
+      "frustrationScore": 40,
+      "lostness": 0,
+      "durationS": 60,
+      "browser": {
+        "engine": "playwright",
+        "version": "0.0.84",
+        "headless": true,
+        "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
+        "viewport": {
+          "width": 1280,
+          "height": 900
+        },
+        "profile": "isolated"
+      },
+      "integrity": {
+        "available": true,
+        "checkableSteps": 4,
+        "verified": 3,
+        "unverified": 1,
+        "unlogged": 0,
+        "score": 0.75,
+        "lowIntegrity": true,
+        "unverifiedSteps": [
+          2
+        ]
+      },
+      "videoPath": "/Users/dev/.claude/plugins/data/archetype/browser/1/r5e20008.webm",
+      "findings": 1
+    },
+    {
+      "runId": "r5e20009000000000000000000000000",
+      "archetypeId": "a7c30002000000000000000000000000",
+      "archetypeName": "Unprepared founder",
+      "role": "variant",
+      "wave": 2,
+      "repeatIndex": 1,
+      "status": "abandoned",
+      "included": true,
+      "excludedReason": null,
+      "purpose": "design",
+      "completed": false,
+      "basis": "checks",
+      "quitReason": "feature_not_found",
+      "inTheirWords": "I do not have the routing number and nothing tells me where it is.",
+      "abandonedAtStep": 2,
+      "steps": 2,
+      "frustrationScore": 10,
+      "lostness": 0,
+      "durationS": 20,
+      "browser": {
+        "engine": "playwright",
+        "version": "0.0.84",
+        "headless": true,
+        "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
+        "viewport": {
+          "width": 1280,
+          "height": 900
+        },
+        "profile": "isolated"
+      },
+      "integrity": {
+        "available": true,
+        "checkableSteps": 2,
+        "verified": 2,
+        "unverified": 0,
+        "unlogged": 0,
+        "score": 1,
+        "lowIntegrity": false,
+        "unverifiedSteps": []
+      },
+      "videoPath": "/Users/dev/.claude/plugins/data/archetype/browser/2/r5e20009.webm",
+      "findings": 1
+    },
+    {
+      "runId": "r5e20010000000000000000000000000",
+      "archetypeId": "a7c30003000000000000000000000000",
+      "archetypeName": "Impatient founder",
+      "role": "variant",
+      "wave": 2,
+      "repeatIndex": 1,
+      "status": "completed",
+      "included": true,
+      "excludedReason": null,
+      "purpose": "design",
+      "completed": true,
+      "basis": "checks",
+      "quitReason": null,
+      "inTheirWords": "Connected.",
+      "abandonedAtStep": null,
+      "steps": 4,
+      "frustrationScore": 3,
+      "lostness": 0.25,
+      "durationS": 60,
+      "browser": {
+        "engine": "playwright",
+        "version": "0.0.84",
+        "headless": true,
+        "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
+        "viewport": {
+          "width": 1280,
+          "height": 900
+        },
+        "profile": "isolated"
+      },
+      "integrity": {
+        "available": true,
+        "checkableSteps": 4,
+        "verified": 4,
+        "unverified": 0,
+        "unlogged": 0,
+        "score": 1,
+        "lowIntegrity": false,
+        "unverifiedSteps": []
+      },
+      "videoPath": "/Users/dev/.claude/plugins/data/archetype/browser/3/r5e20010.webm",
+      "findings": 0
+    },
+    {
+      "runId": "r5e20011000000000000000000000000",
+      "archetypeId": "a7c30005000000000000000000000000",
+      "archetypeName": "Stress: low trust, unprepared, impatient, novice",
+      "role": "stress",
+      "wave": 2,
+      "repeatIndex": 1,
+      "status": "abandoned",
+      "included": true,
+      "excludedReason": null,
+      "purpose": "design",
+      "completed": false,
+      "basis": "checks",
+      "quitReason": "trust_refused",
+      "inTheirWords": "My phone number, before it even works? No.",
+      "abandonedAtStep": 2,
+      "steps": 2,
+      "frustrationScore": 20,
+      "lostness": 0,
+      "durationS": 20,
+      "browser": {
+        "engine": "playwright",
+        "version": "0.0.84",
+        "headless": true,
+        "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
+        "viewport": {
+          "width": 1280,
+          "height": 900
+        },
+        "profile": "isolated"
+      },
+      "integrity": {
+        "available": true,
+        "checkableSteps": 2,
+        "verified": 2,
+        "unverified": 0,
+        "unlogged": 0,
+        "score": 1,
+        "lowIntegrity": false,
+        "unverifiedSteps": []
+      },
+      "videoPath": "/Users/dev/.claude/plugins/data/archetype/browser/4/r5e20011.webm",
+      "findings": 1
+    },
+    {
+      "runId": "r5e20012000000000000000000000000",
+      "archetypeId": "a7c30001000000000000000000000000",
+      "archetypeName": "Low trust founder",
+      "role": "variant",
+      "wave": 2,
+      "repeatIndex": 2,
+      "status": "abandoned",
+      "included": true,
+      "excludedReason": null,
+      "purpose": "design",
+      "completed": false,
+      "basis": "checks",
+      "quitReason": "trust_refused",
+      "inTheirWords": "Not giving my phone to a billing page.",
+      "abandonedAtStep": 3,
+      "steps": 3,
+      "frustrationScore": 20,
+      "lostness": 0,
+      "durationS": 40,
+      "browser": {
+        "engine": "playwright",
+        "version": "0.0.84",
+        "headless": true,
+        "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
+        "viewport": {
+          "width": 1280,
+          "height": 900
+        },
+        "profile": "isolated"
+      },
+      "integrity": {
+        "available": true,
+        "checkableSteps": 3,
+        "verified": 3,
+        "unverified": 0,
+        "unlogged": 0,
+        "score": 1,
+        "lowIntegrity": false,
+        "unverifiedSteps": []
+      },
+      "videoPath": "/Users/dev/.claude/plugins/data/archetype/browser/1/r5e20012.webm",
+      "findings": 0
+    },
+    {
+      "runId": "r5e20013000000000000000000000000",
+      "archetypeId": "a7c30002000000000000000000000000",
+      "archetypeName": "Unprepared founder",
+      "role": "variant",
+      "wave": 2,
+      "repeatIndex": 2,
+      "status": "completed",
+      "included": false,
+      "excludedReason": "browser config differs from the study's first scored run: headless false vs true",
+      "purpose": "design",
+      "completed": true,
+      "basis": "checks",
+      "quitReason": null,
+      "inTheirWords": "Connected.",
+      "abandonedAtStep": null,
+      "steps": 5,
+      "frustrationScore": 6,
+      "lostness": 0.25,
+      "durationS": 80,
+      "browser": {
+        "engine": "playwright",
+        "version": "0.0.84",
+        "headless": false,
+        "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
+        "viewport": {
+          "width": 1280,
+          "height": 900
+        },
+        "profile": "isolated"
+      },
+      "integrity": {
+        "available": true,
+        "checkableSteps": 5,
+        "verified": 5,
+        "unverified": 0,
+        "unlogged": 0,
+        "score": 1,
+        "lowIntegrity": false,
+        "unverifiedSteps": []
+      },
+      "videoPath": "/Users/dev/.claude/plugins/data/archetype/browser/2/r5e20013.webm",
+      "findings": 1
+    },
+    {
+      "runId": "r5e20014000000000000000000000000",
+      "archetypeId": "a7c30003000000000000000000000000",
+      "archetypeName": "Impatient founder",
+      "role": "variant",
+      "wave": 2,
+      "repeatIndex": 2,
+      "status": "abandoned",
+      "included": true,
+      "excludedReason": null,
+      "purpose": "design",
+      "completed": false,
+      "basis": "checks",
+      "quitReason": "technical_error",
+      "inTheirWords": "Two errors in a row. Too slow, I am closing the tab.",
+      "abandonedAtStep": 3,
+      "steps": 3,
+      "frustrationScore": 50,
+      "lostness": 0,
+      "durationS": 40,
+      "browser": {
+        "engine": "playwright",
+        "version": "0.0.84",
+        "headless": true,
+        "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
+        "viewport": {
+          "width": 1280,
+          "height": 900
+        },
+        "profile": "isolated"
+      },
+      "integrity": {
+        "available": true,
+        "checkableSteps": 3,
+        "verified": 3,
+        "unverified": 0,
+        "unlogged": 0,
+        "score": 1,
+        "lowIntegrity": false,
+        "unverifiedSteps": []
+      },
+      "videoPath": "/Users/dev/.claude/plugins/data/archetype/browser/3/r5e20014.webm",
+      "findings": 1
+    },
+    {
+      "runId": "r5e20015000000000000000000000000",
+      "archetypeId": "a7c30005000000000000000000000000",
+      "archetypeName": "Stress: low trust, unprepared, impatient, novice",
+      "role": "stress",
+      "wave": 2,
+      "repeatIndex": 2,
+      "status": "abandoned",
+      "included": true,
+      "excludedReason": null,
+      "purpose": "design",
+      "completed": false,
+      "basis": "checks",
+      "quitReason": "frustration",
+      "inTheirWords": "I have none of this at hand. Another day.",
+      "abandonedAtStep": 2,
+      "steps": 2,
+      "frustrationScore": 10,
+      "lostness": 0,
+      "durationS": 20,
+      "browser": {
+        "engine": "playwright",
+        "version": "0.0.84",
+        "headless": true,
+        "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
+        "viewport": {
+          "width": 1280,
+          "height": 900
+        },
+        "profile": "isolated"
+      },
+      "integrity": {
+        "available": true,
+        "checkableSteps": 2,
+        "verified": 2,
+        "unverified": 0,
+        "unlogged": 0,
+        "score": 1,
+        "lowIntegrity": false,
+        "unverifiedSteps": []
+      },
+      "videoPath": "/Users/dev/.claude/plugins/data/archetype/browser/4/r5e20015.webm",
+      "findings": 0
+    }
+  ],
+  "excludedRuns": [
+    {
+      "runId": "r5e20013000000000000000000000000",
+      "archetypeId": "a7c30002000000000000000000000000",
+      "archetypeName": "Unprepared founder",
+      "reason": "browser config differs from the study's first scored run: headless false vs true"
+    }
+  ],
+  "factorImpact": [
+    {
+      "factor": "trust_willingness_to_share",
+      "label": "Trust and willingness to share",
+      "pole": "risk",
+      "kind": "ofat",
+      "archetypeId": "a7c30001000000000000000000000000",
+      "archetypeName": "Low trust founder",
+      "baseline": {
+        "k": 3,
+        "n": 3,
+        "rate": 1,
+        "posteriorMean": 0.8
+      },
+      "variant": {
+        "k": 0,
+        "n": 3,
+        "rate": 0,
+        "posteriorMean": 0.2
+      },
+      "deltaCompletion": -1,
+      "deltaFrustration": 17,
+      "deltaSteps": -1,
+      "deltaAbandonStep": null,
+      "deltaUnproductiveSteps": 1,
+      "impactScore": 117,
+      "rank": 1,
+      "direction": "Low trust and willingness to share reduced completion",
+      "pLower": 0.986,
+      "confidence": "supported",
+      "confidenceWords": "99% likely lower completion",
+      "mechanismConfirmed": true,
+      "mechanism": {
+        "checked": 3,
+        "cited": 3,
+        "method": "keyword",
+        "quotes": [
+          {
+            "runId": "r5e20001000000000000000000000000",
+            "step": 3,
+            "quote": "They wanted my phone number before showing it works. No. Now they want my phone number before anything works. I am not handing that over. Typing the routing and account numbers."
+          },
+          {
+            "runId": "r5e20008000000000000000000000000",
+            "step": 4,
+            "quote": "A phone code to connect a bank? I do not share my number. Now they want my phone number before anything works. I am not handing that over. Now they want my phone number before anything works. I am not"
+          },
+          {
+            "runId": "r5e20012000000000000000000000000",
+            "step": 3,
+            "quote": "Not giving my phone to a billing page. Now they want my phone number before anything works. I am not handing that over. Typing the routing and account numbers."
+          }
+        ]
+      },
+      "rankStability": null
+    },
+    {
+      "factor": "patience",
+      "label": "Patience",
+      "pole": "risk",
+      "kind": "ofat",
+      "archetypeId": "a7c30003000000000000000000000000",
+      "archetypeName": "Impatient founder",
+      "baseline": {
+        "k": 3,
+        "n": 3,
+        "rate": 1,
+        "posteriorMean": 0.8
+      },
+      "variant": {
+        "k": 1,
+        "n": 3,
+        "rate": 0.333,
+        "posteriorMean": 0.4
+      },
+      "deltaCompletion": -0.667,
+      "deltaFrustration": 47,
+      "deltaSteps": -1,
+      "deltaAbandonStep": null,
+      "deltaUnproductiveSteps": 2,
+      "impactScore": 113.7,
+      "rank": 2,
+      "direction": "Low patience reduced completion",
+      "pLower": 0.929,
+      "confidence": "supported",
+      "confidenceWords": "93% likely lower completion",
+      "mechanismConfirmed": true,
+      "mechanism": {
+        "checked": 2,
+        "cited": 1,
+        "method": "keyword",
+        "quotes": [
+          {
+            "runId": "r5e20014000000000000000000000000",
+            "step": 3,
+            "quote": "Two errors in a row. Too slow, I am closing the tab. Unavailable again. Closing the tab. The bank sign in says it is unavailable."
+          }
+        ]
+      },
+      "rankStability": null
+    },
+    {
+      "factor": "bank_details_readiness",
+      "label": "Bank details readiness",
+      "pole": "risk",
+      "kind": "ofat",
+      "archetypeId": "a7c30002000000000000000000000000",
+      "archetypeName": "Unprepared founder",
+      "baseline": {
+        "k": 3,
+        "n": 3,
+        "rate": 1,
+        "posteriorMean": 0.8
+      },
+      "variant": {
+        "k": 1,
+        "n": 2,
+        "rate": 0.5,
+        "posteriorMean": 0.5
+      },
+      "deltaCompletion": -0.5,
+      "deltaFrustration": 5,
+      "deltaSteps": -0.5,
+      "deltaAbandonStep": null,
+      "deltaUnproductiveSteps": 1,
+      "impactScore": 55,
+      "rank": 3,
+      "direction": "Low bank details readiness reduced completion",
+      "pLower": 0.857,
+      "confidence": "inconclusive",
+      "confidenceWords": "86% likely lower completion",
+      "mechanismConfirmed": true,
+      "mechanism": {
+        "checked": 1,
+        "cited": 1,
+        "method": "keyword",
+        "quotes": [
+          {
+            "runId": "r5e20009000000000000000000000000",
+            "step": 2,
+            "quote": "I do not have the routing number and nothing tells me where it is. I do not have the routing number at hand and the form does not say where to find it. Billing settings, and there is a Connect bank ac"
+          }
+        ]
+      },
+      "rankStability": null
+    },
+    {
+      "factor": "product_familiarity",
+      "label": "Product familiarity",
+      "pole": "risk",
+      "kind": "ofat",
+      "archetypeId": "a7c30004000000000000000000000000",
+      "archetypeName": "Novice founder",
+      "baseline": {
+        "k": 3,
+        "n": 3,
+        "rate": 1,
+        "posteriorMean": 0.8
+      },
+      "variant": {
+        "k": 1,
+        "n": 1,
+        "rate": 1,
+        "posteriorMean": 0.667
+      },
+      "deltaCompletion": 0,
+      "deltaFrustration": 6,
+      "deltaSteps": 3,
+      "deltaAbandonStep": null,
+      "deltaUnproductiveSteps": 2,
+      "impactScore": 6,
+      "rank": 4,
+      "direction": "Low product familiarity did not change completion",
+      "pLower": 0.667,
+      "confidence": "directional",
+      "confidenceWords": "67% likely lower completion",
+      "mechanismConfirmed": null,
+      "mechanism": {
+        "checked": 0,
+        "cited": 0,
+        "method": null,
+        "quotes": []
+      },
+      "rankStability": null
+    }
+  ],
+  "headline": {
+    "factor": "trust_willingness_to_share",
+    "label": "Trust and willingness to share",
+    "archetypeName": "Low trust founder",
+    "basis": "p_lower",
+    "sentence": "Trust and willingness to share is the factor most likely to lower completion: 0 of 3 against 3 of 3 (99% likely lower completion, supported)."
+  },
+  "comparisons": [],
+  "designAnalysis": {
+    "mode": "ofat_stress",
+    "attribution": "ofat",
+    "note": null,
+    "interactions": [],
+    "aliasNote": null
+  },
+  "stressCheck": {
+    "predicted": 0.052,
+    "observed": 0.2,
+    "observedK": 0,
+    "observedN": 3,
+    "observedLow90": 0.013,
+    "observedHigh90": 0.527,
+    "probBelowPredicted": 0,
+    "combinedEffect": "none",
+    "sentence": "The single factors already predict a low completion for the stress archetype (about 5%), so its result (0 of 3 completed) says nothing extra about the factors compounding."
+  },
+  "baselineCheck": {
+    "failing": false,
+    "posteriorMean": 0.8,
+    "sentence": null
+  },
+  "rankStability": null,
+  "rankStabilityReason": "needs at least 2 runs per archetype",
+  "rankStabilityMethod": {
+    "draws": 2000,
+    "seed": 20261103,
+    "resample": "runs within each archetype, archetypes fixed"
+  },
+  "robustness": {
+    "score": 0.472,
+    "spread": 1,
+    "homogeneityFlag": false,
+    "sentence": null,
+    "strongestDropOff": {
+      "pageType": "form",
+      "url": "https://www.figma.com/proto/AbCdEfGh1234567890XyZ/Farside-billing?node-id=2-20&starting-point-node-id=1%3A2&scaling=scale-down",
+      "archetypes": [
+        "Unprepared founder",
+        "Impatient founder",
+        "Stress: low trust, unprepared, impatient, novice"
+      ],
+      "abandonments": 5
+    }
+  },
+  "dropOffMap": {
+    "pageTypes": [
+      "settings",
+      "form",
+      "verification",
+      "help"
+    ],
+    "archetypeIds": [
+      "a7c30000000000000000000000000000",
+      "a7c30001000000000000000000000000",
+      "a7c30002000000000000000000000000",
+      "a7c30003000000000000000000000000",
+      "a7c30004000000000000000000000000",
+      "a7c30005000000000000000000000000"
+    ],
+    "cells": [
+      {
+        "pageType": "settings",
+        "archetypeId": "a7c30000000000000000000000000000",
+        "maxFriction": "none",
+        "maxFrictionRank": 0,
+        "steps": 6,
+        "abandonments": 0
+      },
+      {
+        "pageType": "settings",
+        "archetypeId": "a7c30001000000000000000000000000",
+        "maxFriction": "none",
+        "maxFrictionRank": 0,
+        "steps": 3,
+        "abandonments": 0
+      },
+      {
+        "pageType": "settings",
+        "archetypeId": "a7c30002000000000000000000000000",
+        "maxFriction": "none",
+        "maxFrictionRank": 0,
+        "steps": 3,
+        "abandonments": 0
+      },
+      {
+        "pageType": "settings",
+        "archetypeId": "a7c30003000000000000000000000000",
+        "maxFriction": "none",
+        "maxFrictionRank": 0,
+        "steps": 4,
+        "abandonments": 0
+      },
+      {
+        "pageType": "settings",
+        "archetypeId": "a7c30004000000000000000000000000",
+        "maxFriction": "none",
+        "maxFrictionRank": 0,
+        "steps": 3,
+        "abandonments": 0
+      },
+      {
+        "pageType": "settings",
+        "archetypeId": "a7c30005000000000000000000000000",
+        "maxFriction": "none",
+        "maxFrictionRank": 0,
+        "steps": 3,
+        "abandonments": 0
+      },
+      {
+        "pageType": "form",
+        "archetypeId": "a7c30000000000000000000000000000",
+        "maxFriction": "minor",
+        "maxFrictionRank": 1,
+        "steps": 4,
+        "abandonments": 0
+      },
+      {
+        "pageType": "form",
+        "archetypeId": "a7c30001000000000000000000000000",
+        "maxFriction": "none",
+        "maxFrictionRank": 0,
+        "steps": 3,
+        "abandonments": 0
+      },
+      {
+        "pageType": "form",
+        "archetypeId": "a7c30002000000000000000000000000",
+        "maxFriction": "major",
+        "maxFrictionRank": 2,
+        "steps": 3,
+        "abandonments": 1
+      },
+      {
+        "pageType": "form",
+        "archetypeId": "a7c30003000000000000000000000000",
+        "maxFriction": "blocked",
+        "maxFrictionRank": 3,
+        "steps": 5,
+        "abandonments": 2
+      },
+      {
+        "pageType": "form",
+        "archetypeId": "a7c30004000000000000000000000000",
+        "maxFriction": "minor",
+        "maxFrictionRank": 1,
+        "steps": 2,
+        "abandonments": 0
+      },
+      {
+        "pageType": "form",
+        "archetypeId": "a7c30005000000000000000000000000",
+        "maxFriction": "blocked",
+        "maxFrictionRank": 3,
+        "steps": 2,
+        "abandonments": 2
+      },
+      {
+        "pageType": "verification",
+        "archetypeId": "a7c30000000000000000000000000000",
+        "maxFriction": "minor",
+        "maxFrictionRank": 1,
+        "steps": 3,
+        "abandonments": 0
+      },
+      {
+        "pageType": "verification",
+        "archetypeId": "a7c30001000000000000000000000000",
+        "maxFriction": "major",
+        "maxFrictionRank": 2,
+        "steps": 4,
+        "abandonments": 3
+      },
+      {
+        "pageType": "verification",
+        "archetypeId": "a7c30002000000000000000000000000",
+        "maxFriction": "minor",
+        "maxFrictionRank": 1,
+        "steps": 1,
+        "abandonments": 0
+      },
+      {
+        "pageType": "verification",
+        "archetypeId": "a7c30003000000000000000000000000",
+        "maxFriction": "minor",
+        "maxFrictionRank": 1,
+        "steps": 1,
+        "abandonments": 0
+      },
+      {
+        "pageType": "verification",
+        "archetypeId": "a7c30004000000000000000000000000",
+        "maxFriction": "minor",
+        "maxFrictionRank": 1,
+        "steps": 1,
+        "abandonments": 0
+      },
+      {
+        "pageType": "verification",
+        "archetypeId": "a7c30005000000000000000000000000",
+        "maxFriction": "major",
+        "maxFrictionRank": 2,
+        "steps": 1,
+        "abandonments": 1
+      },
+      {
+        "pageType": "help",
+        "archetypeId": "a7c30004000000000000000000000000",
+        "maxFriction": "minor",
+        "maxFrictionRank": 1,
+        "steps": 1,
+        "abandonments": 0
+      }
+    ]
+  },
+  "findings": {
+    "clusters": [
+      {
+        "clusterId": "F1",
+        "title": "Bank sign in fails with a temporarily unavailable error",
+        "inclusionCriterion": "A error finding on /settings/billing/bank that mentions bank, fail, sign, temporari, unavailable.",
+        "titleSource": "template",
+        "category": "error",
+        "location": {
+          "path": "/settings/billing/bank",
+          "selector": null
+        },
+        "symptom": "Bank sign in fails with a temporarily unavailable error.",
+        "expected": null,
+        "severity": 3,
+        "severityLabel": "major",
+        "severityBasis": {
+          "frequency": 0.267,
+          "impact": true,
+          "persistence": true
+        },
+        "reportedSeverity": "high",
+        "hitBy": [
+          "Baseline founder",
+          "Impatient founder",
+          "Stress: low trust, unprepared, impatient, novice"
+        ],
+        "hitByArchetypeIds": [
+          "a7c30000000000000000000000000000",
+          "a7c30003000000000000000000000000",
+          "a7c30005000000000000000000000000"
+        ],
+        "hitCount": 4,
+        "runCount": 15,
+        "frequency": 0.267,
+        "evidence": [
+          {
+            "runId": "r5e20003000000000000000000000000",
+            "sessionId": "plugin-r5e200030000",
+            "step": 2,
+            "url": "https://www.figma.com/proto/AbCdEfGh1234567890XyZ/Farside-billing?node-id=2-20&starting-point-node-id=1%3A2&scaling=scale-down",
+            "quote": "Bank sign in is temporarily unavailable",
+            "screenshotStep": 2,
+            "verified": true
+          },
+          {
+            "runId": "r5e20004000000000000000000000000",
+            "sessionId": "plugin-r5e200040000",
+            "step": 3,
+            "url": "https://www.figma.com/proto/AbCdEfGh1234567890XyZ/Farside-billing?node-id=2-20&starting-point-node-id=1%3A2&scaling=scale-down",
+            "quote": "Bank sign in is temporarily unavailable",
+            "screenshotStep": null,
+            "verified": true
+          },
+          {
+            "runId": "r5e20006000000000000000000000000",
+            "sessionId": "plugin-r5e200060000",
+            "step": 2,
+            "url": "https://www.figma.com/proto/AbCdEfGh1234567890XyZ/Farside-billing?node-id=2-20&starting-point-node-id=1%3A2&scaling=scale-down",
+            "quote": "Bank sign in is temporarily unavailable",
+            "screenshotStep": null,
+            "verified": true
+          },
+          {
+            "runId": "r5e20014000000000000000000000000",
+            "sessionId": "plugin-r5e200140000",
+            "step": 3,
+            "url": "https://www.figma.com/proto/AbCdEfGh1234567890XyZ/Farside-billing?node-id=2-20&starting-point-node-id=1%3A2&scaling=scale-down",
+            "quote": "Bank sign in is temporarily unavailable",
+            "screenshotStep": null,
+            "verified": true
+          }
+        ],
+        "verified": true,
+        "needsReview": false,
+        "agreement": null,
+        "workaroundExists": null,
+        "cosmetic": null,
+        "memberCount": 4
+      },
+      {
+        "clusterId": "F2",
+        "title": "Phone verification code is required before the bank account connects",
+        "inclusionCriterion": "A trust finding on /settings/billing/bank/verify that mentions bank, code, connect, ent, numb.",
+        "titleSource": "template",
+        "category": "trust",
+        "location": {
+          "path": "/settings/billing/bank/verify",
+          "selector": null
+        },
+        "symptom": "Phone verification code is required before the bank account connects.",
+        "expected": null,
+        "severity": 3,
+        "severityLabel": "major",
+        "severityBasis": {
+          "frequency": 0.267,
+          "impact": true,
+          "persistence": true
+        },
+        "reportedSeverity": "high",
+        "hitBy": [
+          "Baseline founder",
+          "Low trust founder",
+          "Stress: low trust, unprepared, impatient, novice"
+        ],
+        "hitByArchetypeIds": [
+          "a7c30000000000000000000000000000",
+          "a7c30001000000000000000000000000",
+          "a7c30005000000000000000000000000"
+        ],
+        "hitCount": 4,
+        "runCount": 15,
+        "frequency": 0.267,
+        "evidence": [
+          {
+            "runId": "r5e20000000000000000000000000000",
+            "sessionId": "plugin-r5e200000000",
+            "step": 3,
+            "url": "https://www.figma.com/proto/AbCdEfGh1234567890XyZ/Farside-billing?node-id=2-30&starting-point-node-id=1%3A2&scaling=scale-down",
+            "quote": "enter your phone number for a verification code",
+            "screenshotStep": null,
+            "verified": true
+          },
+          {
+            "runId": "r5e20001000000000000000000000000",
+            "sessionId": "plugin-r5e200010000",
+            "step": 3,
+            "url": "https://www.figma.com/proto/AbCdEfGh1234567890XyZ/Farside-billing?node-id=2-30&starting-point-node-id=1%3A2&scaling=scale-down",
+            "quote": "enter your phone number for a verification code",
+            "screenshotStep": null,
+            "verified": true
+          },
+          {
+            "runId": "r5e20008000000000000000000000000",
+            "sessionId": "plugin-r5e200080000",
+            "step": 3,
+            "url": "https://www.figma.com/proto/AbCdEfGh1234567890XyZ/Farside-billing?node-id=2-30&starting-point-node-id=1%3A2&scaling=scale-down",
+            "quote": "enter your phone number for a verification code",
+            "screenshotStep": null,
+            "verified": true
+          },
+          {
+            "runId": "r5e20011000000000000000000000000",
+            "sessionId": "plugin-r5e200110000",
+            "step": 2,
+            "url": "https://www.figma.com/proto/AbCdEfGh1234567890XyZ/Farside-billing?node-id=2-30&starting-point-node-id=1%3A2&scaling=scale-down",
+            "quote": "enter your phone number for a verification code",
+            "screenshotStep": null,
+            "verified": true
+          }
+        ],
+        "verified": true,
+        "needsReview": false,
+        "agreement": null,
+        "workaroundExists": null,
+        "cosmetic": null,
+        "memberCount": 4
+      },
+      {
+        "clusterId": "F3",
+        "title": "Routing number field gives no hint where to find the number",
+        "inclusionCriterion": "A form finding on /settings/billing/bank that mentions digit, field, numb, rout.",
+        "titleSource": "template",
+        "category": "form",
+        "location": {
+          "path": "/settings/billing/bank",
+          "selector": null
+        },
+        "symptom": "Routing number field gives no hint where to find the number.",
+        "expected": null,
+        "severity": 3,
+        "severityLabel": "major",
+        "severityBasis": {
+          "frequency": 0.2,
+          "impact": true,
+          "persistence": true
+        },
+        "reportedSeverity": "high",
+        "hitBy": [
+          "Unprepared founder",
+          "Novice founder"
+        ],
+        "hitByArchetypeIds": [
+          "a7c30002000000000000000000000000",
+          "a7c30004000000000000000000000000"
+        ],
+        "hitCount": 3,
+        "runCount": 15,
+        "frequency": 0.2,
+        "evidence": [
+          {
+            "runId": "r5e20002000000000000000000000000",
+            "sessionId": "plugin-r5e200020000",
+            "step": 2,
+            "url": "https://www.figma.com/proto/AbCdEfGh1234567890XyZ/Farside-billing?node-id=2-20&starting-point-node-id=1%3A2&scaling=scale-down",
+            "quote": "Routing number (9 digits)",
+            "screenshotStep": null,
+            "verified": true
+          },
+          {
+            "runId": "r5e20005000000000000000000000000",
+            "sessionId": "plugin-r5e200050000",
+            "step": 4,
+            "url": "https://www.figma.com/proto/AbCdEfGh1234567890XyZ/Farside-billing?node-id=2-20&starting-point-node-id=1%3A2&scaling=scale-down",
+            "quote": "Routing number (9 digits)",
+            "screenshotStep": null,
+            "verified": false
+          },
+          {
+            "runId": "r5e20009000000000000000000000000",
+            "sessionId": "plugin-r5e200090000",
+            "step": 2,
+            "url": "https://www.figma.com/proto/AbCdEfGh1234567890XyZ/Farside-billing?node-id=2-20&starting-point-node-id=1%3A2&scaling=scale-down",
+            "quote": "Routing number (9 digits)",
+            "screenshotStep": null,
+            "verified": true
+          }
+        ],
+        "verified": true,
+        "needsReview": false,
+        "agreement": null,
+        "workaroundExists": null,
+        "cosmetic": null,
+        "memberCount": 3
+      },
+      {
+        "clusterId": "F4",
+        "title": "The help article uses ACH without explaining it",
+        "inclusionCriterion": "A copy finding on /help/bank-connection that mentions ach, article, explain, help, numb.",
+        "titleSource": "template",
+        "category": "copy",
+        "location": {
+          "path": "/help/bank-connection",
+          "selector": null
+        },
+        "symptom": "The help article uses ACH without explaining it.",
+        "expected": null,
+        "severity": 2,
+        "severityLabel": "minor",
+        "severityBasis": {
+          "frequency": 0.067,
+          "impact": true,
+          "persistence": false
+        },
+        "reportedSeverity": "low",
+        "hitBy": [
+          "Novice founder"
+        ],
+        "hitByArchetypeIds": [
+          "a7c30004000000000000000000000000"
+        ],
+        "hitCount": 1,
+        "runCount": 15,
+        "frequency": 0.067,
+        "evidence": [
+          {
+            "runId": "r5e20005000000000000000000000000",
+            "sessionId": "plugin-r5e200050000",
+            "step": 2,
+            "url": "https://www.figma.com/proto/AbCdEfGh1234567890XyZ/Farside-billing?node-id=2-40&starting-point-node-id=1%3A2&scaling=scale-down",
+            "quote": "What is a routing number?",
+            "screenshotStep": null,
+            "verified": false
+          }
+        ],
+        "verified": false,
+        "needsReview": false,
+        "agreement": null,
+        "workaroundExists": null,
+        "cosmetic": null,
+        "memberCount": 1
+      }
+    ],
+    "hitByAll": [],
+    "hitBySome": [
+      "F1",
+      "F2",
+      "F3"
+    ],
+    "unique": [
+      {
+        "archetypeId": "a7c30004000000000000000000000000",
+        "archetype": "Novice founder",
+        "ids": [
+          "F4"
+        ]
+      }
+    ],
+    "method": {
+      "clustering": "token_jaccard",
+      "threshold": 0.34,
+      "titles": "template",
+      "model": null,
+      "seeds": 0
+    }
+  },
+  "recommendations": [
+    {
+      "title": "Earn trust before asking for personal data",
+      "whatToChange": "Move the phone, card or account request after the moment of value, or say right next to the field why it is needed and what happens to it.",
+      "why": "Low trust and willingness to share reduced completion: Low trust founder completed 0 of 3 against 3 of 3 for the baseline (99% likely lower completion); they hit F2 (Phone verification code is required before the bank account connects).",
+      "affectedArchetypes": [
+        "Low trust founder"
+      ],
+      "expectedEffect": "removes a give up trigger for low trust users",
+      "evidenceRefs": [
+        "run:r5e20001000000000000000000000000",
+        "run:r5e20008000000000000000000000000",
+        "step:r5e20001000000000000000000000000:3",
+        "step:r5e20008000000000000000000000000:4",
+        "cluster:F2"
+      ],
+      "effort": "medium",
+      "id": "R1"
+    },
+    {
+      "title": "Cut the obstacles on the main path",
+      "whatToChange": "Fix the error that repeats, shorten the flow, and give a clear retry or alternative when a step fails.",
+      "why": "Low patience reduced completion: Impatient founder completed 1 of 3 against 3 of 3 for the baseline (93% likely lower completion); they hit F1 (Bank sign in fails with a temporarily unavailable error).",
+      "affectedArchetypes": [
+        "Impatient founder"
+      ],
+      "expectedEffect": "keeps impatient users going past the first obstacle",
+      "evidenceRefs": [
+        "run:r5e20004000000000000000000000000",
+        "run:r5e20014000000000000000000000000",
+        "step:r5e20004000000000000000000000000:3",
+        "step:r5e20014000000000000000000000000:3",
+        "cluster:F1"
+      ],
+      "effort": "medium",
+      "id": "R2"
+    },
+    {
+      "title": "Make the flow work for users with low bank details readiness",
+      "whatToChange": "Look at where Unprepared founder stalled (Routing number field gives no hint where to find the number) and remove that obstacle.",
+      "why": "Low bank details readiness reduced completion: Unprepared founder completed 1 of 2 against 3 of 3 for the baseline (86% likely lower completion); they hit F3 (Routing number field gives no hint where to find the number).",
+      "affectedArchetypes": [
+        "Unprepared founder"
+      ],
+      "expectedEffect": "lifts completion for users at the bank details readiness risk pole",
+      "evidenceRefs": [
+        "run:r5e20009000000000000000000000000",
+        "step:r5e20009000000000000000000000000:2",
+        "cluster:F3"
+      ],
+      "effort": "medium",
+      "id": "R3"
+    },
+    {
+      "title": "Fix: Bank sign in fails with a temporarily unavailable error",
+      "whatToChange": "Bank sign in fails with a temporarily unavailable error on /settings/billing/bank.",
+      "why": "F1 was hit by Baseline founder, Impatient founder, Stress: low trust, unprepared, impatient, novice in 4 of 15 runs, severity major.",
+      "affectedArchetypes": [
+        "Baseline founder",
+        "Impatient founder",
+        "Stress: low trust, unprepared, impatient, novice"
+      ],
+      "expectedEffect": "removes a problem several archetypes ran into",
+      "evidenceRefs": [
+        "cluster:F1",
+        "step:r5e20003000000000000000000000000:2",
+        "step:r5e20004000000000000000000000000:3"
+      ],
+      "effort": "medium",
+      "id": "R4"
+    },
+    {
+      "title": "Fix: Phone verification code is required before the bank account connects",
+      "whatToChange": "Phone verification code is required before the bank account connects on /settings/billing/bank/verify.",
+      "why": "F2 was hit by Baseline founder, Low trust founder, Stress: low trust, unprepared, impatient, novice in 4 of 15 runs, severity major.",
+      "affectedArchetypes": [
+        "Baseline founder",
+        "Low trust founder",
+        "Stress: low trust, unprepared, impatient, novice"
+      ],
+      "expectedEffect": "removes a problem several archetypes ran into",
+      "evidenceRefs": [
+        "cluster:F2",
+        "step:r5e20000000000000000000000000000:3",
+        "step:r5e20001000000000000000000000000:3"
+      ],
+      "effort": "medium",
+      "id": "R5"
+    },
+    {
+      "title": "Fix: Routing number field gives no hint where to find the number",
+      "whatToChange": "Routing number field gives no hint where to find the number on /settings/billing/bank.",
+      "why": "F3 was hit by Unprepared founder, Novice founder in 3 of 15 runs, severity major.",
+      "affectedArchetypes": [
+        "Unprepared founder",
+        "Novice founder"
+      ],
+      "expectedEffect": "removes a problem several archetypes ran into",
+      "evidenceRefs": [
+        "cluster:F3",
+        "step:r5e20002000000000000000000000000:2",
+        "step:r5e20005000000000000000000000000:4"
+      ],
+      "effort": "medium",
+      "id": "R6"
+    }
+  ],
+  "answers": [
+    {
+      "question": "Where do founders hesitate during bank connection?",
+      "answer": "Hesitation was most frequent on the verification page (5 of 10 hesitation steps). The closest finding is F4, The help article uses ACH without explaining it (hit by Novice founder, severity minor). Most runs that gave up stopped on the form page (5 abandonment(s)). Trust and willingness to share is the factor most likely to lower completion: 0 of 3 against 3 of 3 (99% likely lower completion, supported).",
+      "evidenceRefs": [
+        "step:r5e20001000000000000000000000000:3",
+        "cluster:F4",
+        "step:r5e20005000000000000000000000000:2",
+        "run:r5e20009000000000000000000000000"
+      ]
+    },
+    {
+      "question": "Does the phone verification step cost us connections?",
+      "answer": "The closest finding is F2, Phone verification code is required before the bank account connects (hit by Baseline founder, Low trust founder, Stress: low trust, unprepared, impatient, novice, severity major). Most runs that gave up stopped on the form page (5 abandonment(s)). Trust and willingness to share is the factor most likely to lower completion: 0 of 3 against 3 of 3 (99% likely lower completion, supported).",
+      "evidenceRefs": [
+        "cluster:F2",
+        "step:r5e20000000000000000000000000000:3",
+        "run:r5e20009000000000000000000000000"
+      ]
+    }
+  ],
+  "validateNext": {
+    "segment": "Early stage SaaS founders who are low on trust and willingness to share (refuses to give personal data or payment until value is proven)",
+    "why": "Trust and willingness to share is the factor most likely to lower completion: 0 of 3 against 3 of 3 (99% likely lower completion, supported).",
+    "suggestedTaskForRealUsers": "Connect a business bank account so invoices can be paid by bank transfer; you are done when bank account shows as connected in billing settings."
+  },
+  "icpRead": "For Early stage SaaS founders trying to connect a business bank account so invoices can be paid by bank transfer, the journey is robust to product familiarity but fragile to trust and willingness to share, patience and bank details readiness: 4 of 6 archetypes dropped at least once, most often at the form step. The strongest drop off moment is bank sign in fails with a temporarily unavailable error (F1). Validate next with real users: Early stage SaaS founders who are low on trust and willingness to share (refuses to give personal data or payment until value is proven).",
+  "narrative": {
+    "source": "template",
+    "model": null,
+    "droppedRefs": 0,
+    "reason": "no model configured"
+  },
+  "honesty": {
+    "archetypeGenerators": [
+      {
+        "archetypeId": "a7c30000000000000000000000000000",
+        "name": "Baseline founder",
+        "generator": "model",
+        "model": "claude_cli:haiku"
+      },
+      {
+        "archetypeId": "a7c30001000000000000000000000000",
+        "name": "Low trust founder",
+        "generator": "model",
+        "model": "claude_cli:haiku"
+      },
+      {
+        "archetypeId": "a7c30002000000000000000000000000",
+        "name": "Unprepared founder",
+        "generator": "model",
+        "model": "claude_cli:haiku"
+      },
+      {
+        "archetypeId": "a7c30003000000000000000000000000",
+        "name": "Impatient founder",
+        "generator": "model",
+        "model": "claude_cli:haiku"
+      },
+      {
+        "archetypeId": "a7c30004000000000000000000000000",
+        "name": "Novice founder",
+        "generator": "model",
+        "model": "claude_cli:haiku"
+      },
+      {
+        "archetypeId": "a7c30005000000000000000000000000",
+        "name": "Stress: low trust, unprepared, impatient, novice",
+        "generator": "model",
+        "model": "claude_cli:haiku"
+      }
+    ],
+    "generator": "model",
+    "nPerArchetype": [
+      {
+        "archetypeId": "a7c30000000000000000000000000000",
+        "name": "Baseline founder",
+        "n": 3,
+        "excluded": 0
+      },
+      {
+        "archetypeId": "a7c30001000000000000000000000000",
+        "name": "Low trust founder",
+        "n": 3,
+        "excluded": 0
+      },
+      {
+        "archetypeId": "a7c30002000000000000000000000000",
+        "name": "Unprepared founder",
+        "n": 2,
+        "excluded": 1
+      },
+      {
+        "archetypeId": "a7c30003000000000000000000000000",
+        "name": "Impatient founder",
+        "n": 3,
+        "excluded": 0
+      },
+      {
+        "archetypeId": "a7c30004000000000000000000000000",
+        "name": "Novice founder",
+        "n": 1,
+        "excluded": 0
+      },
+      {
+        "archetypeId": "a7c30005000000000000000000000000",
+        "name": "Stress: low trust, unprepared, impatient, novice",
+        "n": 3,
+        "excluded": 0
+      }
+    ],
+    "repeatPolicy": "confirm",
+    "models": {
+      "actor": null,
+      "factors": "claude_cli:haiku",
+      "archetypes": [
+        "claude_cli:haiku"
+      ],
+      "extraction": [
+        "claude_cli:haiku"
+      ],
+      "report": null
+    },
+    "protocolVersion": 2,
+    "scenariosSource": "llm",
+    "browser": {
+      "config": {
+        "engine": "playwright",
+        "version": "0.0.84",
+        "headless": true,
+        "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
+        "viewport": {
+          "width": 1280,
+          "height": 900
+        },
+        "profile": "isolated"
+      },
+      "profile": "isolated",
+      "matchedRuns": 14,
+      "excludedRuns": 1,
+      "notRecordedRuns": 1,
+      "sentence": "Scored runs used playwright 0.0.84, headless, 1280x900, isolated profile. 1 run(s) with a different browser config were left out. Browser config not recorded for 1 run(s) (older plugin); they are counted as matching."
+    },
+    "homogeneityFlag": false,
+    "lowIntegrityRuns": [
+      "r5e20008000000000000000000000000"
+    ],
+    "integrity": {
+      "checkedRuns": 14,
+      "unverifiedShare": 0.022
+    },
+    "caveats": [
+      "Synthetic archetypes rank factors more reliably than they estimate absolute completion rates.",
+      "Browser config not recorded for some runs (older plugin); they are counted as matching.",
+      "Some runs narrate steps that no browser tool call backs (low integrity); read their traces with care.",
+      "Rank stability is not shown: it needs at least 2 runs per archetype."
+    ],
+    "benchmark": null
+  },
+  "computedAt": "2026-11-03T15:00:00+00:00",
+  "reportVersion": 1,
+  "cached": false
+}

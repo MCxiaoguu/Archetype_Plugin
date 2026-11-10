@@ -1,0 +1,123 @@
+# Example only: this file is documentation and is NOT enabled for this
+# repository (workflows run only from .github/workflows/). Copy it into the
+# product repository whose pull requests you want studied.
+#
+# What it does: on a pull request with a preview deployment, run an
+# Archetype study unattended with the swarm runner (plan 5.6 mode 3) and
+# post the report summary as a pull request comment.
+#
+# Secrets it expects:
+#   ARCHETYPE_TOKEN        a long lived Archetype access token (portal, API tokens)
+#   ANTHROPIC_API_KEY      for the claude -p workers (Claude in Chrome is off
+#                          under API key auth, which is why studies use the
+#                          plugin's headless Playwright browsers)
+# Variables:
+#   ARCHETYPE_STUDY        the study to run, as the JSON body of
+#                          POST /api/studies without the URL, for example
+#                          {"title": "Signup", "icp": {"label": "...",
+#                          "description": "..."}, "task": {"goal": "..."},
+#                          "success": {"criterion": "..."}}
+#
+# Each run of this job creates a fresh study from that template against the
+# preview URL (a study's task can no longer be edited once it has
+# archetypes, and its wave 1 is created once), lets the backend pick the
+# factors and archetypes, and runs wave 1 and any confirmation wave.
+
+name: Archetype study
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: archetype-study-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  study:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      CLAUDE_PLUGIN_DATA: ${{ runner.temp }}/archetype-data
+      ARCHETYPE_BACKEND_URL: https://api.syntheticarchetype.com
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Claude Code, the plugin and a browser
+        run: |
+          npm install -g @anthropic-ai/claude-code
+          git clone --depth 1 https://github.com/MCxiaoguu/Archetype_Plugin.git "$RUNNER_TEMP/archetype-plugin"
+          npx playwright install --with-deps chromium
+
+      - name: Log in with the long lived token
+        run: |
+          mkdir -p "$CLAUDE_PLUGIN_DATA"
+          printf '{"access_token": "%s", "token_type": "Bearer", "saved_at": %s}\n' \
+            "${{ secrets.ARCHETYPE_TOKEN }}" "$(date +%s)" > "$CLAUDE_PLUGIN_DATA/auth.json"
+          chmod 600 "$CLAUDE_PLUGIN_DATA/auth.json"
+
+      - name: Create the study against the preview and its first wave
+        env:
+          PREVIEW_URL: ${{ github.event.deployment_status.target_url || vars.PREVIEW_URL }}
+          STUDY_TEMPLATE: ${{ vars.ARCHETYPE_STUDY }}
+          TOKEN: ${{ secrets.ARCHETYPE_TOKEN }}
+        run: |
+          api() { curl -fsS -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" "$@"; }
+          python3 -c 'import json, os; s = json.loads(os.environ["STUDY_TEMPLATE"]); s.setdefault("task", {})["url"] = os.environ["PREVIEW_URL"]; print(json.dumps(s))' > study.json
+          api -X POST "$ARCHETYPE_BACKEND_URL/api/studies" -d @study.json > created.json
+          STUDY_ID=$(python3 -c "import json; print(json.load(open('created.json'))['studyId'])")
+          echo "STUDY_ID=$STUDY_ID" >> "$GITHUB_ENV"
+          api -X POST "$ARCHETYPE_BACKEND_URL/api/studies/$STUDY_ID/factors" -d '{}' > /dev/null
+          api -X POST "$ARCHETYPE_BACKEND_URL/api/studies/$STUDY_ID/archetypes" -d '{}' > /dev/null
+          api -X POST "$ARCHETYPE_BACKEND_URL/api/studies/$STUDY_ID/runs" -d '{}' > wave.json
+          python3 -c "import json; print(','.join(r['runId'] for r in json.load(open('wave.json'))['runs']))" > runs.txt
+
+      - name: Run the study unattended (2 workers)
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        # Exits 1 when a worker failed, timed out or stalled, a run was
+        # aborted or left queued, or the next wave never came.
+        run: |
+          python3 "$RUNNER_TEMP/archetype-plugin/scripts/study_runner.py" \
+            --study "$STUDY_ID" --data-dir "$CLAUDE_PLUGIN_DATA" \
+            --backend "$ARCHETYPE_BACKEND_URL" --runs "$(cat runs.txt)" --parallel 2
+
+      - name: Keep the worker logs and videos
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: archetype-study
+          path: |
+            ${{ env.CLAUDE_PLUGIN_DATA }}/studies/
+            ${{ env.CLAUDE_PLUGIN_DATA }}/browser/*/videos/
+
+      - name: Post the report summary
+        env:
+          TOKEN: ${{ secrets.ARCHETYPE_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsS -H "Authorization: Bearer $TOKEN" "$ARCHETYPE_BACKEND_URL/api/studies/$STUDY_ID/report" > report.json
+          python3 - <<'PY' > comment.md
+          import json
+          r = json.load(open("report.json"))
+          print(f"### Archetype study: {r.get('title', '')}\n")
+          print("| Archetype | Completed | Completion (90% interval) |\n|---|---|---|")
+          for a in r.get("archetypes", []):
+              c, p = a.get("completion", {}), a.get("posterior", {})
+              print(f"| {a.get('name')} | {c.get('k')} of {c.get('n')} | {round(p.get('mean', 0) * 100)}% "
+                    f"({round(p.get('low90', 0) * 100)}% to {round(p.get('high90', 0) * 100)}%) |")
+          for f in r.get("factorImpact", [])[:3]:
+              print(f"- {f.get('factor')} ({f.get('pole')}): {f.get('confidenceWords') or f.get('confidence')}")
+          if r.get("stressCheck", {}).get("sentence"):
+              print(f"\n{r['stressCheck']['sentence']}")
+          PY
+          gh pr comment "${{ github.event.pull_request.number }}" --repo "${{ github.repository }}" --body-file comment.md
