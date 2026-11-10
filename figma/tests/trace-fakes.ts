@@ -1,0 +1,125 @@
+/**
+ * The panel's world for the session and runner tests: the Farside prototype
+ * read and rendered for real on the fake Figma, a persona that walks its
+ * billing path, and a clock that only moves when the panel waits.
+ */
+
+import { vi } from 'vitest';
+import fixtureJson from '../harness/fixtures/farside-proto.json';
+import type { TurnBody, TurnEnded } from '../src/lib/api';
+import type { RenderNote, SavedSession, ScratchCheckReply, TraceRenderReply } from '../src/lib/messages';
+import type { ProtoDoc, TraceAction, TraceState } from '../src/lib/proto/model';
+import { readProto } from '../src/main/protoReader';
+import { createRenderer } from '../src/main/renderer';
+import { BridgeError, type Bridge } from '../src/ui/trace/bridge';
+import { fakeFromFixture, type ProtoFixture } from './fake-figma';
+
+export type Fake = ReturnType<typeof fakeFromFixture>;
+
+/** The main thread over the Farside prototype: reads and renders for real, keeps saved sessions, cleans up. */
+export async function mainThread(edit: (fake: Fake) => void = () => {}, log: string[] = []) {
+  const fake = fakeFromFixture(structuredClone(fixtureJson) as unknown as ProtoFixture);
+  edit(fake);
+  const doc = await readProto(fake.api, fake.api.currentPage, { importLibraryVariants: true });
+  const renderer = createRenderer(fake.api);
+  const saves: Array<SavedSession | null> = [];
+  /** What clientStorage holds, by study and run. */
+  const stored = new Map<string, Map<string, SavedSession>>();
+  const renders = { failures: 0, notes: null as RenderNote[] | null, change: null as ((r: TraceRenderReply) => TraceRenderReply) | null };
+  /** The launch gate's view of the file, and each read's importLibraryVariants. */
+  const gate = { scratch: { ok: true, reason: null } as ScratchCheckReply, reads: [] as boolean[], readAs: null as ((importLibraryVariants: boolean) => ProtoDoc) | null };
+  const call = vi.fn(async (type: string, payload: Record<string, unknown>) => {
+    if (type === 'trace-scratch-check') return gate.scratch;
+    if (type === 'trace-read') {
+      const importLibraryVariants = payload.importLibraryVariants as boolean;
+      gate.reads.push(importLibraryVariants);
+      return gate.readAs ? gate.readAs(importLibraryVariants) : structuredClone(doc);
+    }
+    if (type === 'trace-render') {
+      if (renders.failures > 0) {
+        renders.failures--;
+        throw new BridgeError('trace-render', 'The export of the screen came back empty');
+      }
+      // The main thread answers a render that throws with trace-error, which the bridge rejects as a BridgeError.
+      let r = await renderer.render(payload.doc as ProtoDoc, payload.state as TraceState).catch((err: Error) => {
+        throw new BridgeError('trace-render', err.message);
+      });
+      if (renders.notes) r = { ...r, notes: renders.notes };
+      return renders.change ? renders.change(r) : r;
+    }
+    if (type === 'trace-save') {
+      const session = structuredClone(payload.session) as SavedSession | null;
+      const study = stored.get(payload.studyId as string) ?? new Map<string, SavedSession>();
+      stored.set(payload.studyId as string, study);
+      if (session) study.set(payload.runId as string, session);
+      else study.delete(payload.runId as string);
+      saves.push(session);
+      log.push(`save ${payload.runId as string} ${session ? session.turn : 'null'}`);
+      return null;
+    }
+    if (type === 'trace-load') return { sessions: [...(stored.get(payload.studyId as string)?.values() ?? [])] };
+    if (type === 'trace-cleanup') {
+      log.push('cleanup');
+      return { removed: 0 };
+    }
+    throw new Error(`The panel should not ask for ${type}`);
+  });
+  // The in-process main thread answers the bridge's calls, whatever their type.
+  const bridge = { call: call as unknown as Bridge['call'] };
+  return { fake, doc, bridge, call, saves, stored, renders, gate, log };
+}
+
+export type MainThread = Awaited<ReturnType<typeof mainThread>>;
+
+// --- A persona ------------------------------------------------------------------
+
+export type Decision = { action: TraceAction | null; ended?: TurnEnded } | { failed: { code: string; message: string }; ended: TurnEnded };
+
+export const click = (body: TurnBody, label: string): TraceAction => {
+  const element = body.elements.find((e) => e.label === label);
+  if (!element) throw new Error(`No "${label}" on ${body.screen.title}: ${body.elements.map((e) => e.label).join(', ')}`);
+  return { type: 'click', element: element.id };
+};
+
+export const DONE: Decision = { action: { type: 'done', claim: 'My bank is connected.' }, ended: { status: 'finalizing', reason: 'done' } };
+
+/** A persona that takes the Farside billing path, with one misclick, to the end. */
+export function farside(body: TurnBody): Decision {
+  switch (body.screen.title) {
+    case 'Dashboard':
+      return { action: click(body, 'Billing') };
+    case 'Billing settings':
+      return { action: click(body, 'Connect a bank') };
+    case 'Connect bank':
+      if (body.last?.outcome === 'nothing_happened') return { action: { type: 'scroll', direction: 'down' } };
+      if (body.last?.outcome === 'scrolled') return { action: click(body, 'Continue') };
+      return { action: click(body, 'Use routing number instead') };
+    case 'Verify phone':
+      return { action: click(body, 'Send code') };
+    case 'Bank connected':
+      return DONE;
+    default:
+      throw new Error(`The persona got lost on ${body.screen.title}`);
+  }
+}
+
+// --- Time: a clock that only moves when the panel waits -------------------------
+
+export function clock(late: (ms: number) => number = () => 0) {
+  let t = Date.parse('2026-11-10T10:00:00Z');
+  const waits: number[] = [];
+  return {
+    now: () => t,
+    sleep: async (ms: number) => {
+      waits.push(ms);
+      t += ms + late(ms);
+    },
+    waits,
+    at: () => t,
+  };
+}
+
+export function lastOf<T>(items: readonly T[]): T {
+  if (!items.length) throw new Error('Nothing was recorded');
+  return items[items.length - 1] as T;
+}

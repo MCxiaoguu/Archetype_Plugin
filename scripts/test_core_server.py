@@ -3263,6 +3263,16 @@ def case_71_dispatch_study_runs_the_swarm(srv: ServerProc, data_dir: Path) -> No
     finally:
         own.close()
 
+
+def case_72_dispatch_study_refuses_plugin_mode(srv: ServerProc, data_dir: Path) -> None:
+    write_auth(data_dir)
+    STATE.once_overrides[f"/api/studies/{STUDY_ID}"] = (200, dict(STUDY_RESPONSE, execution="plugin"))
+    result = call_tool(srv, "dispatch_study", {"study_id": STUDY_ID, "confirm": True})
+    expect(result.get("isError") is True, "plugin-mode refusal must be isError")
+    contains(result_text(result), "this study runs inside Figma", "refuses plugin-mode studies")
+    expect(STATE.last_for("/runs") is None, "the run listing is never fetched")
+    expect(not (data_dir / "studies" / STUDY_ID).exists(), "the swarm runner is never started")
+
 CASES = [
     ("initialize + tools/list shows 21 tools", case_1_tools_list),
     ("start_run happy path (camelCase body, rich tool text)", case_2_start_run_happy),
@@ -3369,6 +3379,7 @@ CASES = [
     ("study tools on an old backend and with bad ids", case_68_study_tools_on_an_old_backend),
     ("dispatch_study shows the estimate and waits for confirm", case_70_dispatch_study_needs_confirm),
     ("dispatch_study runs the swarm: workers, browsers, waves, status", case_71_dispatch_study_runs_the_swarm),
+    ("dispatch_study refuses plugin-mode studies and starts no runner", case_72_dispatch_study_refuses_plugin_mode),
     ("get_study resumes a study at every stage", case_69_get_study_resumes_at_every_stage),
     ("get_study: a failed run listing is an error, a missing route is not", case_69b_get_study_without_its_run_listing),
     ("study design and checks reach the backend whole", case_60c_study_design_and_checks_reach_the_backend_whole),
