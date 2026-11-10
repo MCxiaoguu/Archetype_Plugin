@@ -85,6 +85,16 @@ export interface TraceCandidatesRequest {
   docHash: string;
 }
 
+/** Follow persona: bring a frame into view, moving nothing but the viewport (main/canvas.ts). */
+export interface TraceFollowRequest {
+  frameId: string;
+}
+
+/** Null when the viewport moved to the frame; the name of its page when that isn't the current one, and the viewport stayed. */
+export interface TraceFollowReply {
+  otherPage: string | null;
+}
+
 export interface TraceReadRequest {
   /** Whether the read may import library variants, which adds them to the designer's file. */
   importLibraryVariants: boolean;
@@ -178,6 +188,7 @@ export interface TraceCalls {
   'trace-cleanup': { request: Record<string, never>; reply: TraceCleanupReply };
   'trace-forget': { request: TraceForgetRequest; reply: null };
   'trace-candidates': { request: TraceCandidatesRequest; reply: FlowRead };
+  'trace-follow': { request: TraceFollowRequest; reply: TraceFollowReply };
 }
 
 export type TraceCallType = keyof TraceCalls;
@@ -193,7 +204,7 @@ export type TraceReplyMessage =
   | { type: 'trace-result'; requestId: string; result: unknown }
   | { type: 'trace-error'; requestId: string; message: string; code?: TraceErrorCode };
 
-export const TRACE_CALLS: readonly TraceCallType[] = ['trace-read', 'trace-render', 'trace-save', 'trace-load', 'trace-scratch-check', 'trace-cleanup', 'trace-forget', 'trace-candidates'];
+export const TRACE_CALLS: readonly TraceCallType[] = ['trace-read', 'trace-render', 'trace-save', 'trace-load', 'trace-scratch-check', 'trace-cleanup', 'trace-forget', 'trace-candidates', 'trace-follow'];
 
 export function isTraceRequest(msg: { type: string }): msg is TraceRequestMessage {
   return (TRACE_CALLS as readonly string[]).includes(msg.type);

@@ -1,4 +1,4 @@
-import { PIN_PREFIX } from '../lib/messages';
+import { PIN_PREFIX, type TraceFollowReply } from '../lib/messages';
 import type { Pin } from '../lib/types';
 import { pageOf, topLevelFrames } from './document';
 
@@ -23,6 +23,22 @@ export async function showNode(api: PluginAPI, nodeId: string): Promise<{ ok: bo
   api.currentPage.selection = [scene];
   api.viewport.scrollAndZoomIntoView([scene]);
   return { ok: true, message: null };
+}
+
+/**
+ * Follow persona (spec, The Flow map in the panel): brings the frame into
+ * view and changes nothing else, neither the selection nor the current
+ * page. A frame on another page leaves the viewport where it is, and the
+ * answer names that page.
+ */
+export async function followFrame(api: PluginAPI, frameId: string): Promise<TraceFollowReply> {
+  const node = await api.getNodeByIdAsync(frameId);
+  if (!node || node.removed || node.type === 'DOCUMENT' || node.type === 'PAGE') throw new Error(`The frame ${frameId} isn't in the file any more`);
+  const page = pageOf(node);
+  if (!page) throw new Error(`The frame ${frameId} is on no page`);
+  if (page.id !== api.currentPage.id) return { otherPage: page.name };
+  api.viewport.scrollAndZoomIntoView([node as SceneNode]);
+  return { otherPage: null };
 }
 
 /** Labels are plain text; keep them short enough to read on the canvas. */

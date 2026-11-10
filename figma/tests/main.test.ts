@@ -485,6 +485,25 @@ describe('trace requests on the main thread', () => {
     expect(t.api.commitUndo).not.toHaveBeenCalled();
   });
 
+  it('follows a persona by moving the viewport only: never the selection or the page', async () => {
+    const t = traceMain();
+    const page = t.api.currentPage;
+    const selected = [traceNode(t, '1:2')];
+    (page as unknown as FakeNode).selection = selected;
+    expect(await t.ask({ type: 'trace-follow', requestId: 'f1', frameId: '2:20' })).toEqual({ type: 'trace-result', requestId: 'f1', result: { otherPage: null } });
+    expect(t.api.viewport.scrollAndZoomIntoView).toHaveBeenCalledWith([traceNode(t, '2:20')]);
+    // A frame on another page: the viewport stays, and the answer names the page.
+    expect((await t.ask({ type: 'trace-follow', requestId: 'f2', frameId: '7:1' })).result).toEqual({ otherPage: 'Archive' });
+    expect(t.api.viewport.scrollAndZoomIntoView).toHaveBeenCalledTimes(1);
+    expect(t.api.currentPage).toBe(page);
+    expect(t.api.setCurrentPageAsync).not.toHaveBeenCalled();
+    expect((page as unknown as FakeNode).selection).toBe(selected);
+    expect(t.api.commitUndo).not.toHaveBeenCalled();
+    const gone = await t.ask({ type: 'trace-follow', requestId: 'f3', frameId: '9:99' });
+    expect(gone).toMatchObject({ type: 'trace-error', message: "The frame 9:99 isn't in the file any more" });
+    expect((await t.ask({ type: 'trace-follow', requestId: 'f4' })).message).toContain('the frame to show');
+  });
+
   it('learns which frame each reaction layer is in from the read, looking no reaction layer up', async () => {
     const t = traceMain();
     const asked: string[] = [];

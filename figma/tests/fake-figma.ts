@@ -554,6 +554,11 @@ export function fakeFromFixture(fixture: ProtoFixture) {
     createRectangle: vi.fn(() => create('RECTANGLE', 'Rectangle')),
     loadFontAsync: vi.fn(async (font: unknown) => void world.log?.push(`loadFont ${JSON.stringify(font)}`)),
     commitUndo: vi.fn(() => void world.log?.push('commitUndo')),
+    viewport: { scrollAndZoomIntoView: vi.fn() },
+    setCurrentPageAsync: vi.fn(async (page: FakeNode) => {
+      api.currentPage = page;
+      world.currentPage = page;
+    }),
     get skipInvisibleInstanceChildren() {
       return world.flags.skipInvisibleInstanceChildren;
     },

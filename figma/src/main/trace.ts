@@ -9,6 +9,7 @@
 
 import type { MainToUi, SavedSession, ScratchCheckReply, TraceCalls, TraceCallType, TraceRequestMessage } from '../lib/messages';
 import type { ProtoDoc, RawLayer, TraceState } from '../lib/proto/model';
+import { followFrame } from './canvas';
 import { pageOf } from './document';
 import { readFlow } from './flowMap';
 import { readProtoWithKeys } from './protoReader';
@@ -185,6 +186,10 @@ export function createTraceMain(api: PluginAPI, post: (msg: MainToUi) => void): 
     'trace-candidates': (msg) => {
       const { doc, frameOf } = readOf(msg.docHash, 'a read of the flow');
       return exclusive(api, () => readFlow(api, doc, frameOf));
+    },
+    'trace-follow': (msg) => {
+      if (!isText(msg.frameId) || !msg.frameId) bad('a follow without the frame to show');
+      return followFrame(api, msg.frameId);
     },
     // In the renders' queue, so a render under way (another study's) keeps its container.
     'trace-cleanup': () => exclusive(api, async () => ({ removed: removeLeftovers() })),
