@@ -434,7 +434,7 @@ button.drop-name:hover { color: var(--accent-text); text-decoration: underline; 
 .fm-node.unreached { opacity: 0.5; }
 .fm-name { fill: var(--text); font-size: 9px; font-family: var(--font); }
 .fm-band { fill: var(--bg); }
-.fm-more { fill: var(--warn); font-size: 9px; font-family: var(--font); }
+.fm-more { fill: var(--text-3); font-size: 8px; font-family: var(--font); }
 .fm-token { stroke: var(--bg); stroke-width: 1.5; }
 .fm-end { font-size: 11px; font-weight: 600; }
 .fm-end.ok { fill: var(--ok); }

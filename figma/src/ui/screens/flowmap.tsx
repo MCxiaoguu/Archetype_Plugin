@@ -9,7 +9,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
-import { edgeKey, graphOf, layoutFlow, liveMarks, NODE_HEIGHT, NODE_WIDTH, pastMarks, type Marks, type Walker } from '../../lib/flowLayout';
+import { edgeKey, gapsHitIn, gapsShown, graphOf, layoutFlow, liveMarks, NODE_HEIGHT, NODE_WIDTH, pastMarks, type Marks, type Walker } from '../../lib/flowLayout';
 import type { FlowMap, FlowReading, ReadingKind } from '../../lib/proto/flow';
 import type { LiveRun } from '../../lib/runs';
 import type { FlowCard } from '../../lib/state';
@@ -138,11 +138,15 @@ export function FlowMapCard({
   const shots = useShots(flow.shots);
   const scroller = useRef<HTMLDivElement>(null);
   const map = flow.map;
-  const layout = useMemo(() => {
+  // Only the gaps a persona clicked in the paths shown get a stub; the rest are a count per node.
+  const hit = useMemo(() => (flow.cleared ? new Set<string>() : live ? new Set(flow.gapsHit) : gapsHitIn(flow.paths ?? [])), [flow.cleared, flow.gapsHit, flow.paths, live]);
+  const graph = useMemo(() => {
     if (!map) return null;
     const g = graphOf(map);
-    return layoutFlow(g.nodes, g.edges, g.gaps, start);
-  }, [map, start]);
+    const { shown, hidden } = gapsShown(g.gaps, hit);
+    return { layout: layoutFlow(g.nodes, g.edges, shown, start), hidden };
+  }, [map, start, hit]);
+  const layout = graph?.layout ?? null;
 
   // The node to keep in view: the followed persona's, else where the latest move went.
   const latest = [...walkers].filter((w) => w.move).sort((a, b) => (b.move?.turn ?? 0) - (a.move?.turn ?? 0))[0];
@@ -229,11 +233,15 @@ export function FlowMapCard({
                 <text class="fm-name" x={NODE_WIDTH / 2} y={shots[n.id] ? NODE_HEIGHT - 3 : NODE_HEIGHT / 2 + 4} text-anchor="middle">
                   {short(n.name, NAME_CHARS)}
                 </text>
-                {n.moreGaps > 0 && (
-                  <text class="fm-more" x={NODE_WIDTH + 14} y={NODE_HEIGHT - 2}>
-                    +{n.moreGaps}
-                  </text>
-                )}
+                {(() => {
+                  const without = (graph?.hidden.get(n.id) ?? 0) + n.moreGaps;
+                  const drawn = layout.gaps.some((g) => g.node === n.id);
+                  return without > 0 ? (
+                    <text class="fm-more" x={0} y={NODE_HEIGHT + 9}>
+                      {without} {drawn ? 'more ' : ''}without a page
+                    </text>
+                  ) : null;
+                })()}
                 {(tokensOn.get(n.id) ?? []).map((t, i) => (
                   <circle class="fm-token" cx={7 + i * (TOKEN * 2 + 2)} cy={7} r={TOKEN} fill={colorOf(t.slot)}>
                     <title>{t.name}</title>
@@ -245,7 +253,7 @@ export function FlowMapCard({
                   </text>
                 )}
                 {pulse?.label && (
-                  <text class="fm-pulse-label" x={NODE_WIDTH / 2} y={NODE_HEIGHT + 12} text-anchor="middle">
+                  <text class="fm-pulse-label" x={0} y={-3}>
                     No page: {short(pulse.label, 18)}
                   </text>
                 )}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BEND, COLUMN_GAP, graphOf, layoutFlow, liveMarks, MAX_STUBS, NODE_HEIGHT, NODE_WIDTH, pastMarks, ROW_GAP, STUB, STUB_SPACING, type LayoutEdge, type LayoutGap, type LayoutNode, type Walker } from '../src/lib/flowLayout';
+import { BEND, COLUMN_GAP, gapsHitIn, gapsShown, graphOf, layoutFlow, liveMarks, MAX_STUBS, NODE_HEIGHT, NODE_WIDTH, pastMarks, ROW_GAP, STUB, STUB_SPACING, type LayoutEdge, type LayoutGap, type LayoutNode, type Walker } from '../src/lib/flowLayout';
 import type { FlowMap, FlowReading } from '../src/lib/proto/flow';
 
 const n = (id: string, kind: LayoutNode['kind'] = 'frame'): LayoutNode => ({ id, name: `Frame ${id}`, kind });
@@ -85,7 +85,7 @@ describe('the marks on the map', () => {
 
   it("puts each persona's token on its node, lights the edge it took and alternates the two nodes, once per turn", () => {
     const marks = liveMarks([
-      walker('r1', 'B', { from: 'A', to: 'B', outcome: 'navigated', label: 'Billing', turn: 3 }),
+      walker('r1', 'B', { from: 'A', to: 'B', outcome: 'navigated', label: 'Billing', reading: null, turn: 3 }),
       walker('r2', 'A', null),
     ]);
     expect(marks.tokens).toEqual([{ id: 'r1', name: 'Persona r1', node: 'B', slot: 0 }, { id: 'r2', name: 'Persona r2', node: 'A', slot: 1 }]);
@@ -96,9 +96,9 @@ describe('the marks on the map', () => {
 
   it('pulses the node on an accepted control, and on a gap with its label', () => {
     const marks = liveMarks([
-      walker('r1', 'B', { from: 'B', to: 'B', outcome: 'missing', label: 'Holidays', turn: 4 }),
-      walker('r2', 'B', { from: 'B', to: 'B', outcome: 'accepted', label: 'Annual', turn: 2 }),
-      walker('r3', 'B', { from: 'B', to: 'B', outcome: 'nothing_happened', label: 'Logo', turn: 2 }),
+      walker('r1', 'B', { from: 'B', to: 'B', outcome: 'missing', label: 'Holidays', reading: null, turn: 4 }),
+      walker('r2', 'B', { from: 'B', to: 'B', outcome: 'accepted', label: 'Annual', reading: null, turn: 2 }),
+      walker('r3', 'B', { from: 'B', to: 'B', outcome: 'nothing_happened', label: 'Logo', reading: null, turn: 2 }),
     ]);
     expect(marks.pulses).toEqual([{ node: 'B', label: 'Holidays', key: 'r1:4' }, { node: 'B', label: null, key: 'r2:2' }]);
     expect(marks.lit.size).toBe(0);
@@ -120,6 +120,35 @@ describe('the marks on the map', () => {
     expect([...marks.lit].sort()).toEqual(['A>B', 'B>C']);
     expect(marks.ends).toEqual([{ id: 'a', node: 'C', reached: true }, { id: 'b', node: 'B', reached: false }]);
     expect(marks.tokens.map((t) => [t.id, t.node, t.slot])).toEqual([['a', 'C', 0], ['b', 'B', 1]]);
+  });
+});
+
+describe('the gaps the card draws', () => {
+  const gaps = [
+    { id: 'r2@A', node: 'A', label: 'Holidays' },
+    { id: 'r3@A', node: 'A', label: 'Manifest' },
+    { id: 'r3@B', node: 'B', label: 'Manifest' },
+    { id: 'r4@B', node: 'B', label: 'Logo' },
+  ];
+
+  it('are only those clicked in the paths shown; the rest count per node', () => {
+    const { shown, hidden } = gapsShown(gaps, new Set(['r3@B']));
+    expect(shown).toEqual([{ id: 'r3@B', node: 'B', label: 'Manifest' }]);
+    expect(Object.fromEntries(hidden)).toEqual({ A: 2, B: 1 });
+  });
+
+  it('are none before any path, only the counts', () => {
+    const { shown, hidden } = gapsShown(gaps, new Set());
+    expect(shown).toEqual([]);
+    expect(Object.fromEntries(hidden)).toEqual({ A: 2, B: 2 });
+  });
+
+  it("are the stored paths' steps that hit a gap, on the node each was on", () => {
+    const hit = gapsHitIn([
+      { steps: [{ node: 'A', outcome: 'navigated', reading: null }, { node: 'B', outcome: 'missing', reading: 'r3' }, { node: 'B', outcome: null, reading: null }] },
+      { steps: [{ node: 'A', outcome: 'missing', reading: 'r2' }, { node: 'A', outcome: 'accepted', reading: 'r9' }] },
+    ]);
+    expect([...hit].sort()).toEqual(['r2@A', 'r3@B']);
   });
 });
 

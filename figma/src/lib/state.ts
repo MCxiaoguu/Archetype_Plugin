@@ -1,4 +1,5 @@
 import type { DeviceCode, RunPath, RunRowApi, StudyStatusValue } from './api';
+import { gapId } from './flowLayout';
 import type { FlowMap } from './proto/flow';
 import { isRunSize } from './form';
 import { DEFAULT_SETTINGS, type Draft, type InitPayload, type Settings, type StudyRecord } from './messages';
@@ -52,9 +53,11 @@ export interface FlowCard {
   followNote: string | null;
   /** The screen each persona last saw on a node, by node: a visited node shows it. */
   shots: Record<string, Uint8Array>;
+  /** The gaps the personas this panel runs clicked, by gapId: the card draws those. */
+  gapsHit: string[];
 }
 
-export const EMPTY_FLOW: FlowCard = { map: null, paths: null, error: null, cleared: false, following: null, followNote: null, shots: {} };
+export const EMPTY_FLOW: FlowCard = { map: null, paths: null, error: null, cleared: false, following: null, followNote: null, shots: {}, gapsHit: [] };
 
 /** What stands between the form and a launch (spec, Data flow 1). */
 export type LaunchGate =
@@ -383,9 +386,14 @@ export function reducer(state: AppState, action: Action): AppState {
       return { ...state, notice: action.notice };
     case 'gate':
       return { ...state, gate: action.gate };
-    case 'session':
+    case 'session': {
       if (state.study?.id !== action.studyId) return state;
-      return patchStudy(state, { live: { ...state.study.live, [action.status.runId]: action.status } });
+      const move = action.status.move;
+      const flow = state.study.flow;
+      const gap = move && move.outcome === 'missing' && move.reading ? gapId(move.reading, move.to) : null;
+      const gapsHit = gap && !flow.gapsHit.includes(gap) ? [...flow.gapsHit, gap] : flow.gapsHit;
+      return patchStudy(state, { live: { ...state.study.live, [action.status.runId]: action.status }, flow: gapsHit === flow.gapsHit ? flow : { ...flow, gapsHit } });
+    }
     case 'runner':
       if (state.study?.id !== action.studyId) return state;
       return patchStudy(state, { runner: action.status });

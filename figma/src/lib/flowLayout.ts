@@ -172,7 +172,7 @@ export function graphOf(map: FlowMap): { nodes: LayoutNode[]; edges: LayoutEdge[
   for (const r of map.readings) {
     const on = [...new Set(r.nodes)];
     if (r.kind === 'edge') for (const n of on) edges.push({ from: n, to: r.to as string, inferred: true });
-    if (r.kind === 'gap') for (const n of on) gaps.push({ id: `${r.id}@${n}`, node: n, label: r.label });
+    if (r.kind === 'gap') for (const n of on) gaps.push({ id: gapId(r.id, n), node: n, label: r.label });
   }
   return { nodes: map.nodes.map((n) => ({ id: n.id, name: n.name, kind: n.kind })), edges, gaps };
 }
@@ -183,7 +183,7 @@ export interface Walker {
   id: string;
   name: string;
   node: string;
-  move: { from: string; to: string; outcome: string; label: string | null; turn: number } | null;
+  move: { from: string; to: string; outcome: string; label: string | null; reading: string | null; turn: number } | null;
   /** Null while the run goes on. */
   ended: 'reached' | 'stopped' | null;
 }
@@ -238,3 +238,28 @@ export function pastMarks(paths: Array<{ runId: string; archetypeName: string; e
 }
 
 export { edgeKey };
+
+/** A gap's id in the card's graph: the reading's on one node (graphOf). */
+export const gapId = (reading: string, node: string) => `${reading}@${node}`;
+
+/**
+ * The gaps the card draws: only those a persona clicked in the paths shown
+ * (by gapId); the rest are a count per node, listed in Edit map.
+ */
+export function gapsShown(gaps: LayoutGap[], hit: ReadonlySet<string>): { shown: LayoutGap[]; hidden: Map<string, number> } {
+  const shown: LayoutGap[] = [];
+  const hidden = new Map<string, number>();
+  for (const g of gaps) {
+    if (hit.has(g.id)) shown.push(g);
+    else hidden.set(g.node, (hidden.get(g.node) ?? 0) + 1);
+  }
+  return { shown, hidden };
+}
+
+/** The gaps the stored paths clicked: each step whose outcome was missing, on its node. */
+export function gapsHitIn(paths: ReadonlyArray<{ steps: ReadonlyArray<{ node: string; outcome: string | null; reading: string | null }> }>): Set<string> {
+  const hit = new Set<string>();
+  for (const p of paths) for (const st of p.steps) if (st.outcome === 'missing' && st.reading) hit.add(gapId(st.reading, st.node));
+  return hit;
+}
+

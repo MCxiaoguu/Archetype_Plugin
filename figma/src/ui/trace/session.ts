@@ -79,6 +79,8 @@ export interface SessionMove {
   to: string;
   outcome: TraceOutcome;
   label: string | null;
+  /** The flow map reading that decided the outcome; null when the prototype did. */
+  reading: string | null;
   /** The turn the action was chosen on. */
   turn: number;
 }
@@ -580,7 +582,7 @@ export async function runSession(run: SessionRun, deps: SessionDeps): Promise<Se
       throw engineAbort(err, `Playing turn ${turn}'s ${action.type}`);
     }
     const label = 'element' in action && action.element ? listed.elements.find((e) => e.id === action.element)?.label ?? null : null;
-    move = { from: nodeOf(state), to: nodeOf(applied.state), outcome: applied.outcome, label, turn };
+    move = { from: nodeOf(state), to: nodeOf(applied.state), outcome: applied.outcome, label, reading: applied.reading?.id ?? null, turn };
     state = applied.state;
     if (action.type === 'wait') {
       // What a wait fires is a timer's doing, reported with the next turn.

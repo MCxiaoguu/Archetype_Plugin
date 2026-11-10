@@ -208,6 +208,17 @@ describe('panel state machine', () => {
     expect(reducer(s, { type: 'open-study', record, now: 9 }).study?.flow).toEqual(EMPTY_FLOW);
   });
 
+  it('keeps the gaps the live personas clicked, once each, for the card to draw', () => {
+    let s = run([{ type: 'launch-started', now: 1 }, { type: 'study-created', record }], init());
+    const status = { runId: 'r1', phase: 'acting' as const, frameName: 'Connect bank', node: '2:20', turn: 4, notices: [], ended: null };
+    const gap = { from: '2:20', to: '2:20', outcome: 'missing', label: 'Use routing number instead', reading: 'r4', turn: 3 };
+    s = reducer(s, { type: 'session', studyId: 's1', status: { ...status, move: gap } });
+    s = reducer(s, { type: 'session', studyId: 's1', status: { ...status, move: gap } });
+    s = reducer(s, { type: 'session', studyId: 's1', status: { ...status, move: { ...gap, outcome: 'accepted', reading: 'r8' } } });
+    s = reducer(s, { type: 'session', studyId: 's1', status: { ...status, move: { ...gap, outcome: 'nothing_happened', reading: null } } });
+    expect(s.study?.flow.gapsHit).toEqual(['r4@2:20']);
+  });
+
   it('keeps what each session and the runner in this panel say, for their own study only', () => {
     let s = run([{ type: 'launch-started', now: 1 }, { type: 'study-created', record }], init());
     const status = { runId: 'r1', phase: 'thinking' as const, frameName: 'Connect bank', node: '2:20', turn: 3, notices: [], ended: null, move: null };

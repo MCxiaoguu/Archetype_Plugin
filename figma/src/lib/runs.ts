@@ -17,7 +17,7 @@ export interface LiveRun {
   /** How the run ended, once it has. */
   ended: { status: string; reason: string | null } | null;
   /** Where the last action took the persona, from node to node, and what it did. */
-  move: { from: string; to: string; outcome: string; label: string | null; turn: number } | null;
+  move: { from: string; to: string; outcome: string; label: string | null; reading: string | null; turn: number } | null;
 }
 
 /**
