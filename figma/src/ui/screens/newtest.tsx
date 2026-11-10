@@ -54,6 +54,7 @@ function FramePicker(props: {
         class="pick-select"
         value={value ?? ''}
         aria-invalid={props.error ? true : undefined}
+        aria-describedby={props.error ? `${selId}-err` : undefined}
         onChange={(e) => store.dispatch({ type: 'pick', role, nodeId: (e.currentTarget as HTMLSelectElement).value || null })}
       >
         <option value="">{role === 'start' ? 'Choose a start frame' : 'Choose the goal frame'}</option>
@@ -61,6 +62,11 @@ function FramePicker(props: {
           <option value={f.id}>{flowNames.has(f.id) ? `${f.name}  (flow: ${flowNames.get(f.id)})` : f.name}</option>
         ))}
       </select>
+      {props.error && (
+        <p class="field-error" id={`${selId}-err`}>
+          {props.error}
+        </p>
+      )}
     </div>
   );
 }

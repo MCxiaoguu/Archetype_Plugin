@@ -12,7 +12,8 @@ export function SignIn({ state, fx }: { state: AppState; fx: Effects }) {
       <div class="screen signin">
         <div class="signin-code-card">
           <p class="eyebrow">Confirm in your browser</p>
-          <p class="user-code" aria-label={`Your code is ${code.user_code.split('').join(' ')}`}>
+          <p class="sr-only">Your code is {code.user_code.split('').join(' ')}</p>
+          <p class="user-code" aria-hidden="true">
             {code.user_code}
           </p>
           <p class="muted">We opened Archetype in your browser. Check that it shows this code, then approve. This panel continues on its own.</p>

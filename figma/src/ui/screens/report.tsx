@@ -49,7 +49,7 @@ export function Report({ state, fx }: { state: AppState; fx: Effects }) {
         </header>
         {view.partial && <Banner kind="info">Some tries are still running; this report covers {plural(view.runsScored, 'finished try', 'finished tries')}.</Banner>}
 
-        <div class="score" aria-label={`${k} of ${n} tries reached the goal`}>
+        <div class="score" role="group" aria-label={`${k} of ${n} tries reached the goal`}>
           <div class="score-num">
             <span class="score-k">{k}</span>
             <span class="score-n">of {n}</span>
