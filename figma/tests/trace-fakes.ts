@@ -42,6 +42,7 @@ export async function mainThread(edit: (fake: Fake) => void = () => {}, log: str
     if (type === 'trace-read') {
       const importLibraryVariants = payload.importLibraryVariants as boolean;
       gate.reads.push(importLibraryVariants);
+      log.push('read');
       if (gate.readTimeouts > 0) {
         gate.readTimeouts--;
         throw new BridgeTimeout('trace-read', 120_000);

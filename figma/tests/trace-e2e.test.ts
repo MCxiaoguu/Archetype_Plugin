@@ -6,7 +6,7 @@ import { start } from '../src/lib/proto/engine';
 import type { ProtoDoc } from '../src/lib/proto/model';
 import type { RunnerStatus } from '../src/lib/runs';
 import { heldContainers, SCRATCH_KEY, SCRATCH_VALUE } from '../src/main/scratch';
-import { runStudy, WAVE_RETRY_MS, type RunnerResult } from '../src/ui/trace/runner';
+import { runStudy, WAVE_RETRY_MS, type DocRead, type RunnerResult } from '../src/ui/trace/runner';
 import { NOTICE, runSession, type SessionResult, type SessionStatus } from '../src/ui/trace/session';
 import type { FakeNode } from './fake-figma';
 import { frame, protoDoc } from './trace-fixtures';
@@ -60,7 +60,7 @@ function persona(
   opts: { startFrameId?: string; resume?: SavedSession | null; sleep?: (ms: number) => Promise<void>; statuses?: SessionStatus[] } = {},
 ): Promise<SessionResult> {
   return runSession(
-    { runId, studyId: STUDY, owner: OWNER, doc, shareKey: null, startFrameId: opts.startFrameId ?? '1:2', resume: opts.resume ?? null },
+    { runId, studyId: STUDY, owner: OWNER, doc, shareKey: null, startFrameId: opts.startFrameId ?? '1:2', resume: opts.resume ?? null, fileChanged: false },
     {
       bridge: plugin.bridge,
       api: client,
@@ -253,7 +253,7 @@ describe('closing the plugin mid-run', () => {
     // The designer closes the plugin while turn 3 is thinking.
     await expect(
       runSession(
-        { runId: 'run-resume', studyId: RESUME, owner: OWNER, doc, shareKey: null, startFrameId: '1:2', resume: null },
+        { runId: 'run-resume', studyId: RESUME, owner: OWNER, doc, shareKey: null, startFrameId: '1:2', resume: null, fileChanged: false },
         {
           bridge: first.bridge, api: client, now: () => Date.now(), onStatus: () => {}, watchFile: first.watchFile, signal: first.signal,
           sleep: closeWhen(first, () => !!mock.trace.runs.get('run-resume')?.turns.has(3)),
@@ -274,7 +274,7 @@ describe('closing the plugin mid-run', () => {
 
     mock.trace.release('run-resume', 'reopened');
     const result = await runSession(
-      { runId: 'run-resume', studyId: RESUME, owner: OWNER, doc: reread, shareKey: null, startFrameId: '1:2', resume: saved },
+      { runId: 'run-resume', studyId: RESUME, owner: OWNER, doc: reread, shareKey: null, startFrameId: '1:2', resume: saved, fileChanged: false },
       { bridge: second.bridge, api: client, now: () => Date.now(), sleep: tick, onStatus: () => {}, watchFile: second.watchFile },
     );
     expect(result).toEqual({ runId: 'run-resume', ended: { status: 'finalizing', reason: 'done' }, stop: 'ended', message: null });
@@ -364,7 +364,7 @@ describe('a wave whose sessions save at once', () => {
     const closing = (runId: string) => closeWhen(first, () => ['run-a', 'run-b'].every((id) => mock.trace.runs.get(id)?.turns.has(2)));
     const started = ['run-a', 'run-b'].map((runId) =>
       runSession(
-        { runId, studyId: 'study-together', owner: OWNER, doc, shareKey: null, startFrameId: '1:2', resume: null },
+        { runId, studyId: 'study-together', owner: OWNER, doc, shareKey: null, startFrameId: '1:2', resume: null, fileChanged: false },
         { bridge: first.bridge, api: client, now: () => Date.now(), sleep: closing(runId), onStatus: () => {}, watchFile: first.watchFile, signal: first.signal },
       ),
     );
@@ -377,7 +377,7 @@ describe('a wave whose sessions save at once', () => {
     for (const runId of ['run-a', 'run-b']) mock.trace.release(runId, 'reopened');
     const results = await Promise.all(sessions.map((saved) =>
       runSession(
-        { runId: saved.runId, studyId: 'study-together', owner: OWNER, doc: reread, shareKey: null, startFrameId: '1:2', resume: saved },
+        { runId: saved.runId, studyId: 'study-together', owner: OWNER, doc: reread, shareKey: null, startFrameId: '1:2', resume: saved, fileChanged: false },
         { bridge: second.bridge, api: client, now: () => Date.now(), sleep: tick, onStatus: () => {}, watchFile: second.watchFile },
       )));
     expect(results.map((r) => r.ended)).toEqual([{ status: 'finalizing', reason: 'done' }, { status: 'finalizing', reason: 'done' }]);
@@ -419,7 +419,7 @@ describe('a backend ahead of the saved session', () => {
     const statuses: SessionStatus[] = [];
     await expect(
       runSession(
-        { runId: 'run-ahead', studyId: 'study-ahead', owner: OWNER, doc, shareKey: null, startFrameId: '1:2', resume: null },
+        { runId: 'run-ahead', studyId: 'study-ahead', owner: OWNER, doc, shareKey: null, startFrameId: '1:2', resume: null, fileChanged: false },
         {
           bridge: first.bridge, api: client, now: () => Date.now(), onStatus: (st) => statuses.push(st), watchFile: first.watchFile, signal: first.signal,
           sleep: closeWhen(first, () => !!mock.trace.runs.get('run-ahead')?.turns.has(4)),
@@ -434,7 +434,7 @@ describe('a backend ahead of the saved session', () => {
     expect(sessions.map((s) => s.turn)).toEqual([2]);
     mock.trace.release('run-ahead', 'reopened');
     const result = await runSession(
-      { runId: 'run-ahead', studyId: 'study-ahead', owner: OWNER, doc: reread, shareKey: null, startFrameId: '1:2', resume: sessions[0] as SavedSession },
+      { runId: 'run-ahead', studyId: 'study-ahead', owner: OWNER, doc: reread, shareKey: null, startFrameId: '1:2', resume: sessions[0] as SavedSession, fileChanged: false },
       { bridge: second.bridge, api: client, now: () => Date.now(), sleep: tick, onStatus: () => {}, watchFile: second.watchFile },
     );
     expect(result).toEqual({ runId: 'run-ahead', ended: { status: 'finalizing', reason: 'done' }, stop: 'ended', message: null });
@@ -545,11 +545,11 @@ function study(
   plugin: Plugin,
   doc: ProtoDoc,
   studyId: string,
-  opts: { sleep?: (ms: number) => Promise<void>; runner?: RunnerStatus[] } = {},
+  opts: { sleep?: (ms: number) => Promise<void>; runner?: RunnerStatus[]; read?: DocRead } = {},
 ): Promise<RunnerResult> {
   const clock = panelClock();
   return runStudy(
-    { studyId, owner: OWNER, doc, shareKey: null, startFrameId: '1:2' },
+    { studyId, owner: OWNER, read: opts.read ?? { doc, changed: () => false }, shareKey: null, startFrameId: '1:2' },
     {
       bridge: plugin.bridge,
       api: client,
@@ -559,10 +559,26 @@ function study(
       onSession: () => {},
       onRunner: (status) => opts.runner?.push(status),
       watchFile: plugin.watchFile,
+      readDoc: plugin.readDoc,
       postTurnTimeoutMs: 10_000,
       signal: plugin.signal,
     },
   );
+}
+
+/**
+ * The designer renames the Dashboard and adds a layer to it: the rename is
+ * what a read of the prototype now says, the new layer what the main
+ * thread's watcher reports. Resolves once the panel has heard of it.
+ */
+async function editDashboard(fake: Fake, plugin: Plugin) {
+  const dashboard = fake.nodes.get('1:2') as FakeNode;
+  dashboard.name = 'Home';
+  dashboard.appendChild(fake.api.createRectangle() as unknown as FakeNode);
+  const heard = plugin.posted.filter((m) => m.type === 'trace-file-changed').length;
+  for (let i = 0; i < 50 && plugin.posted.filter((m) => m.type === 'trace-file-changed').length === heard; i++) await tick();
+  if (plugin.posted.filter((m) => m.type === 'trace-file-changed').length === heard) throw new Error('The main thread never reported the edit');
+  await tick();
 }
 
 /** A scratch container a crashed render left on the page, as the renderer marks it. */
@@ -790,6 +806,49 @@ describe('a whole study through the runner', () => {
     expect(await second.bridge.call('trace-load', { studyId: 'study-reclaim' })).toEqual({ sessions: [] });
     await second.settled();
     expect([...first.failures, ...second.failures]).toEqual([]);
+  }, 30_000);
+
+  it('reads the prototype again before a new wave, so an edit between waves is what wave 2 plays', async () => {
+    mock.trace.addStudy({
+      studyId: 'study-edit-waves',
+      waves: [
+        [{ runId: 'run-e1', script: [{ expect: 'Dashboard', give_up: 'Not what I need.', debrief: 'debrief' }] }],
+        [{ runId: 'run-e2', repeatIndex: 1, script: [{ expect: 'Home', give_up: 'Not here either.' }] }],
+      ],
+    });
+    const fake = fakeFile();
+    const plugin = openPlugin(fake);
+    const doc = await plugin.bridge.call('trace-read', { importLibraryVariants: true });
+    const clock = panelClock();
+    // While wave 1's debrief runs, the designer edits the start screen.
+    let edited = false;
+    const sleep = async (ms: number) => {
+      if (ms === WAVE_RETRY_MS && !edited) {
+        edited = true;
+        await editDashboard(fake, plugin);
+        mock.trace.release('run-e1', 'debrief');
+      }
+      await clock.sleep(ms);
+    };
+    const result = await study(plugin, doc, 'study-edit-waves', { sleep });
+    expect(result).toMatchObject({ stop: 'done', sessions: [{ runId: 'run-e1', stop: 'ended' }, { runId: 'run-e2', stop: 'ended' }] });
+    expect(bodiesOf('run-e1')[0]?.screen.title).toBe('Dashboard');
+    // Wave 2 plays the file as it is now, read after the edit: nothing changed since that read.
+    expect(bodiesOf('run-e2')[0]).toMatchObject({ screen: { title: 'Home' }, flags: [] });
+    expect(refusalsOf('run-e1', 'run-e2')).toEqual([]);
+  }, 30_000);
+
+  it('flags a session that starts on a read the file changed after', async () => {
+    mock.trace.addStudy({ studyId: 'study-edit-early', waves: [[{ runId: 'run-e3', script: [{ expect: 'Dashboard', give_up: 'Gone.' }] }]] });
+    const fake = fakeFile();
+    const plugin = openPlugin(fake);
+    const read = await plugin.readDoc();
+    // Edited after the read, before the runner claims and starts the run.
+    await editDashboard(fake, plugin);
+    expect(read.changed()).toBe(true);
+    const result = await study(plugin, read.doc, 'study-edit-early', { read });
+    expect(result).toMatchObject({ stop: 'done', sessions: [{ runId: 'run-e3', stop: 'ended' }] });
+    expect(bodiesOf('run-e3')[0]?.flags).toEqual(['file_changed']);
   }, 30_000);
 
   it('resumes every run from its turn 0 save when the plugin closes before any turn was played', async () => {

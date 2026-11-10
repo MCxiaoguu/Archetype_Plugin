@@ -293,7 +293,8 @@ describe.skipIf(!LIVE.url)('a live trace study against the local backend', () =>
       // The study runner, as the panel runs it: claim every queued run, play them side by side, next waves until done.
       const sessionsAt = Date.now();
       const result = await runStudy(
-        { studyId, owner: OWNER, doc, shareKey: null, startFrameId: START },
+        // The doc was read just above, and nothing edits the fake file during the run.
+        { studyId, owner: OWNER, read: { doc, changed: () => false }, shareKey: null, startFrameId: START },
         {
           bridge: plugin.bridge,
           api: recordingApi,
@@ -307,6 +308,7 @@ describe.skipIf(!LIVE.url)('a live trace study against the local backend', () =>
           },
           onRunner: (status) => runner.push(status),
           watchFile: plugin.watchFile,
+          readDoc: plugin.readDoc,
           postTurnTimeoutMs: POST_TURN_TIMEOUT_MS,
           signal: plugin.signal,
         },

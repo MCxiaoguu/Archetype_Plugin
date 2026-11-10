@@ -12,6 +12,7 @@ import type { MainToUi, TraceRequestMessage, UiToMain } from '../src/lib/message
 import { isScratch } from '../src/main/scratch';
 import { createTraceMain } from '../src/main/trace';
 import { createBridge, panelTransport } from '../src/ui/trace/bridge';
+import type { DocRead } from '../src/ui/trace/runner';
 import { fakeFromFixture, type FakeNode, type ProtoFixture } from './fake-figma';
 
 export type Fake = ReturnType<typeof fakeFromFixture>;
@@ -89,6 +90,9 @@ export function openPlugin(fake: Fake) {
     onMain((msg) => {
       if (msg.type === 'trace-file-changed') onChange(msg.frameIds);
     });
+  /** File edits the main thread reported, as the panel counts them for its latch (ui/trace/launch.ts). */
+  let edits = 0;
+  watchFile(() => void edits++);
   return {
     main,
     bridge,
@@ -97,6 +101,12 @@ export function openPlugin(fake: Fake) {
     failures,
     watchFile,
     signal: closing.signal,
+    /** Reads the prototype as the panel does, knowing whether the file changed since the read was sent. */
+    async readDoc(): Promise<DocRead> {
+      const at = edits;
+      const doc = await bridge.call('trace-read', { importLibraryVariants: true });
+      return { doc, changed: () => edits > at };
+    },
     /** Resolves once the main thread answered every request it took, the ones under way when the plugin closed too. */
     async settled() {
       while (answering.size) await Promise.all([...answering]);

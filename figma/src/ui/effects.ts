@@ -174,7 +174,7 @@ export function createEffects(store: Store, deps: EffectsDeps = {}) {
           importLibraryVariants,
         },
       };
-      trace.launchedOn(study.studyId, doc);
+      trace.launchedOn(study.studyId);
       toMain({ type: 'save-study', record });
       store.dispatch({ type: 'study-created', record });
       await proceed(gen);

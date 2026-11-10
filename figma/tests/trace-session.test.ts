@@ -101,6 +101,7 @@ async function play(
     shareKey: null,
     startFrameId: '1:2',
     resume: null,
+    fileChanged: false,
     ...options.run?.(main.doc),
   };
   let result: SessionResult | null = null;
@@ -279,6 +280,12 @@ describe('flags', () => {
     expect(lastOf(statuses).notices.some((n) => n.includes('Inter Display'))).toBe(true);
   });
 
+  it('flags every turn when the file changed after the read the session starts on', async () => {
+    const { posted, statuses } = await play((b) => (b.turn < 2 ? { action: click(b, 'Billing') } : DONE), { run: () => ({ fileChanged: true }) });
+    expect(posted.map((b) => b.flags)).toEqual([['file_changed'], ['file_changed']]);
+    expect(statuses[0]?.notices).toContain(NOTICE.fileChanged);
+  });
+
   it('flags every turn after the main thread says the file changed', async () => {
     let tell: (ids: string[]) => void = () => {};
     const unwatch = vi.fn();
@@ -442,7 +449,7 @@ describe('when things go wrong', () => {
     });
     const time = clock();
     const result = await runSession(
-      { runId: 'r1', studyId: 's1', owner: 'p_7f3a', doc: main.doc, shareKey: null, startFrameId: '1:2', resume },
+      { runId: 'r1', studyId: 's1', owner: 'p_7f3a', doc: main.doc, shareKey: null, startFrameId: '1:2', resume, fileChanged: false },
       { bridge: main.bridge, api: server.api, now: time.now, sleep: time.sleep, onStatus: () => {}, watchFile: () => () => {} },
     );
     return { result, server };

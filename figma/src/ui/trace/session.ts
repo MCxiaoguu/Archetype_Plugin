@@ -59,6 +59,8 @@ export interface SessionRun {
   startFrameId: string;
   /** Where a run this panel owns stopped, when the panel reopened; null for a new claim. */
   resume: SavedSession | null;
+  /** The main thread reported the file changed since `doc` was read: every turn is flagged from the first. */
+  fileChanged: boolean;
 }
 
 export type SessionPhase = 'acting' | 'thinking' | 'paused' | 'ended';
@@ -230,7 +232,7 @@ export async function runSession(run: SessionRun, deps: SessionDeps): Promise<Se
   const notices: string[] = [];
   let phase: SessionPhase = 'acting';
   let lateNoticed = false;
-  let fileChanged = false;
+  let fileChanged = run.fileChanged;
   /** Effects timers fired since the last turn posted, reported with the next `last`. */
   let pendingEffects: TimerEffect[] = [];
   /** Frames a loop of timers ran through since the last turn posted. */
@@ -631,6 +633,7 @@ export async function runSession(run: SessionRun, deps: SessionDeps): Promise<Se
     notice(NOTICE.fileChanged);
   });
   try {
+    if (fileChanged) notice(NOTICE.fileChanged);
     if (run.resume && (run.resume.owner !== run.owner || run.resume.runId !== run.runId)) {
       throw new Error(`The saved session of ${run.resume.runId} belongs to another panel or run.`);
     }

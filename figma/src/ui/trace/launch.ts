@@ -12,7 +12,7 @@ import type { RunnerStatus } from '../../lib/runs';
 import { toMain } from '../bridge';
 import type { Store } from '../store';
 import { BridgeError, createBridge, panelTransport, type Bridge } from './bridge';
-import { runStudy } from './runner';
+import { runStudy, type DocRead } from './runner';
 
 /** A read that imports library components can take longer than the bridge's 30 s. */
 export const READ_TIMEOUT_MS = 120_000;
@@ -40,8 +40,15 @@ export function createTracePanel(deps: TracePanelDeps) {
   const bridge = () => (line ??= createBridge(panelTransport()));
   /** The read the gate passed, or holds while the designer reads what an import couldn't add. */
   let gated: GatedRead | null = null;
-  /** The ProtoDoc read at launch, for the runner of the study it created. */
-  let launched: { studyId: string; doc: ProtoDoc } | null = null;
+  /**
+   * The file edits the main thread reported since the panel opened. A read
+   * notes the count when it is sent: an edit after that (during the read
+   * too) means the doc it gave may not be the file any more, and the
+   * sessions started on it are flagged (spec, Error handling).
+   */
+  let edits = 0;
+  /** Studies this panel just launched through the gate, whose edit access it checked moments ago. */
+  const launching = new Set<string>();
   /** Studies whose runner is going: one runner per study, through retries and sign ins. */
   const runners = new Set<string>();
   const fileWatchers = new Set<(frameIds: string[]) => void>();
@@ -68,6 +75,13 @@ export function createTracePanel(deps: TracePanelDeps) {
       const [a, b] = [deps.message(first), deps.message(second)];
       throw new Error(a === b ? b : `${b} (the first try: ${a})`);
     }
+  }
+
+  /** A read for a runner: the doc, and whether the file changed since the read was sent. */
+  async function readForRunner(importLibraryVariants: boolean): Promise<DocRead> {
+    const at = edits;
+    const doc = await read(importLibraryVariants);
+    return { doc, changed: () => edits > at };
   }
 
   /**
@@ -123,8 +137,9 @@ export function createTracePanel(deps: TracePanelDeps) {
     return gated;
   }
 
-  function launchedOn(studyId: string, doc: ProtoDoc) {
-    launched = { studyId, doc };
+  /** The gate passed for this study's launch: its runner needn't check edit access again. */
+  function launchedOn(studyId: string) {
+    launching.add(studyId);
   }
 
   /**
@@ -132,6 +147,9 @@ export function createTracePanel(deps: TracePanelDeps) {
    * it owns. Call it only while the study is running. One runner per study:
    * a retry or a sign in while it goes on leaves it be. A test runs on the
    * page it was launched on; from another page, the designer goes there first.
+   * The runner plays the prototype read here, as the file is now (the launch
+   * gate's read can be minutes old by the time the study runs), and reads it
+   * again for each new wave.
    */
   function start() {
     const st = store.get().study;
@@ -155,24 +173,23 @@ export function createTracePanel(deps: TracePanelDeps) {
       store.dispatch({ type: 'launch-failed', message: text });
     };
     (async () => {
-      const fresh = launched?.studyId === studyId;
-      if (!fresh) {
-        // The launch gate checked edit access; a reopened panel checks again before it resumes anything.
+      // Edit access, checked by the launch gate, can be gone in a reopened panel: check before resuming anything.
+      if (!launching.has(studyId)) {
         const check = await bridge().call('trace-scratch-check', {});
         if (!check.ok) {
           stop('failed', `${check.reason} (${check.detail})`);
           return null;
         }
       }
-      const doc = fresh && launched ? launched.doc : await read(trace.importLibraryVariants);
-      if (fresh) launched = null;
+      launching.delete(studyId);
+      const first = await readForRunner(trace.importLibraryVariants);
       // The designer changed page while the read ran.
-      if (doc.pageId !== trace.pageId) {
+      if (first.doc.pageId !== trace.pageId) {
         otherPage();
         return null;
       }
       return runStudy(
-        { studyId, owner: trace.owner, doc, shareKey: trace.shareKey, startFrameId: trace.startFrameId },
+        { studyId, owner: trace.owner, read: first, shareKey: trace.shareKey, startFrameId: trace.startFrameId },
         {
           bridge: bridge(),
           api: deps.api(),
@@ -185,6 +202,7 @@ export function createTracePanel(deps: TracePanelDeps) {
             fileWatchers.add(onChange);
             return () => fileWatchers.delete(onChange);
           },
+          readDoc: () => readForRunner(trace.importLibraryVariants),
           signal: closing.signal,
         },
       );
@@ -231,6 +249,7 @@ export function createTracePanel(deps: TracePanelDeps) {
   }
 
   function fileChanged(frameIds: string[]) {
+    edits++;
     for (const onChange of fileWatchers) onChange(frameIds);
   }
 

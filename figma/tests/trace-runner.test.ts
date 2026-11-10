@@ -146,7 +146,7 @@ async function runner(
   const time = clock();
   const sessions: SessionStatus[] = [];
   const statuses: RunnerStatus[] = [];
-  const study: StudyTrace = { studyId: 's1', owner: OWNER, doc: main.doc, shareKey: null, startFrameId: '1:2', ...opts.study?.(main) };
+  const study: StudyTrace = { studyId: 's1', owner: OWNER, read: { doc: main.doc, changed: () => false }, shareKey: null, startFrameId: '1:2', ...opts.study?.(main) };
   let result: RunnerResult | null = null;
   let error: unknown = null;
   try {
@@ -159,6 +159,8 @@ async function runner(
       onSession: (s) => sessions.push(s),
       onRunner: (s) => statuses.push(s),
       watchFile: () => () => {},
+      // The panel reads the prototype again for each new wave; the file never changes here.
+      readDoc: async () => ({ doc: await main.bridge.call('trace-read', { importLibraryVariants: false }), changed: () => false }),
       signal: opts.signal,
     });
   } catch (err) {
@@ -221,12 +223,36 @@ describe('running a study in the panel', () => {
   it('asks for the next wave once every session ended, waits through wave_in_progress, and stops at done', async () => {
     const { result, log, time, statuses, claims } = await runner(shortWalk, { runs: [{ runId: 'r1', status: 'queued' }], waves: [['r2', 'r3']], busy: 3 });
     const steps = log.filter((l) => !l.startsWith('save') && !l.startsWith('post'));
-    expect(steps).toEqual(['claim r1', 'cleanup', 'next', 'next', 'next', 'next', 'claim r2', 'claim r3', 'cleanup', 'next']);
+    expect(steps).toEqual(['claim r1', 'cleanup', 'next', 'next', 'next', 'next', 'read', 'claim r2', 'claim r3', 'cleanup', 'next']);
     expect(time.waits.filter((w) => w === WAVE_RETRY_MS)).toHaveLength(3);
     expect(statuses.map((s) => s.phase)).toEqual(expect.arrayContaining(['running', 'next_wave', 'done']));
     expect(claims.map((c) => c.body.owner)).toEqual([OWNER, OWNER, OWNER]);
     expect(result).toMatchObject({ stop: 'done', reason: 'every wave ran' });
     expect(result.sessions.map((s) => s.runId)).toEqual(['r1', 'r2', 'r3']);
+  });
+
+  it('reads the prototype again before claiming a new wave, and plays the wave on the file as it is then', async () => {
+    const main = await mainThread();
+    // Between the waves the designer renamed the Dashboard.
+    main.gate.readAs = () => {
+      const doc = structuredClone(main.doc);
+      return { ...doc, docHash: 'edited', frames: doc.frames.map((f) => (f.id === '1:2' ? { ...f, name: 'Home' } : f)) };
+    };
+    const { posted, log } = await runner(shortWalk, { main, runs: [{ runId: 'r1', status: 'queued' }], waves: [['r2']] });
+    expect(log.indexOf('read')).toBeGreaterThan(log.indexOf('save r1 null'));
+    expect(log.indexOf('read')).toBeLessThan(log.indexOf('claim r2'));
+    expect(postsOf(posted, 'r1')[0]?.screen.title).toBe('Dashboard');
+    expect(postsOf(posted, 'r2')[0]?.screen.title).toBe('Home');
+    expect(postsOf(posted, 'r2')[0]?.flags).toEqual([]);
+  });
+
+  it('flags every session it starts on a read the file changed after', async () => {
+    const { posted } = await runner(shortWalk, {
+      runs: [{ runId: 'r1', status: 'queued' }, { runId: 'r2', status: 'queued' }],
+      study: (main) => ({ read: { doc: main.doc, changed: () => true } }),
+    });
+    expect(postsOf(posted, 'r1').map((b) => b.flags)).toEqual([['file_changed'], ['file_changed']]);
+    expect(postsOf(posted, 'r2')[0]?.flags).toEqual(['file_changed']);
   });
 
   it('stops waiting for the next wave after 5 minutes, naming the open runs this panel is not running', async () => {

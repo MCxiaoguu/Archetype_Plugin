@@ -2,7 +2,9 @@
  * A whole plugin-mode study in the panel (spec, Data flow 3, 9 and 10). The
  * runner claims every queued run of the wave under this panel's owner id,
  * runs their sessions side by side, and once all of them ended asks the
- * backend for the next wave, until it says the study is done. When the
+ * backend for the next wave, until it says the study is done. Each new wave
+ * plays the prototype read again for it, so the file as it is then; a
+ * session that starts on a read the file changed after is flagged. When the
  * panel reopens, it first resumes the runs it owns; when it closes (the
  * signal), every session stops where it is, to resume then.
  *
@@ -13,7 +15,7 @@
 import { ApiError, type ApiClient, type ClaimBody, type NextWave, type RunRowApi, type StudyRuns } from '../../lib/api';
 import { SAVED_SESSION_VERSION, type SavedSession } from '../../lib/messages';
 import { start } from '../../lib/proto/engine';
-import type { ProtoDoc } from '../../lib/proto/model';
+import type { ProtoDoc, TraceState } from '../../lib/proto/model';
 import { isTerminalRun } from '../../lib/poll';
 import type { RunnerStatus } from '../../lib/runs';
 import type { Bridge } from './bridge';
@@ -23,12 +25,18 @@ import { NOTICE, pauseFor, RETRY_FIRST_MS, RETRY_MAX_MS, runSession, type Sessio
 export const WAVE_WAIT_MS = 5 * 60_000;
 export const WAVE_RETRY_MS = 5_000;
 
+/** A read of the prototype, and whether the main thread reported the file changed since the read was sent. */
+export interface DocRead {
+  doc: ProtoDoc;
+  changed: () => boolean;
+}
+
 export interface StudyTrace {
   studyId: string;
   /** This panel's id for the study's runs: every claim, turn and abort carries it. */
   owner: string;
-  /** The prototype, read at launch or again when the panel reopened. */
-  doc: ProtoDoc;
+  /** The prototype, read for this runner as it starts. */
+  read: DocRead;
   /** The share link's file key; null without a link. */
   shareKey: string | null;
   startFrameId: string;
@@ -44,6 +52,8 @@ export interface RunnerDeps {
   onSession: (status: SessionStatus) => void;
   onRunner: (status: RunnerStatus) => void;
   watchFile: SessionDeps['watchFile'];
+  /** Reads the prototype again, for a new wave. */
+  readDoc: () => Promise<DocRead>;
   postTurnTimeoutMs?: number;
   /** Fires when the panel closes. */
   signal?: AbortSignal;
@@ -106,10 +116,19 @@ async function run(study: StudyTrace, deps: RunnerDeps, results: SessionResult[]
   const checkCancel = () => {
     if (deps.signal?.aborted) throw new Cancelled();
   };
-  // A start frame the engine can't start fails here, before any run is claimed.
-  const startState = start(study.doc, study.startFrameId);
-  const { width, height } = startState.viewport;
-  const claim: ClaimBody = { owner, browser: { engine: 'figma-trace', version: deps.pluginVersion, viewport: [width, height] } };
+  /** The read the runs started from now play; each new wave reads the prototype again. */
+  let current!: DocRead;
+  let startState!: TraceState;
+  let claim!: ClaimBody;
+  /** A start frame the engine can't start fails here, before any run is claimed on the read. */
+  function playOn(read: DocRead) {
+    startState = start(read.doc, study.startFrameId);
+    const { width, height } = startState.viewport;
+    claim = { owner, browser: { engine: 'figma-trace', version: deps.pluginVersion, viewport: [width, height] } };
+    current = read;
+  }
+  playOn(study.read);
+  const readAgain = async () => playOn(await deps.readDoc());
 
   /** Where the runner is, apart from pauses (calls in parallel may pause at once); unset until a session starts. */
   let phase: RunnerStatus['phase'] | null = null;
@@ -157,7 +176,7 @@ async function run(study: StudyTrace, deps: RunnerDeps, results: SessionResult[]
 
   function begin(runId: string, resume: SavedSession | null) {
     if (phase !== 'running') report('running');
-    const run: SessionRun = { runId, studyId, owner, doc: study.doc, shareKey: study.shareKey, startFrameId: study.startFrameId, resume };
+    const run: SessionRun = { runId, studyId, owner, doc: current.doc, shareKey: study.shareKey, startFrameId: study.startFrameId, resume, fileChanged: current.changed() };
     started.set(runId, runSession(run, { bridge, api, now: deps.now, sleep: deps.sleep, onStatus: deps.onSession, watchFile: deps.watchFile, postTurnTimeoutMs: deps.postTurnTimeoutMs, signal: deps.signal }));
   }
 
@@ -238,6 +257,8 @@ async function run(study: StudyTrace, deps: RunnerDeps, results: SessionResult[]
         if (!(err instanceof ApiError && err.code === 'wave_in_progress')) throw err;
         const runs = await readRuns();
         const before = started.size;
+        // Queued runs are a new wave (whose answer was lost, or queued meanwhile): they play the file as it is now.
+        if (runs.some((r) => r.status === 'queued' && !started.has(r.runId))) await readAgain();
         await claimQueued(runs);
         if (started.size > before || refused.length) return 'started';
         since ??= deps.now();
@@ -277,6 +298,7 @@ async function run(study: StudyTrace, deps: RunnerDeps, results: SessionResult[]
       report('done');
       return { stop: 'done', reason: next.reason, sessions: results };
     }
+    await readAgain();
     await claimQueued(next.runs.map((r) => ({ runId: r.runId, archetypeId: r.archetypeId, archetypeName: r.archetypeName, status: 'queued' })));
   }
 }

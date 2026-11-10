@@ -501,14 +501,19 @@ function build(world: FixtureWorld, spec: FixtureNode): FakeNode {
   return node;
 }
 
+/** How many fake files this test process made: each one's new nodes get ids no other's have. */
+let fakeFiles = 0;
+
 /** A fake file built from a prototype fixture, with the variables API, library imports and the API flags. */
 export function fakeFromFixture(fixture: ProtoFixture) {
   let made = 0;
+  // Node ids are unique in a Figma session; the trace's change watchers remember scratch ids for the whole session.
+  const newIds = 1000 + ++fakeFiles;
   const world: FixtureWorld = {
     nodes: new Map(),
     flags: { skipInvisibleInstanceChildren: true },
     log: [],
-    nextId: () => `90:${++made}`,
+    nextId: () => `${newIds}:${++made}`,
     exportFails: null,
   };
   watchChanges(world);

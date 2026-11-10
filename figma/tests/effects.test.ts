@@ -155,7 +155,9 @@ describe('panel effects', () => {
     const record = savedStudies()[0] as StudyRecord;
     expect(record).toMatchObject({ studyId: 's1', startName: 'Dashboard', goalName: 'Bank connected' });
     expect(record.trace).toEqual({ owner: expect.stringMatching(/^p_[0-9a-f]{24}$/), pageId: '0:1', pageName: 'Prototype', startFrameId: '1:2', shareKey: KEY, importLibraryVariants: false });
-    expect(main.gate.reads).toEqual([false]);
+    // The gate's read, then the runner's, as the file is when the study runs; the gate already checked edit access.
+    expect(main.gate.reads).toEqual([false, false]);
+    expect(traceCalls(main).filter((t) => t === 'trace-scratch-check')).toHaveLength(1);
     // The panel claims the run under that owner and runs it.
     expect(claims).toEqual([{ owner: record.trace?.owner, browser: { engine: 'figma-trace', version: '9.9.9', viewport: [1280, 800] } }]);
     expect(turns.map((t) => [t.turn, t.owner, t.screen.title])).toEqual([[1, record.trace?.owner, 'Dashboard']]);
@@ -166,6 +168,47 @@ describe('panel effects', () => {
     expect(main.log).toContain('cleanup');
     expect(sent.map((m) => m.type)).toContain('save-draft');
     expect(lastOf(savedStudies()).outcome).toBe('6 of 15 reached the goal');
+  });
+
+  it('reads the prototype again to run the study, and flags its sessions when the file changed after that read', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const main = await mainThread();
+    let status = 'draft';
+    const run = { runId: 'r1', archetypeId: 'a', archetypeName: 'Baseline founder', role: 'baseline', status: 'queued' };
+    const turns: Array<Record<string, any>> = [];
+    installFetch((method, path, body) => {
+      if (method === 'POST' && path === '/api/studies') return [201, { studyId: 's7', title: 'Connect a bank', status: 'draft' }];
+      if (path === '/api/studies/s7/status') return [200, { studyId: 's7', status }];
+      if (path === '/api/studies/s7/factors') return (status = 'factors_ready'), [200, {}];
+      if (path === '/api/studies/s7/archetypes') return (status = 'archetypes_ready'), [200, {}];
+      if (method === 'POST' && path === '/api/studies/s7/runs') return (status = 'running'), [201, {}];
+      if (path === '/api/studies/s7/runs') return [200, { studyId: 's7', status, runs: [run] }];
+      if (path === '/api/plugin/runs/r1/claim') return (run.status = 'running'), [200, { runId: 'r1', ...BRIEFING }];
+      if (method === 'POST' && path === '/api/plugin/runs/r1/turn') {
+        turns.push(body as Record<string, any>);
+        return [202, { turn: (body as { turn: number }).turn, status: 'thinking' }];
+      }
+      if (path === '/api/plugin/runs/r1/turn/1') {
+        run.status = 'completed';
+        return [200, { turn: 1, status: 'ready', action: { type: 'done', claim: 'Done.' }, state: TURN_STATE, ended: { status: 'completed', reason: 'done' } }];
+      }
+      if (path === '/api/studies/s7/runs/next') return (status = 'complete'), [200, { studyId: 's7', done: true, reason: 'every wave ran', wave: 1 }];
+      if (path === '/api/studies/s7/report') return [200, fixtureReport()];
+      return [404, { error: 'x', message: path }];
+    });
+    const { store, fx } = initStore('tok', main);
+    // The designer edits the start screen while the runner's read is under way, before any session listens.
+    main.gate.readAs = () => {
+      if (main.gate.reads.length === 2) fx.handleMain({ type: 'trace-file-changed', frameIds: ['1:2'] });
+      return structuredClone(main.doc);
+    };
+    fillForm(store);
+    await fx.launch();
+    await runUntil(() => store.get().screen === 'report');
+    vi.useRealTimers();
+    // One read for the launch gate, one for the runner.
+    expect(main.gate.reads).toEqual([false, false]);
+    expect(turns.map((t) => t.flags)).toEqual([['file_changed']]);
   });
 
   it('keeps one runner per study through a sign in or a retry while it runs', async () => {
