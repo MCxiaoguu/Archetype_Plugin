@@ -8,6 +8,7 @@ import {
   type TraceReplyMessage,
   type TraceRequestMessage,
 } from '../src/ui/trace/bridge';
+import type { MainToUi, UiToMain } from '../src/lib/messages';
 import type { ProtoDoc } from '../src/lib/proto/model';
 
 /** An in-process main thread: it records requests and answers when told to. */
@@ -128,31 +129,33 @@ describe('trace bridge', () => {
 });
 
 describe('panel transport', () => {
-  it('posts in the plugin message envelope and passes on only trace replies', () => {
-    const posted: unknown[] = [];
-    const listeners = new Set<(event: MessageEvent) => void>();
-    const target = { postMessage: (message: unknown, origin: string) => posted.push({ message, origin }) };
-    const source = {
-      addEventListener: (_type: 'message', l: (event: MessageEvent) => void) => listeners.add(l),
-      removeEventListener: (_type: 'message', l: (event: MessageEvent) => void) => listeners.delete(l),
-    };
-    const transport = panelTransport(target, source);
+  it('sends on the typed channel and passes on only well formed trace replies', () => {
+    const sent: UiToMain[] = [];
+    const subscribers = new Set<(msg: MainToUi) => void>();
+    const transport = panelTransport(
+      (msg) => sent.push(msg),
+      (handler) => {
+        subscribers.add(handler);
+        return () => subscribers.delete(handler);
+      },
+    );
     transport.send({ type: 'trace-load', requestId: 'q1', studyId: 's1' });
-    expect(posted).toEqual([{ message: { pluginMessage: { type: 'trace-load', requestId: 'q1', studyId: 's1' } }, origin: '*' }]);
+    expect(sent).toEqual([{ type: 'trace-load', requestId: 'q1', studyId: 's1' }]);
 
     const got: TraceReplyMessage[] = [];
     const stop = transport.listen((msg) => got.push(msg));
-    const deliver = (data: unknown) => listeners.forEach((l) => l({ data } as MessageEvent));
-    deliver({ pluginMessage: { type: 'doc', doc: {} } });
-    deliver({ pluginMessage: { type: 'trace-result', result: 1 } });
-    deliver(null);
-    deliver({ pluginMessage: { type: 'trace-result', requestId: 'q1', result: { sessions: [] } } });
-    deliver({ pluginMessage: { type: 'trace-error', requestId: 'q2', message: 'no' } });
+    const deliver = (msg: unknown) => subscribers.forEach((h) => h(msg as MainToUi));
+    deliver({ type: 'doc', doc: {} });
+    deliver({ type: 'trace-file-changed', frameIds: ['1:2'] });
+    deliver({ type: 'trace-result', result: 1 });
+    deliver({ type: 'trace-error', requestId: 'q3' });
+    deliver({ type: 'trace-result', requestId: 'q1', result: { sessions: [] } });
+    deliver({ type: 'trace-error', requestId: 'q2', message: 'no' });
     expect(got).toEqual([
       { type: 'trace-result', requestId: 'q1', result: { sessions: [] } },
       { type: 'trace-error', requestId: 'q2', message: 'no' },
     ]);
     stop();
-    expect(listeners.size).toBe(0);
+    expect(subscribers.size).toBe(0);
   });
 });

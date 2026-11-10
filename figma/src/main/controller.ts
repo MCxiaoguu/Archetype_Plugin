@@ -1,7 +1,8 @@
-import { isSafeWebUrl, PIN_PREFIX, type MainToUi, type Settings, type StudyRecord, type UiToMain } from '../lib/messages';
+import { isSafeWebUrl, isTraceRequest, PIN_PREFIX, type MainToUi, type Settings, type StudyRecord, type UiToMain } from '../lib/messages';
 import { clearPins, pinFindings, showNode } from './canvas';
 import { readDocument, selectedFrame } from './document';
 import * as store from './storage';
+import { createTraceMain } from './trace';
 
 export const MIN_SIZE = { width: 320, height: 420 };
 export const MAX_SIZE = { width: 900, height: 1200 };
@@ -47,10 +48,13 @@ export interface MainController {
   /** Re-read the page and push it to the panel. */
   refreshDoc(): Promise<void>;
   pushSelection(): void;
+  /** Removes scratch containers a crash left behind (at launch and when the plugin closes). */
+  removeLeftovers(): number;
 }
 
 export function createController(api: PluginAPI, pluginVersion: string): MainController {
   const post = (msg: MainToUi) => api.ui.postMessage(msg);
+  const trace = createTraceMain(api, post);
 
   async function refreshDoc() {
     post({ type: 'doc', doc: await readDocument(api) });
@@ -61,6 +65,7 @@ export function createController(api: PluginAPI, pluginVersion: string): MainCon
   }
 
   async function start() {
+    trace.removeLeftovers();
     const [settings, token, doc, history, draft] = await Promise.all([
       store.loadSettings(api),
       store.loadToken(api),
@@ -84,6 +89,11 @@ export function createController(api: PluginAPI, pluginVersion: string): MainCon
 
   async function handle(msg: UiToMain) {
     if (!isObject(msg)) invalid('a message that is not an object');
+    // Answered with trace-result or trace-error, never thrown (bar a missing request id).
+    if (isTraceRequest(msg)) {
+      await trace.handle(msg);
+      return;
+    }
     switch (msg.type) {
       case 'ready':
         await start();
@@ -152,5 +162,5 @@ export function createController(api: PluginAPI, pluginVersion: string): MainCon
     }
   }
 
-  return { start, handle, refreshDoc, pushSelection };
+  return { start, handle, refreshDoc, pushSelection, removeLeftovers: trace.removeLeftovers };
 }

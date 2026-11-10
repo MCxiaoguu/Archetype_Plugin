@@ -1,4 +1,4 @@
-import { DEFAULT_SETTINGS, type Draft, type Settings, type StudyRecord } from '../lib/messages';
+import { DEFAULT_SETTINGS, type Draft, type SavedSession, type Settings, type StudyRecord } from '../lib/messages';
 
 export const KEYS = {
   settings: 'archetype.settings',
@@ -6,6 +6,8 @@ export const KEYS = {
   studies: (fileId: string) => `archetype.file.${fileId}.studies`,
   last: (fileId: string) => `archetype.file.${fileId}.last`,
   draft: (fileId: string) => `archetype.file.${fileId}.draft`,
+  /** The trace sessions this panel runs for a study, by run id. */
+  trace: (fileId: string, studyId: string) => `archetype.file.${fileId}.trace.${studyId}`,
 };
 
 const FILE_ID_KEY = 'archetypeFileId';
@@ -100,4 +102,24 @@ export async function loadDraft(api: PluginAPI): Promise<Partial<Draft> | null> 
 export async function saveDraft(api: PluginAPI, draft: Partial<Draft>): Promise<void> {
   const id = fileId(api, true) as string;
   await api.clientStorage.setAsync(KEYS.draft(id), draft);
+}
+
+async function traceSessions(api: PluginAPI, key: string): Promise<Record<string, SavedSession>> {
+  const stored = await api.clientStorage.getAsync(key);
+  return stored && typeof stored === 'object' ? (stored as Record<string, SavedSession>) : {};
+}
+
+/** The sessions saved for a study, in the order they were first saved. */
+export async function loadTraceSessions(api: PluginAPI, studyId: string): Promise<SavedSession[]> {
+  return Object.values(await traceSessions(api, KEYS.trace(readId(api), studyId)));
+}
+
+/** Saves a run's session, or forgets the run when `session` is null (it ended). */
+export async function saveTraceSession(api: PluginAPI, studyId: string, runId: string, session: SavedSession | null): Promise<void> {
+  const key = KEYS.trace(fileId(api, true) as string, studyId);
+  const sessions = await traceSessions(api, key);
+  if (session) sessions[runId] = session;
+  else delete sessions[runId];
+  if (Object.keys(sessions).length) await api.clientStorage.setAsync(key, sessions);
+  else await api.clientStorage.deleteAsync(key);
 }

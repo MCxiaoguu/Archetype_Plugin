@@ -6,94 +6,37 @@
  * replies. The transport is injected: the panel uses `panelTransport()`,
  * tests and the end-to-end test an in-process main thread.
  *
- * The request and reply payloads are defined here; lib/messages.ts and the
- * main thread's controller use them for the other end (task P7).
+ * The request and reply payloads live in lib/messages.ts, which the main
+ * thread's controller answers them from.
  */
 
-import type { TurnLast } from '../../lib/api';
-import type { ProtoDoc, RawLayer, Size, TraceState } from '../../lib/proto/model';
+import type {
+  MainToUi,
+  TraceCalls,
+  TraceCallType,
+  TraceReplyMessage,
+  TraceRequestMessage,
+  UiToMain,
+} from '../../lib/messages';
+import { onMain, toMain } from '../bridge';
+
+export type {
+  RenderNote,
+  SavedSession,
+  ScratchCheckReply,
+  TraceCalls,
+  TraceCallType,
+  TraceLoadReply,
+  TraceLoadRequest,
+  TraceReadRequest,
+  TraceRenderReply,
+  TraceRenderRequest,
+  TraceReplyMessage,
+  TraceRequestMessage,
+  TraceSaveRequest,
+} from '../../lib/messages';
 
 export const BRIDGE_TIMEOUT_MS = 30_000;
-
-// --- What each call sends and gets back --------------------------------
-
-export interface TraceReadRequest {
-  /** Whether the read may import library variants, which adds them to the designer's file. */
-  importLibraryVariants: boolean;
-}
-
-export interface TraceRenderRequest {
-  doc: ProtoDoc;
-  state: TraceState;
-}
-
-/** A font the render could not load: its text was left as designed. */
-export interface RenderNote {
-  missing_font: string[];
-}
-
-/** One render of a state (main/renderer.ts, spec "One render"). */
-export interface TraceRenderReply {
-  /** The viewport as JPEG bytes. */
-  image: Uint8Array;
-  /** Measured off the copies, in paint order. */
-  layers: RawLayer[];
-  viewport: Size;
-  notes: RenderNote[];
-}
-
-/** What resuming a persona needs (spec, Data flow 7 and 10). */
-export interface SavedSession {
-  owner: string;
-  runId: string;
-  /** The last turn the panel applied. */
-  turn: number;
-  /** Carries the docHash of the ProtoDoc the run started on. */
-  state: TraceState;
-  /** What the next turn reports as `last`; null before the first action. */
-  lastOutcome: TurnLast | null;
-}
-
-export interface TraceSaveRequest {
-  studyId: string;
-  runId: string;
-  /** Null forgets the run (it ended). */
-  session: SavedSession | null;
-}
-
-export interface TraceLoadRequest {
-  studyId: string;
-}
-
-export interface TraceLoadReply {
-  sessions: SavedSession[];
-}
-
-/** The launch gate: whether a scratch container can be made and removed (edit access). */
-export interface ScratchCheckReply {
-  ok: boolean;
-  reason: string | null;
-}
-
-export interface TraceCalls {
-  'trace-read': { request: TraceReadRequest; reply: ProtoDoc };
-  'trace-render': { request: TraceRenderRequest; reply: TraceRenderReply };
-  'trace-save': { request: TraceSaveRequest; reply: null };
-  'trace-load': { request: TraceLoadRequest; reply: TraceLoadReply };
-  'trace-scratch-check': { request: Record<string, never>; reply: ScratchCheckReply };
-}
-
-export type TraceCallType = keyof TraceCalls;
-
-// --- On the wire ---------------------------------------------------------
-
-export type TraceRequestMessage = {
-  [K in TraceCallType]: { type: K; requestId: string } & TraceCalls[K]['request'];
-}[TraceCallType];
-
-export type TraceReplyMessage =
-  | { type: 'trace-result'; requestId: string; result: unknown }
-  | { type: 'trace-error'; requestId: string; message: string };
 
 export interface BridgeTransport {
   send(message: TraceRequestMessage): void;
@@ -101,35 +44,22 @@ export interface BridgeTransport {
   listen(handler: (message: TraceReplyMessage) => void): () => void;
 }
 
-function isReply(value: unknown): value is TraceReplyMessage {
-  if (!value || typeof value !== 'object') return false;
-  const msg = value as { type?: unknown; requestId?: unknown; message?: unknown };
-  if (typeof msg.requestId !== 'string') return false;
-  return msg.type === 'trace-result' || (msg.type === 'trace-error' && typeof msg.message === 'string');
+function isReply(msg: MainToUi): msg is TraceReplyMessage {
+  if (msg.type !== 'trace-result' && msg.type !== 'trace-error') return false;
+  const reply = msg as { requestId?: unknown; message?: unknown };
+  return typeof reply.requestId === 'string' && (msg.type === 'trace-result' || typeof reply.message === 'string');
 }
 
-/** Where the panel posts to (the main thread's `parent`) and listens on (its `window`). */
-export interface PostTarget {
-  postMessage(message: unknown, targetOrigin: string): void;
-}
-
-export interface MessageSource {
-  addEventListener(type: 'message', listener: (event: MessageEvent) => void): void;
-  removeEventListener(type: 'message', listener: (event: MessageEvent) => void): void;
-}
-
-/** The panel's channel to the main thread, in the envelope ui/bridge.ts uses. */
-export function panelTransport(target: PostTarget = parent, source: MessageSource = window): BridgeTransport {
+/** The panel's typed channel to the main thread (ui/bridge.ts), passing on only trace replies. */
+export function panelTransport(
+  send: (msg: UiToMain) => void = toMain,
+  subscribe: (handler: (msg: MainToUi) => void) => () => void = onMain,
+): BridgeTransport {
   return {
-    send: (message) => target.postMessage({ pluginMessage: message }, '*'),
-    listen: (handler) => {
-      const listener = (event: MessageEvent) => {
-        const data = event.data as { pluginMessage?: unknown } | null;
-        if (data && typeof data === 'object' && isReply(data.pluginMessage)) handler(data.pluginMessage);
-      };
-      source.addEventListener('message', listener);
-      return () => source.removeEventListener('message', listener);
-    },
+    send: (message) => send(message),
+    listen: (handler) => subscribe((msg) => {
+      if (isReply(msg)) handler(msg);
+    }),
   };
 }
 
