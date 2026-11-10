@@ -137,11 +137,11 @@ describe('readings of the flow map', () => {
       { id: 'v2', name: 'On', componentId: 'v2', reactions: {} },
     ];
     const cases: Array<[string, Record<string, ProtoReaction[]>, Partial<ProtoDoc>]> = [
-      ['a connection without a destination', { link: [on('ON_CLICK', node('NAVIGATE', null))] }, {}],
       ['a CHANGE_TO to the variant already shown', {}, { variantSets: { link: { frameId: 'A', variants } } }],
       ['a false condition', { link: [on('ON_CLICK', { type: 'CONDITIONAL', blocks: [{ condition: { kind: 'literal', value: false }, actions: [navigate('B')] }] })] }, {}],
       ['a delayed MOUSE_UP that only sets a timer', { link: [mouse('MOUSE_UP', 800, navigate('B'))] }, {}],
-      ['a reaction on an ancestor', { A: [on('ON_CLICK', node('NAVIGATE', null))] }, {}],
+      ['a reaction on an ancestor', { A: [on('ON_CLICK', { type: 'BACK' })] }, {}],
+      ['an unfinished wire beside a finished action', { link: [on('ON_CLICK', node('NAVIGATE', null), { type: 'BACK' })] }, {}],
     ];
     it.each(cases)('by %s: no reading', (_, reactions, extra) => {
       const doc = protoDoc([A, B], reactions, extra);
@@ -151,6 +151,36 @@ describe('readings of the flow map', () => {
       expect(reading).toBeNull();
       expect(outcome).not.toBe('missing');
       expect(lookup.asked).toEqual([]);
+    });
+  });
+
+  describe('unfinished wires', () => {
+    const cases: Array<[string, ProtoAction]> = [
+      ['a connection without a destination', node('NAVIGATE', null)],
+      ['an overlay without a destination', node('OVERLAY', null)],
+      ['a connection to a frame the prototype lacks', navigate('9:99')],
+      ['a CHANGE_TO to a variant the prototype lacks', changeTo('9:98')],
+    ];
+    it.each(cases)("don't handle a click: %s gets its reading", (_, action) => {
+      const doc = protoDoc([A, B], { link: [on('ON_CLICK', action)] });
+      const { outcome, reading, state } = run(doc, start(doc, 'A'), click('link'), map({ 'A link': gap('c17') }));
+      expect(outcome).toBe('missing');
+      expect(reading?.id).toBe('c17');
+      expect(state.frameId).toBe('A');
+    });
+
+    it('without a reading play as before', () => {
+      const doc = protoDoc([A, B], { link: [on('ON_CLICK', navigate('9:99'))], field: [on('ON_CLICK', node('NAVIGATE', null))] });
+      expect(run(doc, start(doc, 'A'), click('link'), map({}))).toMatchObject({ outcome: 'unsupported', reading: null });
+      expect(run(doc, start(doc, 'A'), click('field'), map({}))).toMatchObject({ outcome: 'nothing_happened', reading: null });
+    });
+
+    it("on the layer still stop the bubble there: the layer's reading applies, and the ancestor's reaction doesn't fire", () => {
+      const doc = protoDoc([A, B], { para: [on('ON_CLICK', node('NAVIGATE', null))], hdr: [on('ON_CLICK', navigate('B'))] });
+      const { outcome, reading, state } = run(doc, start(doc, 'A'), click('para'), map({ 'A para': gap('c18') }));
+      expect(reading?.id).toBe('c18');
+      expect(outcome).toBe('missing');
+      expect(state.frameId).toBe('A');
     });
   });
 

@@ -17,6 +17,8 @@ export interface PointerDeps {
   layers: LayerIndex;
   /** Whether the layer has a reaction for this trigger. */
   handles(s: TraceState, layerKey: string, trigger: TriggerType): boolean;
+  /** Whether one of the layer's reactions for this trigger is more than an unfinished wire (see `Clicked`). */
+  takes(s: TraceState, layerKey: string, trigger: TriggerType): boolean;
   /** Fires the layer's reactions for this trigger: now, or as a timer when the trigger has a delay. */
   fire(s: TraceState, layerKey: string, trigger: TriggerType): void;
   /** Sets (or, with null, clears) an instance's variant override, as undoing a held effect does. */
@@ -57,8 +59,9 @@ export function movePointer(deps: PointerDeps, s: TraceState, point: Point): boo
  * What a click reached. `landed`: the pointer's move left the screen as
  * it was and the click hit a layer. `handled`: one of its triggers bubbled
  * to a layer with a reaction for it, whatever that reaction then did (a
- * connection without a destination, a variant already shown, a false
- * condition, a delay that only set a timer).
+ * variant already shown, a false condition, a delay that only set a
+ * timer), unless all it does is follow unfinished wires: connections
+ * without a destination, or to one the prototype doesn't have.
  */
 export interface Clicked {
   landed: boolean;
@@ -96,7 +99,7 @@ export function click(deps: PointerDeps, s: TraceState, point: Point): Clicked {
     if (stopped) return;
     const key = bubble(layers, hit.key, (k) => deps.handles(s, k, trigger));
     if (key === null) return;
-    handled = true;
+    handled = handled || deps.takes(s, key, trigger);
     deps.fire(s, key, trigger);
     stopped = screenOf(s) !== shown;
   };
@@ -105,7 +108,7 @@ export function click(deps: PointerDeps, s: TraceState, point: Point): Clicked {
   press('MOUSE_DOWN');
   const pressed = stopped ? null : bubble(layers, hit.key, (k) => deps.handles(s, k, 'ON_PRESS'));
   if (pressed !== null) {
-    handled = true;
+    handled = handled || deps.takes(s, pressed, 'ON_PRESS');
     hold(deps, s, pressed, 'ON_PRESS');
   }
   s.pointer.pressing = null;

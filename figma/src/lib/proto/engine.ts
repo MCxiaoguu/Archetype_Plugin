@@ -254,10 +254,24 @@ function targetOf(targets: Record<string, ElementTarget>, element: string): Elem
   return targets[element] as ElementTarget;
 }
 
+/**
+ * A connection the designer started and didn't finish: a NODE action with
+ * no destination, or to a frame or variant the prototype doesn't have
+ * (preflight reports it as broken).
+ */
+function unfinished(ctx: Context, action: ProtoAction): boolean {
+  if (action.type !== 'NODE') return false;
+  const to = action.destinationId;
+  if (to === null) return true;
+  if (action.navigation === 'CHANGE_TO') return !Object.values(ctx.doc.variantSets).some((set) => set.variants.some((v) => v.id === to));
+  return action.navigation !== 'SCROLL_TO' && !ctx.frames.has(to);
+}
+
 function pointerDeps(ctx: Context, layers: LayerIndex): PointerDeps {
   return {
     layers,
     handles: (s, key, trigger) => reactionsFor(ctx.doc, s, key).some((r) => r.trigger.type === trigger),
+    takes: (s, key, trigger) => reactionsFor(ctx.doc, s, key).some((r) => r.trigger.type === trigger && !r.actions.every((a) => unfinished(ctx, a))),
     fire: (s, key, trigger) => fire(ctx, layers, s, key, trigger),
     setVariant: (s, frameId, instanceKey, variantId) => setVariant(ctx, s, frameId, instanceKey, variantId),
   };
