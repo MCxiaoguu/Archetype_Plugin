@@ -64,12 +64,25 @@ const TURN_STATE = { seq: 1, maxSteps: 22, unproductive: 0, maxUnproductiveSteps
 const BRIEFING = { sessionId: 'sess', claimedAt: '2026-11-10T10:00:00Z', brief: '', persona: { name: 'Baseline founder' }, instructions: { targetUrl: '', goal: '' } };
 
 /** Fake time that runs the panel's waits (polls, retries) at once, until `cond` holds. */
-async function runUntil(cond: () => boolean, limitMs = 120_000) {
-  for (let t = 0; !cond(); t += 250) {
+async function runUntil(cond: () => boolean, limitMs = 120_000, stepMs = 250) {
+  for (let t = 0; !cond(); t += stepMs) {
     if (t > limitMs) throw new Error('timed out');
-    await vi.advanceTimersByTimeAsync(250);
+    await vi.advanceTimersByTimeAsync(stepMs);
   }
 }
+
+const TRACE: TraceRecord = { owner: 'p_0123456789abcdef01234567', pageId: '0:1', pageName: 'Prototype', startFrameId: '1:2', shareKey: null, importLibraryVariants: false };
+const traceStudy = (studyId: string, status: string, trace: TraceRecord = TRACE): StudyRecord => ({
+  studyId,
+  title: 't',
+  startName: 'Dashboard',
+  goalName: 'Bank connected',
+  size: 'quick',
+  launchedAt: 0,
+  status,
+  trace,
+});
+const traceCalls = (main: MainThread) => main.call.mock.calls.map(([type]) => type as string);
 
 const lastOf = <T,>(items: readonly T[]): T => items[items.length - 1] as T;
 
@@ -141,7 +154,7 @@ describe('panel effects', () => {
     // The study remembers who runs it here and on what.
     const record = savedStudies()[0] as StudyRecord;
     expect(record).toMatchObject({ studyId: 's1', startName: 'Dashboard', goalName: 'Bank connected' });
-    expect(record.trace).toEqual({ owner: expect.stringMatching(/^p_[0-9a-f]{24}$/), docHash: main.doc.docHash, startFrameId: '1:2', shareKey: KEY, importLibraryVariants: false });
+    expect(record.trace).toEqual({ owner: expect.stringMatching(/^p_[0-9a-f]{24}$/), pageId: '0:1', pageName: 'Prototype', startFrameId: '1:2', shareKey: KEY, importLibraryVariants: false });
     expect(main.gate.reads).toEqual([false]);
     // The panel claims the run under that owner and runs it.
     expect(claims).toEqual([{ owner: record.trace?.owner, browser: { engine: 'figma-trace', version: '9.9.9', viewport: [1280, 800] } }]);
@@ -158,7 +171,7 @@ describe('panel effects', () => {
   it('keeps one runner per study through a sign in or a retry while it runs', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const main = await mainThread();
-    const trace: TraceRecord = { owner: 'p_0123456789abcdef01234567', docHash: main.doc.docHash, startFrameId: '1:2', shareKey: null, importLibraryVariants: false };
+    const trace: TraceRecord = { owner: 'p_0123456789abcdef01234567', pageId: '0:1', pageName: 'Prototype', startFrameId: '1:2', shareKey: null, importLibraryVariants: false };
     const run = { runId: 'r1', archetypeId: 'a', archetypeName: 'Baseline founder', role: 'baseline', status: 'queued' };
     let decided = false;
     let status = 'running';
@@ -193,7 +206,7 @@ describe('panel effects', () => {
   it('stops the sessions when the panel closes, without aborting or forgetting their runs', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const main = await mainThread();
-    const trace: TraceRecord = { owner: 'p_0123456789abcdef01234567', docHash: main.doc.docHash, startFrameId: '1:2', shareKey: null, importLibraryVariants: false };
+    const trace: TraceRecord = { owner: 'p_0123456789abcdef01234567', pageId: '0:1', pageName: 'Prototype', startFrameId: '1:2', shareKey: null, importLibraryVariants: false };
     const run = { runId: 'r1', archetypeId: 'a', archetypeName: 'Baseline founder', role: 'baseline', status: 'queued' };
     const calls = installFetch((method, path, body) => {
       if (path === '/api/studies/s7/status') return [200, { studyId: 's7', status: 'running' }];
@@ -216,6 +229,147 @@ describe('panel effects', () => {
     const after = calls.length;
     await new Promise((r) => setTimeout(r, 20));
     expect(calls.length).toBe(after);
+  });
+
+  it('only shows a finished plugin-mode study: it reads nothing, imports nothing and asks for no next wave', async () => {
+    const main = await mainThread();
+    const calls = installFetch((_m, path) => {
+      if (path === '/api/studies/s8/status') return [200, { studyId: 's8', status: 'complete' }];
+      if (path === '/api/studies/s8/runs') return [200, { studyId: 's8', status: 'complete', runs: [] }];
+      if (path === '/api/studies/s8/report') return [200, fixtureReport()];
+      return [404, { error: 'x', message: path }];
+    });
+    const { store } = initStore('tok', main, { studies: [traceStudy('s8', 'complete')], lastStudyId: 's8' });
+    await until(() => store.get().screen === 'report');
+    await new Promise((r) => setTimeout(r, 20));
+    expect(traceCalls(main)).toEqual([]);
+    expect(calls.filter((c) => c.startsWith('POST '))).toEqual([]);
+    expect(store.get().study?.runner).toBeNull();
+  });
+
+  it('says when the next round does not start, and Try again runs the study on', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const main = await mainThread();
+    const run = { runId: 'r1', archetypeId: 'a', archetypeName: 'Baseline founder', role: 'baseline', status: 'queued' };
+    let open = true;
+    let status = 'running';
+    const calls = installFetch((method, path, body) => {
+      if (path === '/api/studies/s9/status') return [200, { studyId: 's9', status }];
+      if (path === '/api/studies/s9/runs') return [200, { studyId: 's9', status, runs: [run] }];
+      if (path === '/api/plugin/runs/r1/claim') return (run.status = 'running'), [200, { runId: 'r1', ...BRIEFING }];
+      if (method === 'POST' && path === '/api/plugin/runs/r1/turn') return [202, { turn: (body as { turn: number }).turn, status: 'thinking' }];
+      if (path === '/api/plugin/runs/r1/turn/1') {
+        run.status = 'completed';
+        return [200, { turn: 1, status: 'ready', action: { type: 'done', claim: 'Done.' }, state: TURN_STATE, ended: { status: 'completed', reason: 'done' } }];
+      }
+      if (path === '/api/studies/s9/runs/next') {
+        if (open) return [409, { error: 'wave_in_progress', message: 'wave 1 still has open runs' }];
+        return (status = 'complete'), [200, { studyId: 's9', done: true, reason: 'every wave ran', wave: 1 }];
+      }
+      if (path === '/api/studies/s9/report') return [200, fixtureReport()];
+      return [404, { error: 'x', message: path }];
+    });
+    const { store, fx } = initStore('tok', main, { studies: [traceStudy('s9', 'running')], lastStudyId: 's9' });
+    await runUntil(() => !!store.get().study?.error, 600_000, 5_000);
+    expect(store.get().study).toMatchObject({ error: expect.stringMatching(/hasn't started the next round.*Try again/), runner: { phase: 'stuck' } });
+
+    open = false;
+    await fx.retry();
+    await runUntil(() => store.get().screen === 'report', 600_000, 1_000);
+    vi.useRealTimers();
+    expect(traceCalls(main).filter((t) => t === 'trace-load')).toHaveLength(2);
+    expect(calls.filter((c) => c === 'POST /api/plugin/runs/r1/claim')).toHaveLength(1);
+  });
+
+  it('tries again with the read and the confirmed import of the first try, when creating the study failed', async () => {
+    const main = await mainThread();
+    const variant = (status: LibraryVariant['status']): LibraryVariant => ({ variantId: '5:1', key: 'k-open', name: 'State=Open', status, error: null });
+    main.gate.readAs = (imported) => ({ ...structuredClone(main.doc), libraryVariants: [variant(imported ? 'imported' : 'needs_import')] });
+    let creates = 0;
+    const calls = installFetch((method, path) => {
+      if (method === 'POST' && path === '/api/studies') return ++creates === 1 ? [500, { error: 'internal_error', message: 'Unexpected.' }] : [201, { studyId: 's10', status: 'draft' }];
+      return [404, { error: 'x', message: path }];
+    });
+    const { store, fx } = initStore('tok', main);
+    fillForm(store, '');
+    await fx.launch();
+    await fx.confirmImport();
+    expect(store.get().study?.error).toBe('Unexpected.');
+    await fx.retry();
+    await until(() => savedStudies().length > 0);
+    expect(calls.filter((c) => c === 'POST /api/studies')).toHaveLength(2);
+    expect(main.gate.reads).toEqual([false, true]);
+    expect(store.get().gate).toBeNull();
+    expect(savedStudies()[0]?.trace).toMatchObject({ importLibraryVariants: true });
+    fx.newTest();
+  });
+
+  it('asks for the page a reopened test runs on, and runs it once the designer goes there', async () => {
+    const main = await mainThread();
+    main.gate.readAs = () => ({ ...structuredClone(main.doc), pageId: '0:2', pageName: 'Archive' });
+    installFetch((_m, path) => {
+      if (path === '/api/studies/s11/status') return [200, { studyId: 's11', status: 'running' }];
+      if (path === '/api/studies/s11/runs') return [200, { studyId: 's11', status: 'running', runs: [] }];
+      return [409, { error: 'wave_in_progress', message: 'still open' }];
+    });
+    const trace = { ...TRACE, pageId: '0:2', pageName: 'Archive' };
+    const { store, fx } = initStore('tok', main, { studies: [traceStudy('s11', 'running', trace)], lastStudyId: 's11' });
+    await until(() => !!store.get().study?.runner);
+    expect(store.get().study?.runner).toEqual({ phase: 'other_page', notice: 'This test runs on page Archive.' });
+    expect(traceCalls(main)).toEqual([]);
+    fx.goToTestPage();
+    expect(sent).toContainEqual({ type: 'show-node', nodeId: '1:2' });
+    fx.handleMain({ type: 'doc', doc: { ...fixtureDoc(), pageId: '0:2', pageName: 'Archive' } });
+    await until(() => traceCalls(main).includes('trace-load'));
+    expect(main.gate.reads).toEqual([false]);
+    fx.newTest();
+  });
+
+  it('shows the library components the confirmed import could not add, and launches only if the designer still wants to', async () => {
+    const main = await mainThread();
+    const variant = (name: string, status: LibraryVariant['status'], error: string | null = null): LibraryVariant => ({ variantId: `5:${name.length}`, key: `k-${name}`, name, status, error });
+    main.gate.readAs = (imported) => ({
+      ...structuredClone(main.doc),
+      libraryVariants: imported
+        ? [variant('State=Open', 'imported'), variant('State=Closed', 'failed', 'The library is not enabled for this file')]
+        : [variant('State=Open', 'needs_import'), variant('State=Closed', 'needs_import')],
+    });
+    const calls = installFetch((method, path) => (method === 'POST' && path === '/api/studies' ? [201, { studyId: 's12', status: 'draft' }] : [404, { error: 'x', message: path }]));
+    const { store, fx } = initStore('tok', main);
+    fillForm(store, '');
+    await fx.launch();
+    await fx.confirmImport();
+    expect(store.get().gate).toEqual({ kind: 'import-failed', failures: [{ component: 'State=Closed', error: 'The library is not enabled for this file' }] });
+    expect(calls).toEqual([]);
+    fx.cancelImport();
+    expect(store.get().gate).toBeNull();
+
+    await fx.launch();
+    await fx.confirmImport();
+    await fx.launchAnyway();
+    expect(calls[0]).toBe('POST /api/studies');
+    expect(main.gate.reads).toEqual([false, true, false, true]);
+    expect(savedStudies()[0]?.trace).toMatchObject({ importLibraryVariants: true });
+    fx.newTest();
+  });
+
+  it('reads the prototype again once when a read fails, and says why when it fails twice', async () => {
+    const main = await mainThread();
+    main.gate.readErrors.push('The Figma document did not answer trace-read within 120 s.');
+    const calls = installFetch((method, path) => (method === 'POST' && path === '/api/studies' ? [201, { studyId: 's13', status: 'draft' }] : [404, { error: 'x', message: path }]));
+    const { store, fx } = initStore('tok', main);
+    fillForm(store, '');
+    await fx.launch();
+    expect(main.gate.reads).toEqual([false, false]);
+    expect(calls[0]).toBe('POST /api/studies');
+    fx.newTest();
+
+    main.gate.readErrors.push('first', 'second');
+    fillForm(store, '');
+    const before = calls.length;
+    await fx.launch();
+    expect(calls.length).toBe(before);
+    expect(store.get()).toMatchObject({ gate: null, notice: { kind: 'error', text: expect.stringMatching(/second.*first/) } });
   });
 
   it('blocks the launch where the file cannot be edited', async () => {
@@ -260,7 +414,7 @@ describe('panel effects', () => {
   it('resumes the runs it owns when the panel reopens on a plugin-mode study', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const main = await mainThread();
-    const trace: TraceRecord = { owner: 'p_0123456789abcdef01234567', docHash: main.doc.docHash, startFrameId: '1:2', shareKey: null, importLibraryVariants: false };
+    const trace: TraceRecord = { owner: 'p_0123456789abcdef01234567', pageId: '0:1', pageName: 'Prototype', startFrameId: '1:2', shareKey: null, importLibraryVariants: false };
     const saved = {
       owner: trace.owner,
       runId: 'r1',

@@ -2,6 +2,7 @@ import type { DeviceCode, RunRowApi, StudyStatusValue } from './api';
 import { DEFAULT_SETTINGS, type Draft, type InitPayload, type Settings, type StudyRecord } from './messages';
 import { nextQueuedSince } from './poll';
 import type { StudyReport } from './report';
+import type { FailedImport } from './launch';
 import type { LiveRun, RunnerStatus } from './runs';
 import { EMPTY_FORM, type RunSize, type StudyForm } from './study';
 import type { DocSnapshot, NodeRef } from './types';
@@ -38,7 +39,9 @@ export type LaunchGate =
   /** The file can't be edited, so nothing can be rendered. `detail` is what Figma said. */
   | { kind: 'blocked'; reason: string; detail: string }
   /** Testing the flow would import these library components into the file: the designer confirms first. */
-  | { kind: 'confirm-import'; components: string[] };
+  | { kind: 'confirm-import'; components: string[] }
+  /** The confirmed import couldn't add these: the designer launches anyway or cancels. */
+  | { kind: 'import-failed'; failures: FailedImport[] };
 
 export interface AuthState {
   phase: 'idle' | 'starting' | 'waiting' | 'error';

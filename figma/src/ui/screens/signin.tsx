@@ -63,7 +63,10 @@ export function SignIn({ state, fx }: { state: AppState; fx: Effects }) {
             'Sign in with Archetype'
           )}
         </button>
-        <p class="fineprint">Free to install. Tests run on your Archetype account. Only the share link, the screen names on the path and your goal text leave this file.</p>
+        <p class="fineprint">
+          Free to install. Tests run on your Archetype account. What you type, the file and page names and the screen names on the path leave this file, and during a test every step sends a screenshot, its visible
+          text and what can be clicked to Archetype and its AI model provider.
+        </p>
       </div>
     </div>
   );

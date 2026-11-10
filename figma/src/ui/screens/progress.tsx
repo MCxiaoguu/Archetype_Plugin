@@ -1,8 +1,9 @@
 import { indexFrames } from '../../lib/frames';
 import { runnerState } from '../../lib/poll';
-import { panelNotices, personaRows, type PersonaRow } from '../../lib/runs';
+import { panelNotices, panelRunText, personaRows, type PersonaRow } from '../../lib/runs';
 import type { AppState, Stage } from '../../lib/state';
 import type { Effects } from '../effects';
+import { NOTICE } from '../trace/session';
 import { IconCheck, IconClock, IconExternal } from '../icons';
 import { Banner, Section, Spinner, elapsed, plural } from '../parts';
 import { useTicker } from '../store';
@@ -50,20 +51,18 @@ export function Progress({ state, fx }: { state: AppState; fx: Effects }) {
   const idx = stepIndex(st.stage);
   // A plugin-mode study runs its personas in this panel; the screen and step come from its sessions.
   const inPanel = !!st.record?.trace;
-  const rows = personaRows(st.runs, indexFrames(state.doc), st.live);
+  const rows = personaRows(st.runs, indexFrames(state.doc), { live: st.live, inPanel });
   const runner = runnerState(st.runs, st.queuedSince, now);
   const notices = inPanel ? panelNotices(st.live, st.runner) : [];
+  // The sessions already say they lost touch: the poll's banner would say it twice.
+  const pollError = st.pollError && !notices.includes(NOTICE.offline) ? st.pollError : null;
   const total = st.runs.length;
   const finished = rows.reduce((s, r) => s + r.finished, 0);
   const title = st.record?.title ?? 'New test';
 
   let runText = '';
-  if (inPanel) {
-    if (rows.some((r) => r.phase === 'running')) runText = 'Personas are clicking through your prototype here in the panel.';
-    else if (st.runner?.phase === 'next_wave') runText = 'Starting the next round of tries.';
-    else if (runner === 'queued' || runner === 'waiting_for_runner') runText = 'Starting the personas.';
-    else if (runner === 'finishing') runText = 'All tries are in. Putting the results together.';
-  } else if (runner === 'running') runText = 'Personas are clicking through your prototype.';
+  if (inPanel) runText = panelRunText(rows, st.runner, runner);
+  else if (runner === 'running') runText = 'Personas are clicking through your prototype.';
   else if (runner === 'queued') runText = 'Queued. A runner picks the tests up shortly.';
   else if (runner === 'finishing') runText = 'All tries are in. Putting the results together.';
 
@@ -115,9 +114,23 @@ export function Progress({ state, fx }: { state: AppState; fx: Effects }) {
                 <strong>Waiting for a runner.</strong> The tests are queued, but no runner has picked them up yet. They start as soon as one is online; you can close this panel and come back.
               </Banner>
             )}
-            {st.pollError && <Banner kind="info">Lost touch with Archetype ({st.pollError}). Still trying.</Banner>}
+            {pollError && <Banner kind="info">Lost touch with Archetype ({pollError}). Still trying.</Banner>}
+            {st.runner?.phase === 'other_page' && (
+              <Banner
+                kind="warn"
+                action={
+                  <button type="button" class="btn btn-small btn-secondary" onClick={() => fx.goToTestPage()}>
+                    Go to page
+                  </button>
+                }
+              >
+                {st.runner.notice}
+              </Banner>
+            )}
             {notices.map((n) => (
-              <Banner kind="warn">{n}</Banner>
+              <Banner key={n} kind="warn">
+                {n}
+              </Banner>
             ))}
             {rows.length === 0 ? (
               <div class="placeholder" role="status">
