@@ -8,9 +8,16 @@
 /** Plugin data on the scratch container: `archetype.trace = "scratch"`. */
 export const SCRATCH_KEY = 'archetype.trace';
 export const SCRATCH_VALUE = 'scratch';
+/**
+ * The same mark in shared plugin data, under the namespace `archetype.trace`:
+ * how a capture through a host that can't write this plugin's private data
+ * (the Figma MCP server) marks the frames it leaves.
+ */
+export const SCRATCH_SHARED_NAMESPACE = 'archetype.trace';
 
 export function isScratch(node: BaseNode): boolean {
-  return 'getPluginData' in node && node.getPluginData(SCRATCH_KEY) === SCRATCH_VALUE;
+  if ('getPluginData' in node && node.getPluginData(SCRATCH_KEY) === SCRATCH_VALUE) return true;
+  return 'getSharedPluginData' in node && node.getSharedPluginData(SCRATCH_SHARED_NAMESPACE, SCRATCH_KEY) === SCRATCH_VALUE;
 }
 
 const made = new Set<string>();

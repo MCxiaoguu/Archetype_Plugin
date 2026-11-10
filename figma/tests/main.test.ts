@@ -363,6 +363,48 @@ describe('trace requests on the main thread', () => {
     expect(t.api.notify).not.toHaveBeenCalled();
   });
 
+  describe('capture frames marked through shared plugin data', () => {
+    /** A frame on the Prototype page as a capture through an MCP host leaves it: locked, off canvas, marked in shared plugin data. */
+    function capture(t: ReturnType<typeof traceMain>, namespace: string, key: string, value: string): FakeNode {
+      const frame = t.api.createFrame() as unknown as FakeNode;
+      Object.assign(frame, { name: 'Archetype trace (scratch)', x: -100000, y: 0, locked: true });
+      frame.setSharedPluginData(namespace, key, value);
+      return frame;
+    }
+
+    it('are removed when the plugin starts, like the ones a render left', async () => {
+      const t = traceMain();
+      const marked = capture(t, 'archetype.trace', 'archetype.trace', 'scratch');
+      await t.controller.handle({ type: 'ready' });
+      expect(marked.removed).toBe(true);
+    });
+
+    it('are never screens: not in the trace read, the flow map or the preflight', async () => {
+      const t = traceMain();
+      const marked = capture(t, 'archetype.trace', 'archetype.trace', 'scratch');
+      expect(isScratch(marked as unknown as BaseNode)).toBe(true);
+      const doc = (await t.ask({ type: 'trace-read', requestId: 'r', importLibraryVariants: false })).result as ProtoDoc;
+      expect(doc.frames.map((f) => f.id)).not.toContain(marked.id);
+      const flow = (await t.ask({ type: 'trace-candidates', requestId: 'c', docHash: doc.docHash })).result as FlowRead;
+      expect(flow.nodes.map((n) => n.id)).not.toContain(marked.id);
+      expect((await readDocument(t.api)).frames.map((f) => f.id)).not.toContain(marked.id);
+      expect(t.controller.removeLeftovers()).toBe(1);
+    });
+
+    it('leave alone a frame marked under another key or value', async () => {
+      const t = traceMain();
+      const others = [
+        capture(t, 'archetype.trace', 'archetype.other', 'scratch'),
+        capture(t, 'archetype.trace', 'archetype.trace', 'kept'),
+        capture(t, 'archetype.other', 'archetype.trace', 'scratch'),
+      ];
+      for (const frame of others) expect(isScratch(frame as unknown as BaseNode)).toBe(false);
+      await t.controller.handle({ type: 'ready' });
+      expect(others.map((f) => f.removed)).toEqual([false, false, false]);
+      expect(t.controller.removeLeftovers()).toBe(0);
+    });
+  });
+
   it('removes leftover scratch containers when the panel asks, once no render is running', async () => {
     const t = traceMain();
     const doc = (await t.ask({ type: 'trace-read', requestId: 'r', importLibraryVariants: false })).result as ProtoDoc;

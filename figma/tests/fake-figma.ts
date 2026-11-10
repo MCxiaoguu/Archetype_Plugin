@@ -58,6 +58,8 @@ export class FakeNode {
   private _annotations: { label?: string }[] = [];
   refuseAnnotations = false;
   private pluginData = new Map<string, string>();
+  /** Shared plugin data, by `<namespace> <key>`: what any plugin (and an MCP host) can write. */
+  private sharedPluginData = new Map<string, string>();
 
   constructor(id: string, name: string, type: string) {
     this.id = id;
@@ -318,6 +320,12 @@ export class FakeNode {
   }
   setPluginData(k: string, v: string) {
     this.pluginData.set(k, v);
+  }
+  getSharedPluginData(namespace: string, k: string) {
+    return this.sharedPluginData.get(`${namespace} ${k}`) ?? '';
+  }
+  setSharedPluginData(namespace: string, k: string, v: string) {
+    this.sharedPluginData.set(`${namespace} ${k}`, v);
   }
 }
 
