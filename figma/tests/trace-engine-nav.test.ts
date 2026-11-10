@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { settle, start, viewportFor } from '../src/lib/proto/engine';
 import { EngineError } from '../src/lib/proto/errors';
 import type { OverflowDirection, OverlayPosition, ProtoAction, TraceAction, TraceState } from '../src/lib/proto/model';
+import { pageRange } from '../src/lib/proto/scroll';
 import {
   A,
   act,
@@ -35,6 +36,12 @@ describe('viewportFor', () => {
     { size: [767, 1000], viewport: { width: 767, height: 844 } },
     { size: [375, 2000], viewport: { width: 375, height: 844 } },
     { size: [375, 600], viewport: { width: 375, height: 600 } },
+    // A device has whole pixels, and the backend's claim takes only whole numbers.
+    { size: [1280, 818.4], viewport: { width: 1280, height: 818 } },
+    { size: [1280, 818.6], viewport: { width: 1280, height: 819 } },
+    { size: [390.4, 2000], viewport: { width: 390, height: 844 } },
+    { size: [1279.6, 2423.4], viewport: { width: 1280, height: 900 } },
+    { size: [767.6, 2000], viewport: { width: 768, height: 900 } },
   ])('a $size.0x$size.1 start frame gives a $viewport.width x $viewport.height viewport', ({ size, viewport }) => {
     const [width, height] = size as [number, number];
     expect(viewportFor(protoDoc([frame('S', width, height)]), 'S')).toEqual(viewport);
@@ -42,6 +49,15 @@ describe('viewportFor', () => {
 
   it('refuses a start frame the document does not have', () => {
     expect(() => viewportFor(protoDoc([A]), 'nope')).toThrow(EngineError);
+  });
+
+  it('leaves the page a range of what the rounding cut, never below zero', () => {
+    const cut = frame('S', 1280, 818.4);
+    const range = pageRange(cut, viewportFor(protoDoc([cut]), 'S'));
+    expect(range.maxX).toBe(0);
+    expect(range.maxY).toBeCloseTo(0.4, 6);
+    const over = frame('S', 1279.6, 818.6);
+    expect(pageRange(over, viewportFor(protoDoc([over]), 'S'))).toEqual({ maxX: 0, maxY: 0 });
   });
 });
 

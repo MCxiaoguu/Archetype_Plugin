@@ -64,11 +64,17 @@ const context = (doc: ProtoDoc, layers: LayerIndex | null): Context => ({
   effects: [],
 });
 
-/** The viewport is the start frame's size, its height capped like a laptop's or a phone's screen. */
+/**
+ * The viewport is the start frame's size, its height capped like a laptop's
+ * or a phone's screen, in whole pixels as a device's is (the backend's claim
+ * takes only whole numbers). A frame a fraction taller keeps that fraction
+ * as its page's scroll range.
+ */
 export function viewportFor(doc: ProtoDoc, startFrameId: string): Size {
   const frame = doc.frames.find((f) => f.id === startFrameId);
   if (!frame) throw new EngineError('invalid_doc', `The start frame ${startFrameId} isn't in the prototype`);
-  return { width: frame.width, height: Math.min(frame.height, frame.width >= 768 ? 900 : 844) };
+  const width = Math.round(frame.width);
+  return { width, height: Math.round(Math.min(frame.height, width >= 768 ? 900 : 844)) };
 }
 
 export function start(doc: ProtoDoc, startFrameId: string): TraceState {

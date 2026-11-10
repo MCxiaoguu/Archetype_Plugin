@@ -3,12 +3,16 @@ import fixtureJson from '../harness/fixtures/farside-proto.json';
 import { cleanTurn, createMockBackend, serveMock, type MockBackend, type ScriptStep } from '../harness/mock-backend.mjs';
 import { ApiClient, ApiError, type TurnBody } from '../src/lib/api';
 import type { MainToUi, SavedSession, TraceRequestMessage, UiToMain } from '../src/lib/messages';
+import { start } from '../src/lib/proto/engine';
 import type { ProtoDoc } from '../src/lib/proto/model';
-import { isScratch } from '../src/main/scratch';
+import type { RunnerStatus } from '../src/lib/runs';
+import { isScratch, SCRATCH_KEY, SCRATCH_VALUE } from '../src/main/scratch';
 import { createTraceMain } from '../src/main/trace';
 import { createBridge, panelTransport } from '../src/ui/trace/bridge';
+import { runStudy, WAVE_RETRY_MS, type RunnerResult } from '../src/ui/trace/runner';
 import { NOTICE, runSession, type SessionResult, type SessionStatus } from '../src/ui/trace/session';
 import { fakeFromFixture, type FakeNode, type ProtoFixture } from './fake-figma';
+import { frame, protoDoc } from './trace-fixtures';
 
 // A whole trace study in the plugin, in process: the real reader, renderer,
 // engine, elements, bridge, main thread (trace.ts) and session, on the fake
@@ -40,7 +44,9 @@ function openPlugin(fake: Fake) {
   const failures: unknown[] = [];
   let open = true;
   /** trace-save requests held back, to reach the main thread together. */
-  let held: { count: number; saves: TraceRequestMessage[] } | null = null;
+  let held: { count: number; which: (msg: TraceRequestMessage) => boolean; saves: TraceRequestMessage[] } | null = null;
+  /** When set, the other trace-saves reach the main thread one at a time, each after the one before was answered. */
+  let serial: Promise<void> | null = null;
   const deliver = (msgs: TraceRequestMessage[]) =>
     setTimeout(() => {
       // handle answers every request itself; a throw means a request it could not answer at all.
@@ -55,12 +61,16 @@ function openPlugin(fake: Fake) {
   });
   const toMain = (msg: UiToMain) => {
     const copy = structuredClone(msg) as TraceRequestMessage;
-    if (held && copy.type === 'trace-save') {
+    if (held && copy.type === 'trace-save' && held.which(copy)) {
       held.saves.push(copy);
       if (held.saves.length < held.count) return;
       const together = held.saves;
       held = null;
       deliver(together);
+      return;
+    }
+    if (serial && copy.type === 'trace-save') {
+      serial = serial.then(() => (open ? main.handle(copy) : undefined)).catch((err: unknown) => void failures.push(err));
       return;
     }
     deliver([copy]);
@@ -80,9 +90,13 @@ function openPlugin(fake: Fake) {
     posted,
     failures,
     watchFile,
-    /** Holds the next `count` trace-saves until all of them are sent, then delivers them in one task. */
-    holdSaves(count: number) {
-      held = { count, saves: [] };
+    /** Holds the next `count` trace-saves (of those `which` picks) until all of them are sent, then delivers them in one task. */
+    holdSaves(count: number, which: (msg: TraceRequestMessage) => boolean = () => true) {
+      held = { count, which, saves: [] };
+    },
+    /** Sends every trace-save not held on its own, after the one before it was answered. */
+    serialSaves() {
+      serial = Promise.resolve();
     },
     /** The plugin closes: the panel's bridge and the main thread stop together. */
     close() {
@@ -330,9 +344,6 @@ describe('a trace study in the plugin', () => {
     for (const body of mock.trace.posts.map((p) => p.body as unknown as TurnBody)) expect(body.flags).toEqual([]);
   });
 
-  it('forgets each run on this machine once it ended', async () => {
-    expect(await plugin.bridge.call('trace-load', { studyId: STUDY })).toEqual({ sessions: [] });
-  });
 });
 
 describe('closing the plugin mid-run', () => {
@@ -562,22 +573,273 @@ describe('the finalizing window', () => {
   }, 30_000);
 });
 
-describe('a timer that opens a link with no URL', () => {
-  it('does nothing, and the turn after it is taken', async () => {
-    mock.trace.addStudy({ studyId: 'study-no-url', waves: [[{ runId: 'run-no-url', script: GOLDEN }]] });
+describe('a timer that opens a link', () => {
+  /** The golden path, with Bank connected opening `url` a second after it shows. Returns the last turn's body. */
+  async function linkOnBankConnected(runId: string, url: string): Promise<TurnBody> {
+    mock.trace.addStudy({ studyId: `study-${runId}`, waves: [[{ runId, script: GOLDEN }]] });
     const fake = fakeFile();
-    // Bank connected opens a link a second after it shows, but the link was never filled in.
-    (fake.nodes.get('2:50') as FakeNode).reactions = [{ trigger: { type: 'AFTER_TIMEOUT', timeout: 1000 }, actions: [{ type: 'URL', url: '' }] }];
+    (fake.nodes.get('2:50') as FakeNode).reactions = [{ trigger: { type: 'AFTER_TIMEOUT', timeout: 1000 }, actions: [{ type: 'URL', url }] }];
     const plugin = openPlugin(fake);
     const doc = await plugin.bridge.call('trace-read', { importLibraryVariants: true });
-    await claim('run-no-url');
-    const result = await persona(plugin, doc, 'run-no-url');
-    // It went nowhere: the backend's rule that a timer's effect names it (1 to 200 characters) refused it before.
-    expect(refusalsOf('run-no-url')).toEqual([]);
-    expect(result).toEqual({ runId: 'run-no-url', ended: { status: 'finalizing', reason: 'done' }, stop: 'ended', message: null });
-    const final = bodiesOf('run-no-url')[8] as TurnBody;
+    await claim(runId);
+    const result = await persona(plugin, doc, runId);
+    expect(refusalsOf(runId)).toEqual([]);
+    expect(result).toEqual({ runId, ended: { status: 'finalizing', reason: 'done' }, stop: 'ended', message: null });
+    const final = bodiesOf(runId)[8] as TurnBody;
     expect(final.screen.title).toBe('Bank connected');
+    return final;
+  }
+
+  it('with no URL does nothing, and the turn after it is taken', async () => {
+    // The link was never filled in. The backend refused the turn when this
+    // became a timer effect with an empty detail (it needs 1 to 200 characters).
+    const final = await linkOnBankConnected('run-no-url', '');
     expect(final.last).not.toHaveProperty('timer_effects');
+  }, 30_000);
+
+  it('with a 300 character URL reports it within the 200 characters a detail may have', async () => {
+    const url = `https://status.example.com/${'a'.repeat(300 - 27)}`;
+    expect(url).toHaveLength(300);
+    const final = await linkOnBankConnected('run-long-url', url);
+    const [effect, ...more] = final.last?.timer_effects ?? [];
+    expect(more).toEqual([]);
+    expect(effect?.type).toBe('left_prototype');
+    expect(effect?.detail.length).toBeLessThanOrEqual(200);
+    // However the session marks the cut, the detail starts as the URL does.
+    expect(url.startsWith((effect?.detail ?? '').slice(0, 150))).toBe(true);
+  }, 30_000);
+});
+
+// --- Whole studies through the runner ----------------------------------------
+
+/** The panel's clock for the runner: it moves only when the panel waits, so polls and wave retries take no real time. */
+function panelClock() {
+  let at = Date.now();
+  const waits: number[] = [];
+  return {
+    waits,
+    now: () => at,
+    sleep: async (ms: number) => {
+      waits.push(ms);
+      at += ms;
+      await tick();
+    },
+  };
+}
+
+function study(
+  plugin: Plugin,
+  doc: ProtoDoc,
+  studyId: string,
+  opts: { sleep?: (ms: number) => Promise<void>; runner?: RunnerStatus[] } = {},
+): Promise<RunnerResult> {
+  const clock = panelClock();
+  return runStudy(
+    { studyId, owner: OWNER, doc, shareKey: null, startFrameId: '1:2' },
+    {
+      bridge: plugin.bridge,
+      api: client,
+      now: clock.now,
+      sleep: opts.sleep ?? clock.sleep,
+      pluginVersion: '0.1.0',
+      onSession: () => {},
+      onRunner: (status) => opts.runner?.push(status),
+      watchFile: plugin.watchFile,
+      postTurnTimeoutMs: 10_000,
+    },
+  );
+}
+
+/** A scratch container a crashed render left on the page, as the renderer marks it. */
+function leftover(fake: Fake): FakeNode {
+  const node = fake.api.createFrame() as unknown as FakeNode;
+  node.setPluginData(SCRATCH_KEY, SCRATCH_VALUE);
+  node.locked = true;
+  return node;
+}
+
+const cleanups = (plugin: Plugin) =>
+  plugin.posted.filter((m): m is Extract<MainToUi, { type: 'trace-result' }> => m.type === 'trace-result' && !!m.result && typeof m.result === 'object' && 'removed' in m.result).map((m) => m.result);
+
+describe('a whole study through the runner', () => {
+  it('claims a wave of three personas under this panel, runs them side by side to done, and cleans up', async () => {
+    const SIGN_IN: ScriptStep[] = [
+      { expect: 'Dashboard', click: 'Billing' },
+      { expect: 'Billing settings', click: 'Connect a bank' },
+      { expect: 'Connect bank', click: 'Sign in with your bank' },
+      { expect: 'Connect bank', give_up: 'Signing in with my bank fails every time.' },
+    ];
+    mock.trace.addStudy({
+      studyId: 'study-runner',
+      waves: [[
+        { runId: 'run-r-golden', archetypeName: 'Mara', script: GOLDEN },
+        { runId: 'run-r-plans', archetypeName: 'Dev', script: PLANS },
+        { runId: 'run-r-signin', archetypeName: 'Ana', script: SIGN_IN },
+      ]],
+    });
+    const fake = fakeFile();
+    const plugin = openPlugin(fake);
+    const doc = await plugin.bridge.call('trace-read', { importLibraryVariants: true });
+    const before = snapshot(fake);
+    leftover(fake);
+    const runner: RunnerStatus[] = [];
+    const result = await study(plugin, doc, 'study-runner', { runner });
+
+    expect(result).toMatchObject({ stop: 'done', reason: expect.any(String) });
+    expect(result.sessions.map((r) => [r.runId, r.ended]).sort()).toEqual([
+      ['run-r-golden', { status: 'finalizing', reason: 'done' }],
+      ['run-r-plans', { status: 'finalizing', reason: 'give_up' }],
+      ['run-r-signin', { status: 'finalizing', reason: 'give_up' }],
+    ]);
+    for (const runId of ['run-r-golden', 'run-r-plans', 'run-r-signin']) {
+      expect(mock.trace.runs.get(runId)).toMatchObject({ owner: OWNER, browser: { engine: 'figma-trace', version: '0.1.0', viewport: [1280, 800] } });
+    }
+    expect(['run-r-golden', 'run-r-plans', 'run-r-signin'].map((id) => mock.trace.runs.get(id)?.status)).toEqual(['completed', 'abandoned', 'abandoned']);
+    expect(bodiesOf('run-r-golden').map((b) => b.screen.title).pop()).toBe('Bank connected');
+    expect(refusalsOf('run-r-golden', 'run-r-plans', 'run-r-signin')).toEqual([]);
+    expect(runner.map((r) => r.phase)).toEqual(['running', 'next_wave', 'done']);
+
+    // The cleanup after the wave took what a crash had left, and the renders left nothing.
+    expect(cleanups(plugin)).toEqual([{ removed: 1 }]);
+    await tick();
+    expect(scratchOn(fake)).toEqual([]);
+    expectUntouched(fake, before);
+    // What this machine keeps of the runs afterwards: the it.fails case below, until review C1 is fixed.
+    expect(plugin.failures).toEqual([]);
+  }, 30_000);
+
+  // Fails until impl-turns' "Fix session review findings" lands (review C1,
+  // which cherry-picks f514088): two runs that end together each forget
+  // themselves from a copy of the study's sessions, and the save written
+  // last brings the other one back.
+  it.fails('forgets every run on this machine once the study is done, also runs that end at once', async () => {
+    const quick = (reason: string): ScriptStep[] => [{ expect: 'Dashboard', click: 'Billing' }, { expect: 'Billing settings', give_up: reason }];
+    mock.trace.addStudy({ studyId: 'study-runner-forget', waves: [[{ runId: 'run-f-one', script: quick('Nothing about banks.') }, { runId: 'run-f-two', script: quick('No bank here.') }]] });
+    const fake = fakeFile();
+    const plugin = openPlugin(fake);
+    const doc = await plugin.bridge.call('trace-read', { importLibraryVariants: true });
+    // Their saves of where they stand arrive one by one; the two last ones, which forget them, together.
+    plugin.serialSaves();
+    plugin.holdSaves(2, (msg) => msg.type === 'trace-save' && msg.session === null);
+    const result = await study(plugin, doc, 'study-runner-forget');
+    expect(result.sessions.map((r) => r.ended?.reason)).toEqual(['give_up', 'give_up']);
+    expect(await plugin.bridge.call('trace-load', { studyId: 'study-runner-forget' })).toEqual({ sessions: [] });
+  }, 30_000);
+
+  it('waits out a wave that is still finalizing, runs the next wave, then stops at done', async () => {
+    mock.trace.addStudy({
+      studyId: 'study-runner-waves',
+      waves: [
+        [{ runId: 'run-w-first', script: [{ expect: 'Dashboard', click: 'Billing' }, { expect: 'Billing settings', done: 'Billing it is.', debrief: 'debrief' }] }],
+        [{ runId: 'run-w-second', repeatIndex: 1, script: PLANS }],
+      ],
+    });
+    const fake = fakeFile();
+    const plugin = openPlugin(fake);
+    const doc = await plugin.bridge.call('trace-read', { importLibraryVariants: true });
+    const clock = panelClock();
+    // The debrief of wave 1 ends after the runner's second wait for it.
+    const sleep = async (ms: number) => {
+      if (ms === WAVE_RETRY_MS && clock.waits.filter((w) => w === WAVE_RETRY_MS).length === 1) mock.trace.release('run-w-first', 'debrief');
+      await clock.sleep(ms);
+    };
+    const runner: RunnerStatus[] = [];
+    const result = await study(plugin, doc, 'study-runner-waves', { sleep, runner });
+
+    expect(result).toEqual({
+      stop: 'done',
+      reason: 'at most 2 waves run per study',
+      sessions: [
+        { runId: 'run-w-first', ended: { status: 'finalizing', reason: 'done' }, stop: 'ended', message: null },
+        { runId: 'run-w-second', ended: { status: 'finalizing', reason: 'give_up' }, stop: 'ended', message: null },
+      ],
+    });
+    expect(clock.waits.filter((w) => w === WAVE_RETRY_MS)).toHaveLength(2);
+    const nexts = mock.trace.refusals.filter((r) => r.path === '/api/studies/study-runner-waves/runs/next');
+    expect(nexts.map((r) => [r.status, r.error])).toEqual([[409, 'wave_in_progress'], [409, 'wave_in_progress']]);
+    expect(mock.trace.runs.get('run-w-first')?.status).toBe('completed');
+    expect(mock.trace.runs.get('run-w-second')).toMatchObject({ wave: 2, owner: OWNER, status: 'abandoned' });
+    expect(runner.map((r) => r.phase)).toEqual(['running', 'next_wave', 'running', 'next_wave', 'done']);
+    expect(cleanups(plugin)).toEqual([{ removed: 0 }, { removed: 0 }]);
+  }, 30_000);
+
+  it('leaves a run another panel claimed to that panel, and its saved session too', async () => {
+    mock.trace.addStudy({
+      studyId: 'study-shared',
+      waves: [[
+        { runId: 'run-mine', script: PLANS },
+        { runId: 'run-theirs', script: GOLDEN },
+      ]],
+    });
+    await client.claimRun('run-theirs', { browser: { engine: 'figma-trace', version: '0.1.0', viewport: [1280, 800] }, owner: 'panel-other' });
+    const fake = fakeFile();
+    const plugin = openPlugin(fake);
+    const doc = await plugin.bridge.call('trace-read', { importLibraryVariants: true });
+    // An earlier panel on this machine, with another owner id, saved where its run stood.
+    const theirs: SavedSession = { owner: 'panel-other', runId: 'run-theirs', turn: 1, state: start(doc, '1:2'), lastOutcome: null };
+    await plugin.bridge.call('trace-save', { studyId: 'study-shared', runId: 'run-theirs', session: theirs });
+    const clock = panelClock();
+    // The wave waits for the other panel's run, which that panel then aborts.
+    const sleep = async (ms: number) => {
+      if (ms === WAVE_RETRY_MS && mock.trace.runs.get('run-theirs')?.status === 'running') {
+        await client.abortRun('run-theirs', { owner: 'panel-other', code: 'panel_state_lost', detail: 'The other panel closed for good.' });
+      }
+      await clock.sleep(ms);
+    };
+    const result = await study(plugin, doc, 'study-shared', { sleep });
+
+    expect(result).toMatchObject({ stop: 'done', sessions: [{ runId: 'run-mine', ended: { status: 'finalizing', reason: 'give_up' } }] });
+    expect(postsOf('run-theirs')).toEqual([]);
+    expect(refusalsOf('run-theirs')).toEqual([]);
+    expect(mock.trace.runs.get('run-theirs')).toMatchObject({ owner: 'panel-other', status: 'aborted', abortReason: 'panel_state_lost' });
+    expect(await plugin.bridge.call('trace-load', { studyId: 'study-shared' })).toEqual({ sessions: [theirs] });
+  }, 30_000);
+
+  it('resumes the run it owns when the plugin reopens, with a new main thread and bridge on the same file', async () => {
+    mock.trace.addStudy({
+      studyId: 'study-runner-resume',
+      waves: [[{
+        runId: 'run-rr',
+        script: [
+          { expect: 'Dashboard', click: 'Billing' },
+          { expect: 'Billing settings', click: 'Connect a bank' },
+          { expect: 'Connect bank', click: 'Sign in with your bank', hold: 'reopened' },
+          { expect: 'Connect bank', click: 'Try again' },
+          { expect: 'Connect bank', done: 'I would sign in with my bank once it works.' },
+        ],
+      }]],
+    });
+    const fake = fakeFile();
+    const first = openPlugin(fake);
+    const doc = await first.bridge.call('trace-read', { importLibraryVariants: true });
+    const before = snapshot(fake);
+    const clock = panelClock();
+    const closing = async (ms: number) => {
+      if (mock.trace.runs.get('run-rr')?.turns.has(3)) throw new PanelClosed('The plugin closed');
+      await clock.sleep(ms);
+    };
+    await expect(study(first, doc, 'study-runner-resume', { sleep: closing })).rejects.toThrow(PanelClosed);
+    first.close();
+    expect(mock.trace.runs.get('run-rr')).toMatchObject({ status: 'running', owner: OWNER });
+
+    const second = openPlugin(fake);
+    const reread = await second.bridge.call('trace-read', { importLibraryVariants: true });
+    mock.trace.release('run-rr', 'reopened');
+    const result = await study(second, reread, 'study-runner-resume');
+
+    expect(result).toEqual({ stop: 'done', reason: expect.any(String), sessions: [{ runId: 'run-rr', ended: { status: 'finalizing', reason: 'done' }, stop: 'ended', message: null }] });
+    // Resumed from its saved turn 2, not claimed again: turn 3 went out twice, unchanged.
+    expect(refusalsOf('run-rr')).toEqual([]);
+    expect(postsOf('run-rr').map((p) => p.turn)).toEqual([1, 2, 3, 3, 4, 5]);
+    const [once, again] = postsOf('run-rr').filter((p) => p.turn === 3).map((p) => p.body as unknown as TurnBody);
+    expect(again?.last).toEqual(once?.last);
+    expect(again?.screen).toEqual(once?.screen);
+    expect(mock.trace.runs.get('run-rr')?.status).toBe('completed');
+    expect(await second.bridge.call('trace-load', { studyId: 'study-runner-resume' })).toEqual({ sessions: [] });
+    await tick();
+    expect(scratchOn(fake)).toEqual([]);
+    expectUntouched(fake, before);
+    expect([...first.failures, ...second.failures]).toEqual([]);
   }, 30_000);
 });
 
@@ -648,6 +910,15 @@ describe('the mock backend', () => {
     expect(briefing).toMatchObject({ runId: 'run-claim', persona: { name: 'run-claim' }, claimedAt: expect.any(String) });
     expect(await refused(api.claimRun('run-claim', { browser, owner: OWNER }))).toMatchObject({ status: 409, code: 'already_claimed' });
     expect(await refused(api.claimRun('run-nobody', { browser, owner: OWNER }))).toMatchObject({ status: 404, code: 'run_not_found' });
+  });
+
+  it('takes the claim of a start frame of fractional size, in the whole pixels the panel claims with', async () => {
+    // Farside's "Enter your code" is 818.4 px tall: its viewport is what the panel claims with.
+    const cut = frame('S', 1280, 818.4);
+    const { width, height } = start(protoDoc([cut]), 'S').viewport;
+    own.trace.addStudy({ studyId: 'study-pixels', waves: [[{ runId: 'run-pixels', script: [] }, { runId: 'run-fraction', script: [] }]] });
+    expect(await api.claimRun('run-pixels', { browser: { ...browser, viewport: [width, height] }, owner: OWNER })).toMatchObject({ runId: 'run-pixels' });
+    expect(await refused(api.claimRun('run-fraction', { browser: { ...browser, viewport: [cut.width, cut.height] }, owner: OWNER }))).toMatchObject({ status: 400, code: 'bad_request' });
   });
 
   it('takes turns in order: 202 thinking, then the poll decides; expected names the turn it takes next', async () => {
@@ -773,6 +1044,10 @@ describe('the mock backend', () => {
       baseline: null,
     });
     expect(own.trace.runs.get('run-w1')?.status).toBe('abandoned');
+    expect(await api.getRuns('study-waves')).toMatchObject({
+      studyId: 'study-waves', status: 'running', currentWave: 2,
+      runs: [{ runId: 'run-w1', wave: 1, status: 'abandoned', lastStep: { seq: 1 } }, { runId: 'run-w2', wave: 2, repeatIndex: 1, status: 'queued', lastStep: null }],
+    });
     expect(await refused(api.nextWave('study-waves'))).toMatchObject({ status: 409, code: 'wave_in_progress' });
     await api.claimRun('run-w2', { browser, owner: OWNER });
     await api.abortRun('run-w2', { owner: OWNER, code: 'render_failed', detail: 'x' });

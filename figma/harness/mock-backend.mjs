@@ -1,7 +1,7 @@
 // A fake Archetype backend for the harness: the studies, runs, report and
 // device flow routes the panel uses, answered from the fixtures. Preset study
 // ids freeze one moment each (for screenshots); studies the panel creates
-// play out in about 20 s. The trace routes (claim, turn, abort, next wave)
+// play out in about 20 s. The trace routes (claim, turn, abort, runs, next wave)
 // follow the backend as built, with a scripted brain; `serveMock` serves
 // it all over HTTP on 127.0.0.1.
 import { readFileSync } from 'node:fs';
@@ -595,6 +595,26 @@ function createTraceRuns({ clock, thinkingPolls }) {
     }];
   }
 
+  /** study_run_service.list_runs: the study's runs as the runner reads them to resume and claim. */
+  function listRuns(studyId) {
+    const study = studies.get(studyId);
+    const mine = [...runs.values()].filter((r) => r.studyId === studyId);
+    const status = mine.every((r) => TERMINAL.has(r.status)) && !study.waves[study.wave] ? 'complete' : 'running';
+    return [200, {
+      studyId, status, currentWave: study.wave,
+      runs: mine.map((r) => {
+        const turns = r.turnList();
+        const last = turns[turns.length - 1];
+        return {
+          runId: r.runId, archetypeId: r.archetypeId, archetypeName: r.archetypeName, role: null, wave: r.wave, purpose: 'design',
+          repeatIndex: r.repeatIndex, status: r.status, claimedAt: r.claimedAt ?? null, completedAt: null, outcome: null, metrics: null,
+          browser: r.browser, sessionId: r.briefing.sessionId, videoPath: null,
+          lastStep: last ? { seq: last.turn, url: last.observation.screen.url } : null,
+        };
+      }),
+    }];
+  }
+
   /** Lets a script step `{hold: name}` decide, or a final step's `{debrief: name}` end its run. */
   function release(runId, name) {
     runOf(runId).released.add(name);
@@ -607,6 +627,7 @@ function createTraceRuns({ clock, thinkingPolls }) {
     const turnN = /^\/api\/plugin\/runs\/([^/]+)\/turn\/([^/]+)$/.exec(path);
     const abortPath = /^\/api\/plugin\/runs\/([^/]+)\/abort$/.exec(path);
     const nextPath = /^\/api\/studies\/([^/]+)\/runs\/next$/.exec(path);
+    const runsPath = /^\/api\/studies\/([^/]+)\/runs$/.exec(path);
     finishDebriefs();
     try {
       if (claimPath && method === 'POST') return claim(decodeURIComponent(claimPath[1]), body);
@@ -622,6 +643,7 @@ function createTraceRuns({ clock, thinkingPolls }) {
       }
       if (abortPath && method === 'POST') return abortRun(decodeURIComponent(abortPath[1]), body);
       if (nextPath && method === 'POST' && studies.has(decodeURIComponent(nextPath[1]))) return nextWave(decodeURIComponent(nextPath[1]));
+      if (runsPath && method === 'GET' && studies.has(decodeURIComponent(runsPath[1]))) return listRuns(decodeURIComponent(runsPath[1]));
     } catch (err) {
       if (!(err instanceof Refused)) throw err;
       refusals.push({ method, path, status: err.status, error: err.slug, message: err.message, body: structuredClone(body) });
