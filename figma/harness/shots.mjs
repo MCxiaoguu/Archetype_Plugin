@@ -72,6 +72,8 @@ const SCENARIOS = [
   { name: '17-history', q: 'token=mock&history=1&study=study-done', wait: '.score', act: async (f) => f.getByRole('button', { name: 'Past tests for this file' }).click(), after: '.history-item' },
   { name: '18-history-empty', q: 'token=mock', wait: '#pick-start', act: async (f) => f.getByRole('button', { name: 'Past tests for this file' }).click(), after: 'text=No tests from this file yet' },
   { name: '19-settings', q: 'token=mock', wait: '#pick-start', act: async (f) => f.getByRole('button', { name: 'Settings' }).click(), after: '#api' },
+  // The harness's API is the local mock, and the web app the default one: Open in Archetype says why it won't go.
+  { name: '19b-open-mismatch', q: 'token=mock&study=study-done', wait: '.score', act: async (f) => f.getByRole('button', { name: /Open in Archetype/ }).click(), after: '.open-why' },
   { name: '20-loading', q: 'token=mock', wait: null, raw: true },
 ];
 

@@ -876,6 +876,23 @@ describe('panel effects', () => {
     expect(store.get()).toMatchObject({ screen: 'new', study: null, form: { goal: 'Pay', goalId: '2:50' } });
   });
 
+  it("opens a study in the web app, but not in one that can't have it, saying why", () => {
+    const record = traceStudy('s20', 'complete');
+    const local = initStore('tok', undefined, { studies: [record], lastStudyId: 's20', settings: { apiBase: 'http://localhost:5013', webBase: DEFAULT_SETTINGS.webBase } });
+    expect(local.fx.openInArchetype()).toMatch(/^Your API is on this computer/);
+    expect(sent.map((m) => m.type)).not.toContain('open-url');
+    // Settings are the designer's: nothing changed them.
+    expect(local.store.get().settings).toEqual({ apiBase: 'http://localhost:5013', webBase: DEFAULT_SETTINGS.webBase });
+
+    const away = initStore('tok', undefined, { studies: [record], lastStudyId: 's20', settings: { apiBase: DEFAULT_SETTINGS.apiBase, webBase: 'http://localhost:5173' } });
+    expect(away.fx.openInArchetype()).toMatch(/^Your API isn't on this computer/);
+    expect(sent.map((m) => m.type)).not.toContain('open-url');
+
+    const both = initStore('tok', undefined, { studies: [record], lastStudyId: 's20', settings: { apiBase: 'http://localhost:5013', webBase: 'http://localhost:5173' } });
+    expect(both.fx.openInArchetype()).toBeNull();
+    expect(sent).toContainEqual({ type: 'open-url', url: 'http://localhost:5173/workspace/studies/s20' });
+  });
+
   it('refuses a sign in page that is not https', async () => {
     const calls = installFetch(() => [200, { device_code: 'd', user_code: 'WDJB-MJHT', verification_uri: 'http://auth.example/activate', verification_uri_complete: 'http://auth.example/activate?user_code=WDJB-MJHT', expires_in: 600, interval: 1 }]);
     const { store, fx } = initStore(null);

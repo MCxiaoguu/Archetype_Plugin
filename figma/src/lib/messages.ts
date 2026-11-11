@@ -26,6 +26,29 @@ export function isSafeWebUrl(url: string): boolean {
   );
 }
 
+/** Whether an address is on this computer: a local backend or web app. Written without URL, as isSafeWebUrl is. */
+export function isLocalUrl(url: string): boolean {
+  return /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?([/?#]\S*)?$/i.test(url.trim());
+}
+
+/**
+ * Why Open in Archetype would look a study up in the wrong place: the API
+ * and the web app are not both on this computer, or both away from it, so
+ * the web app reads another database than the one the tests are in. Null
+ * when they match.
+ */
+export function webAppMismatch(settings: Settings): string | null {
+  const api = isLocalUrl(settings.apiBase);
+  const web = isLocalUrl(settings.webBase);
+  if (api && !web) {
+    return "Your API is on this computer, so tests live there; Open in Archetype needs the local web app too (demo-local's ./start.sh --with-web serves it on http://localhost:5173).";
+  }
+  if (!api && web) {
+    return `Your API isn't on this computer, so tests live on that server; Open in Archetype needs its web app too, not the one on this computer (Archetype's is ${DEFAULT_SETTINGS.webBase}).`;
+  }
+  return null;
+}
+
 export function studyWebUrl(webBase: string, studyId: string): string {
   return `${webBase.trim().replace(/\/+$/, '')}/workspace/studies/${encodeURIComponent(studyId)}`;
 }

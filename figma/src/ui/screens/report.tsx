@@ -5,13 +5,14 @@ import type { AppState } from '../../lib/state';
 import { toMain } from '../bridge';
 import type { Effects } from '../effects';
 import { IconExternal, IconPin } from '../icons';
-import { Banner, FrameChip, Section, Skeleton, plural } from '../parts';
+import { Banner, FrameChip, OpenWhy, Section, Skeleton, plural, useOpenInArchetype } from '../parts';
 import { FlowMapCard } from './flowmap';
 
 const SEVERITY_CLASS: Record<number, string> = { 0: 'sev-0', 1: 'sev-1', 2: 'sev-2', 3: 'sev-3', 4: 'sev-4' };
 
 export function Report({ state, fx }: { state: AppState; fx: Effects }) {
   const st = state.study;
+  const open = useOpenInArchetype(fx.openInArchetype);
   const report = st?.report ?? null;
   const view = useMemo(() => (report ? buildReportView(report, indexFrames(state.doc)) : null), [report, state.doc]);
   if (!st) return <div class="screen" />;
@@ -246,6 +247,7 @@ export function Report({ state, fx }: { state: AppState; fx: Effects }) {
         )}
         {view.caveat && <p class="caveat">{view.caveat}</p>}
       </div>
+      <OpenWhy why={open.why} />
       <footer class="actionbar actionbar-split">
         <div class="row gap-s">
           <button type="button" class="btn btn-secondary" onClick={() => fx.pin()} title="Add one annotation per affected frame">
@@ -255,7 +257,7 @@ export function Report({ state, fx }: { state: AppState; fx: Effects }) {
             Clear pins
           </button>
         </div>
-        <button type="button" class="btn btn-primary" onClick={() => fx.openInArchetype()}>
+        <button type="button" class="btn btn-primary" onClick={open.onClick}>
           Open in Archetype <IconExternal />
         </button>
       </footer>

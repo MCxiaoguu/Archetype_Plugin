@@ -1,4 +1,5 @@
 import type { ComponentChildren, JSX } from 'preact';
+import { useState } from 'preact/hooks';
 import { toMain } from './bridge';
 import { IconCheck, IconFrame, IconStop, IconWarn } from './icons';
 
@@ -95,3 +96,23 @@ export function ago(ts: number, now: number): string {
   const d = Math.round(h / 24);
   return d === 1 ? 'yesterday' : `${d} days ago`;
 }
+
+/**
+ * Open in Archetype, which says in place why it doesn't open when the web
+ * app in settings can't have the study (it isn't where the API is).
+ * `why` is that reason, shown above the action bar, until the next click.
+ */
+export function useOpenInArchetype(open: () => string | null): { why: string | null; onClick: () => void } {
+  const [why, setWhy] = useState<string | null>(null);
+  return { why, onClick: () => setWhy(open()) };
+}
+
+export function OpenWhy({ why }: { why: string | null }) {
+  if (!why) return null;
+  return (
+    <div class="open-why">
+      <Banner kind="warn">{why} Change it in settings.</Banner>
+    </div>
+  );
+}
+

@@ -1,6 +1,6 @@
 import { ApiClient, ApiError, pollDeviceFlow, type StudyLike, type StudyRuns, type StudyStatus } from '../lib/api';
 import { continueLaunch } from '../lib/launch';
-import { isSafeWebUrl, studyWebUrl, type MainToUi, type Settings, type StudyRecord } from '../lib/messages';
+import { isSafeWebUrl, studyWebUrl, webAppMismatch, type MainToUi, type Settings, type StudyRecord } from '../lib/messages';
 import { isStudyDone, pollDelay } from '../lib/poll';
 import { runPreflight } from '../lib/preflight';
 import type { ReadingKind } from '../lib/proto/flow';
@@ -403,9 +403,17 @@ export function createEffects(store: Store, deps: EffectsDeps = {}) {
     store.dispatch({ type: 'new-test' });
   }
 
-  function openInArchetype() {
+  /**
+   * Opens the study in the web app. With the web app and the API in
+   * different places it would find no such study, so it opens nothing and
+   * returns why, for the button to say; the settings stay as they are.
+   */
+  function openInArchetype(): string | null {
     const s = store.get();
+    const why = webAppMismatch(s.settings);
+    if (why) return why;
     if (s.study?.id) toMain({ type: 'open-url', url: studyWebUrl(s.settings.webBase, s.study.id) });
+    return null;
   }
 
   function pin() {

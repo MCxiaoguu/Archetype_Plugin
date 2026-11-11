@@ -477,4 +477,5 @@ button.fm-persona:hover { background: var(--bg-hover); }
 @media (prefers-reduced-motion: reduce) { .ls-pulse { animation: none; opacity: 0.3; } }
 .ls-caption { display: flex; flex-direction: column; gap: 2px; }
 .ls-nav { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.open-why { padding: 0 16px 8px; }
 
