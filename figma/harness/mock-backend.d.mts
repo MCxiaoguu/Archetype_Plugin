@@ -119,7 +119,8 @@ export function createMockBackend(opts?: {
   clock?: () => number;
   thinkingPolls?: number;
   /** Plugin-mode studies created here run as trace runs, each persona playing the script this gives it. */
-  traceScripts?: ((archetype: MockArchetype) => ScriptStep[]) | null;
+  /** A persona it gives no script (null) runs no try. */
+  traceScripts?: ((archetype: MockArchetype) => ScriptStep[] | null) | null;
 }): MockBackend;
 
 /** The backend's turn body validation: throws its 400 for a body it refuses. */

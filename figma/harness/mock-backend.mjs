@@ -228,7 +228,10 @@ export function createMockBackend({ log = () => {}, clock = () => Date.now(), th
         if (traceScripts && s.body?.execution === 'plugin' && !s.traced) {
           // Wave 1 as trace runs, one per persona, for the panel's runner to claim and play.
           const design = s.body.design;
-          const specs = archetypesFor(s).map((a, i) => ({ runId: `${s.id}-run${i + 1}`, archetypeId: a.archetypeId, archetypeName: a.archetypeName, script: traceScripts(a) }));
+          // A persona the scripts give no script runs no try.
+          const specs = archetypesFor(s)
+            .map((a, i) => ({ runId: `${s.id}-run${i + 1}`, archetypeId: a.archetypeId, archetypeName: a.archetypeName, script: traceScripts(a) }))
+            .filter((spec) => spec.script);
           trace.addStudy({ studyId: s.id, goal: s.body.task?.goal, waves: [specs], repeatPolicy: design.repeatPolicy });
           s.traced = true;
           s.status = 'running';
