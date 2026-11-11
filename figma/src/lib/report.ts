@@ -203,6 +203,7 @@ const QUIT_WORDS: Record<string, string> = {
   time_limit: 'ran out of steps',
   max_steps: 'ran out of steps',
   other: 'stopped for another reason',
+  missing_feature: "needed something the product doesn't have yet",
 };
 
 function snake(key: string): string {

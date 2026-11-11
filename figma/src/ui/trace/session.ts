@@ -647,8 +647,9 @@ export async function runSession(run: SessionRun, deps: SessionDeps): Promise<Se
     const index = indexLayers(layers as RawLayer[]);
     const layer = index.byKey.get(target.layerKey);
     if (!layer) throw new EngineError('invalid_layers', `The element ${element} names layer ${target.layerKey}, which the render didn't measure`);
-    const read = reads?.lookup(index.rootOf.get(layer.key) as string, layer.key) ?? null;
-    return isCandidate(layer, e.role, e.label) && read === null ? [e.label] : [];
+    // A `none` reading is the map's too: it read the text as not interactive.
+    const read = reads?.read(index.rootOf.get(layer.key) as string, layer.key) ?? false;
+    return isCandidate(layer, e.role, e.label) && !read ? [e.label] : [];
   }
 
   /** Sets the first state: the saved one of a run this panel owns, or the start frame's. */

@@ -265,6 +265,14 @@ describe('the flow map', () => {
     expect(saves.filter((x) => x !== null).map((x) => x?.mapMisses)).toContainEqual(['Use routing number instead']);
   });
 
+  it('plays a none reading (text that is not interactive) as no reading at all: nothing happens, and the map missed nothing', async () => {
+    const { posted } = await play(routing, { run: () => ({ map: map({ kind: 'none', to: null }) }) });
+    const after = lastOf(posted) as TurnBody;
+    expect(after.last).toEqual({ action: { type: 'click', element: expect.any(String) }, outcome: 'nothing_happened', target: expect.stringMatching(/^Use routing number instead/) });
+    expect(after.flags).not.toContain('map_miss');
+    expect(after.flag_details?.map_miss).toBeUndefined();
+  });
+
   it('flags no map_miss without a map', async () => {
     const { posted } = await play(routing);
     expect(lastOf(posted)?.last?.outcome).toBe('nothing_happened');

@@ -638,7 +638,8 @@ const MAP_NEAR = 200;
 const MAP_SHARE_KEY = 1000;
 const NODE_KINDS = ['frame', 'overlay'];
 const EDGE_ACTIONS = ['NAVIGATE', 'SWAP', 'OVERLAY', 'SCROLL_TO'];
-const READING_KINDS = ['edge', 'control', 'gap'];
+/** `none`: text that isn't interactive; no outcome takes it. */
+const READING_KINDS = ['edge', 'control', 'gap', 'none'];
 const DOC_HASH = /^[A-Za-z0-9_:-]{1,64}$/;
 const EDGE_ID = /^[A-Za-z0-9_:;-]{1,64}$/;
 const TRIGGER = /^[A-Z_]{1,40}$/;
@@ -866,7 +867,7 @@ function createFlowMaps({ clock }) {
     if (!isObject(body)) throw invalidMap('The body must be a JSON object {baseVersion, kind, to?}.');
     for (const key of Object.keys(body)) if (!['baseVersion', 'kind', 'to'].includes(key)) throw invalidMap(`${key} is not a field of a reading edit: send baseVersion, kind and, for an edge, to.`);
     if (!(Number.isInteger(body.baseVersion) && body.baseVersion >= 1)) throw invalidMap('baseVersion is required: the version the designer edited.');
-    if (!READING_KINDS.includes(body.kind)) throw invalidMap(`kind must be edge, control or gap (got ${repr(body.kind)}).`);
+    if (!READING_KINDS.includes(body.kind)) throw invalidMap(`kind must be edge, control, gap or none (got ${repr(body.kind)}).`);
     const current = latest(studyId);
     if (!current) throw new Refused(404, 'flow_map_not_found', `Study ${studyId} has no flow map yet.`);
     if (body.baseVersion !== current.version) throw new Refused(409, 'flow_map_changed', `baseVersion ${body.baseVersion} is not the current flow map version (${current.version}); reload the map and edit again.`);

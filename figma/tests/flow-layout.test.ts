@@ -68,10 +68,10 @@ describe('graphOf', () => {
       { id: 'd1', from: 'A', to: 'O', layerKey: '1', label: 'Go', trigger: 'ON_CLICK', action: 'OVERLAY', conditional: false },
       { id: 'd2', from: 'A', to: '9:9', layerKey: '2', label: 'Top', trigger: 'ON_CLICK', action: 'SCROLL_TO', conditional: false },
     ],
-    readings: [reading('r1', 'edge', ['A', 'O', 'A'], 'B'), reading('r2', 'gap', ['A', 'B']), reading('r3', 'control', ['B'])],
+    readings: [reading('r1', 'edge', ['A', 'O', 'A'], 'B'), reading('r2', 'gap', ['A', 'B']), reading('r3', 'control', ['B']), reading('r5', 'none', ['A'])],
   };
 
-  it('draws the edges that change the screen, an inferred edge per node an edge reading is on, and a gap per node', () => {
+  it('draws the edges that change the screen, an inferred edge per node an edge reading is on, and a gap per node; text that is not interactive, nothing', () => {
     const g = graphOf(map);
     expect(g.nodes).toEqual([{ id: 'A', name: 'Home', kind: 'frame' }, { id: 'B', name: 'Plans', kind: 'frame' }, { id: 'O', name: 'Error', kind: 'overlay' }]);
     expect(g.edges).toEqual([{ from: 'A', to: 'O', inferred: false }, { from: 'A', to: 'B', inferred: true }, { from: 'O', to: 'B', inferred: true }]);

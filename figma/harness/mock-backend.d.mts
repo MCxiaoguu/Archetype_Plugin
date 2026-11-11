@@ -73,7 +73,7 @@ export interface TraceRefusal {
 export interface MockFlowMap {
   /** The reading of a candidate (each share key once, on its first node); every one a gap when none is given. */
   read?: (candidate: { node: string; layerKey: string; shareKey: string; label: string; role: string }, nodes: Array<{ id: string; kind: string; name: string }>) =>
-    { kind: 'edge'; to: string; reason?: string } | { kind: 'control' | 'gap'; reason?: string };
+    { kind: 'edge'; to: string; reason?: string } | { kind: 'control' | 'gap' | 'none'; reason?: string };
   /** Builds that fail, in order: the node (its id) the model could not read, and why. */
   buildFailures?: Array<{ node?: string; reason: string }>;
   /** How many polls of a build still see it building. */

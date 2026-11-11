@@ -91,6 +91,7 @@ function MapEditor({ map, order, fx }: { map: FlowMap; order: string[]; fx: Pick
                     >
                       <option value="gap">No page yet</option>
                       <option value="control">A control</option>
+                      <option value="none">Not clickable (status text)</option>
                       {frames.map((f) => (
                         <option value={`edge:${f.id}`}>{f.id === id ? 'Stays on this screen' : `Opens ${f.name}`}</option>
                       ))}

@@ -66,7 +66,8 @@ export interface FlowCandidate {
   nearText: string;
 }
 
-export type ReadingKind = 'edge' | 'control' | 'gap';
+/** `none`: text that isn't interactive (a status, a badge, an error message), which a click on does nothing. */
+export type ReadingKind = 'edge' | 'control' | 'gap' | 'none';
 
 /**
  * The backend's reading of one share key, in one version of the study's
@@ -81,7 +82,7 @@ export interface FlowReading {
   label: string;
   role: CandidateRole;
   kind: ReadingKind;
-  /** The frame an edge goes to (the screen's own frame means "already here"); null for a control or a gap. */
+  /** The frame an edge goes to (the screen's own frame means "already here"); null for any other kind. */
   to: string | null;
   /** `bulk_gap`: launched with drawn connections only, and read again by the next build. */
   by: 'model' | 'designer' | 'bulk_gap';
@@ -108,8 +109,13 @@ export interface FlowMap {
   buildId: string | null;
 }
 
-/** A map's readings by each place they are of, for the engine (model.ts ReadingLookup), and by id. */
-export function readingLookup(map: FlowMap): { lookup: ReadingLookup; byId: Map<string, FlowReading> } {
+/**
+ * A map's readings by each place they are of: `lookup` gives the engine the
+ * ones it plays (model.ts ReadingLookup), so a `none` reading is no reading
+ * there and a click on it plays as the prototype has it; `read` says
+ * whether the map read the place at all, `none` included.
+ */
+export function readingLookup(map: FlowMap): { lookup: ReadingLookup; read: (node: string, layerKey: string) => boolean; byId: Map<string, FlowReading> } {
   const byPlace = new Map<string, FlowReading>();
   const byId = new Map<string, FlowReading>();
   for (const r of map.readings) {
@@ -119,9 +125,10 @@ export function readingLookup(map: FlowMap): { lookup: ReadingLookup; byId: Map<
   }
   const lookup: ReadingLookup = (node, layerKey) => {
     const r = byPlace.get(`${node} ${layerKey}`);
-    return r ? { id: r.id, kind: r.kind, to: r.to } : null;
+    return r && r.kind !== 'none' ? { id: r.id, kind: r.kind, to: r.to } : null;
   };
-  return { lookup, byId };
+  const read = (node: string, layerKey: string) => byPlace.has(`${node} ${layerKey}`);
+  return { lookup, read, byId };
 }
 
 export const MAX_HEADING = 120;

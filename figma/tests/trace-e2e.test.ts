@@ -1318,7 +1318,7 @@ describe('the mock backend', () => {
     const NODE = { id: '1:2', kind: 'frame' as const, name: 'Dashboard', pageId: '0:1', heading: 'Welcome back', text: 'Welcome back · Continue' };
     const CANDIDATE = { node: '1:2', layerKey: '1:5', shareKey: 'L:1:2:1:5', label: 'Welcome back', role: 'text' as const, box: [0, 0, 100, 20] as [number, number, number, number], nearText: 'Continue' };
     /** A plugin-mode study whose map reads its one candidate as `kind`, committed and built: version 1. */
-    async function mapped(kind: 'edge' | 'control' | 'gap', runs: string[]) {
+    async function mapped(kind: 'edge' | 'control' | 'gap' | 'none', runs: string[]) {
       const studyId = `study-map-${++n}`;
       own.trace.addStudy({ studyId, waves: [runs.map((runId) => ({ runId: `${runId}-${n}`, script: [{ click: 'Continue' }, { done: 'Done.' }] as ScriptStep[] }))], flowMap: { read: () => (kind === 'edge' ? { kind, to: '1:2' } : { kind }) } });
       const answer = await api.commitFlowMap(studyId, { baseVersion: null, docHash: 'h1', nodes: [NODE], edges: [], candidates: [CANDIDATE] });
@@ -1357,6 +1357,19 @@ describe('the mock backend', () => {
       expect((await refused(turn2(other, { outcome: 'nothing_happened', reading: 'r1' }))).message).toMatch(/^last\.reading is only allowed with navigated, already_here, accepted and missing/);
       expect((await refused(turn2(unknown, { outcome: 'missing', reading: 'r9' }))).message).toBe('last.reading r9 is not a reading of flow map version 1.');
       expect((await refused(turn2(nomap, { outcome: 'missing', reading: 'r1' }))).message).toMatch(/this run plays under no flow map version/);
+    });
+
+    it('reads text that is not interactive as none, refuses a turn that names it, and takes it in an edit', async () => {
+      const { studyId, map, runIds } = await mapped('none', ['run-none-missing', 'run-none-plain']);
+      expect(map.readings).toEqual([expect.objectContaining({ id: 'r1', kind: 'none', to: null })]);
+      const [named, plain] = runIds as [string, string];
+      for (const runId of runIds) await api.claimRun(runId, { browser, owner: OWNER, flowMapVersion: 1 });
+      expect((await refused(turn2(named, { outcome: 'missing', reading: 'r1' }))).message).toBe('last.reading r1 is a none reading in flow map version 1, not a gap (outcome missing).');
+      // A click on it is a plain nothing_happened, with no reading and no map_miss.
+      expect(await turn2(plain, { outcome: 'nothing_happened' })).toMatchObject({ status: 'thinking' });
+      expect((await api.editReading(studyId, 'r1', { baseVersion: 1, kind: 'gap' })).map.readings[0]).toMatchObject({ kind: 'gap', by: 'designer' });
+      expect((await api.editReading(studyId, 'r1', { baseVersion: 2, kind: 'none' })).map.readings[0]).toMatchObject({ kind: 'none', to: null, by: 'designer' });
+      expect(await refused(api.editReading(studyId, 'r1', { baseVersion: 3, kind: 'none', to: '1:2' }))).toMatchObject({ status: 400, code: 'invalid_flow_map' });
     });
 
     it('tells navigated from already here by the frame the screen showed', async () => {

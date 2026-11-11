@@ -84,6 +84,7 @@ describe('report view', () => {
     expect(quitWords('trustRefused')).toBe('would not share personal details');
     expect(quitWords('technical_error')).toBe('hit an error');
     expect(quitWords('someNewReason')).toBe('some new reason');
+    expect(quitWords('missing_feature')).toBe("needed something the product doesn't have yet");
     expect(quitWords(null)).toBeNull();
   });
 });
