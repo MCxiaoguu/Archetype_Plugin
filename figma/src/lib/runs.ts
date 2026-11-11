@@ -1,5 +1,6 @@
 import type { RunRowApi } from './api';
 import { frameForUrl, type FrameIndex } from './frames';
+import type { RunSize } from './form';
 import { isTerminalRun, type RunnerState } from './poll';
 
 export type PersonaPhase = 'waiting' | 'running' | 'done';
@@ -9,18 +10,26 @@ export interface LiveRun {
   runId: string;
   phase: 'acting' | 'thinking' | 'paused' | 'ended';
   frameName: string;
+  /** The node the persona is on: the topmost overlay, else the frame. */
+  node: string;
   turn: number;
   notices: string[];
+  /** How the run ended, once it has. */
+  ended: { status: string; reason: string | null } | null;
+  /** Where the last action took the persona, from node to node, and what it did. */
+  move: { from: string; to: string; outcome: string; label: string | null; reading: string | null; turn: number } | null;
 }
 
 /**
  * Where the panel's runner is with a study (ui/trace/runner.ts). The last
- * four are where it stopped: the next wave didn't come (stuck), it failed,
- * it waits for the designer to open the test's page, or the study's saved
- * progress can't be read and the designer can forget it.
+ * five are where it stopped: the next wave didn't come (stuck), it failed,
+ * it waits for the designer to open the test's page, the study's saved
+ * progress can't be read and the designer can forget it, or the flow map
+ * couldn't be completed and the designer tries again or launches with the
+ * drawn connections only.
  */
 export interface RunnerStatus {
-  phase: 'running' | 'next_wave' | 'paused' | 'done' | 'stuck' | 'failed' | 'other_page' | 'progress_unreadable';
+  phase: 'running' | 'next_wave' | 'paused' | 'done' | 'stuck' | 'failed' | 'other_page' | 'progress_unreadable' | 'map_failed';
   notice: string | null;
 }
 
@@ -127,12 +136,47 @@ export function panelNotices(live: Readonly<Record<string, LiveRun>>, runner: Ru
   return [...shown];
 }
 
-/** The line under the persona list in plugin mode: what this panel's runner and sessions are doing. */
+/**
+ * The line under the persona list in plugin mode: what this panel's runner
+ * and sessions are doing. One row is a one-persona study, which has one try:
+ * the runner's ask for a next round finds every try in.
+ */
 export function panelRunText(rows: readonly PersonaRow[], runner: RunnerStatus | null, state: RunnerState): string {
-  if (runner && (runner.phase === 'stuck' || runner.phase === 'failed' || runner.phase === 'other_page' || runner.phase === 'progress_unreadable')) return '';
-  if (rows.some((r) => r.here)) return 'Personas are clicking through your prototype here in the panel.';
-  if (runner?.phase === 'next_wave') return 'Starting the next round of tries.';
-  if (runner?.phase === 'done' || state === 'finishing') return 'All tries are in. Putting the results together.';
-  if (state === 'queued' || state === 'waiting_for_runner') return 'Starting the personas.';
+  const one = rows.length === 1;
+  if (runner && (runner.phase === 'stuck' || runner.phase === 'failed' || runner.phase === 'other_page' || runner.phase === 'progress_unreadable' || runner.phase === 'map_failed')) return '';
+  if (rows.some((r) => r.here)) return one ? 'The persona is clicking through your prototype here in the panel.' : 'Personas are clicking through your prototype here in the panel.';
+  if (runner?.phase === 'next_wave' && !one) return 'Starting the next round of tries.';
+  if (runner?.phase === 'next_wave' || runner?.phase === 'done' || state === 'finishing') return 'All tries are in. Putting the results together.';
+  if (state === 'queued' || state === 'waiting_for_runner') return one ? 'Starting the persona.' : 'Starting the personas.';
   return '';
+}
+
+export interface RunningStep {
+  key: 'understand' | 'personas' | 'run';
+  title: string;
+  hint: string;
+}
+
+/** The Running screen's stages and labels for a test of this size: a Single persona test has one persona, not variants. */
+export function runningTexts(size: RunSize): { steps: RunningStep[]; section: string; keepOpen: string } {
+  if (size === 'single') {
+    return {
+      steps: [
+        { key: 'understand', title: 'Understanding your user', hint: 'Reading who you said your user is. Usually under 30 s.' },
+        { key: 'personas', title: 'Building the persona', hint: 'One typical user, from who you said your user is.' },
+        { key: 'run', title: 'Running', hint: 'The persona opens your prototype and clicks through it.' },
+      ],
+      section: 'Persona',
+      keepOpen: 'Keep this panel open while the persona runs',
+    };
+  }
+  return {
+    steps: [
+      { key: 'understand', title: 'Understanding your users', hint: 'Finding the traits most likely to change whether someone finishes. Usually under 30 s.' },
+      { key: 'personas', title: 'Building personas', hint: 'One typical user, then variants that each differ in one trait. Usually about a minute.' },
+      { key: 'run', title: 'Running', hint: 'Personas open your prototype and click through it.' },
+    ],
+    section: 'Personas',
+    keepOpen: 'Keep this panel open while the personas run',
+  };
 }

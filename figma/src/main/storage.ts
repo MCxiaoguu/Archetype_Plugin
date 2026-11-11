@@ -1,4 +1,4 @@
-import { DEFAULT_SETTINGS, SAVED_SESSION_VERSION, type Draft, type SavedSession, type Settings, type StudyRecord } from '../lib/messages';
+import { DEFAULT_PREFS, DEFAULT_SETTINGS, SAVED_SESSION_VERSION, type Draft, type Prefs, type SavedSession, type Settings, type StudyRecord } from '../lib/messages';
 
 export const KEYS = {
   settings: 'archetype.settings',
@@ -6,6 +6,7 @@ export const KEYS = {
   studies: (fileId: string) => `archetype.file.${fileId}.studies`,
   last: (fileId: string) => `archetype.file.${fileId}.last`,
   draft: (fileId: string) => `archetype.file.${fileId}.draft`,
+  prefs: 'archetype.prefs',
   /** The trace sessions this panel runs for a study, by run id. */
   trace: (fileId: string, studyId: string) => `archetype.file.${fileId}.trace.${studyId}`,
 };
@@ -57,6 +58,17 @@ export async function loadSettings(api: PluginAPI): Promise<Settings> {
 
 export async function saveSettings(api: PluginAPI, settings: Settings): Promise<void> {
   await api.clientStorage.setAsync(KEYS.settings, cleanSettings(settings));
+}
+
+/** The panel's view choices; a choice never made (or stored by another version) is the default. */
+export async function loadPrefs(api: PluginAPI): Promise<Prefs> {
+  const stored: unknown = await api.clientStorage.getAsync(KEYS.prefs);
+  const p = stored && typeof stored === 'object' ? (stored as Record<string, unknown>) : {};
+  return { flowMapOpen: typeof p.flowMapOpen === 'boolean' ? p.flowMapOpen : DEFAULT_PREFS.flowMapOpen };
+}
+
+export async function savePrefs(api: PluginAPI, prefs: Prefs): Promise<void> {
+  await api.clientStorage.setAsync(KEYS.prefs, { flowMapOpen: prefs.flowMapOpen });
 }
 
 export async function loadToken(api: PluginAPI): Promise<string | null> {
@@ -149,6 +161,9 @@ export function savedSessionProblem(session: unknown, runId: string): string | n
     return 'its timerEffects are not a list of {type, detail}';
   }
   if (!Array.isArray(session.loopFrames) || !session.loopFrames.every(isText)) return 'its loopFrames are not a list of frame ids';
+  const v = session.flowMapVersion;
+  if (v !== null && !(Number.isInteger(v) && (v as number) >= 1)) return 'its flowMapVersion is not a version number or null';
+  if (!Array.isArray(session.mapMisses) || !session.mapMisses.every(isText)) return 'its mapMisses are not a list of labels';
   return null;
 }
 

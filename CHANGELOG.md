@@ -7,6 +7,12 @@ All notable changes to the Archetype plugin. Versions follow
 
 ### Added
 
+- The Figma plugin's new test form offers a Single persona size: one
+  persona built from "Who is your user?", one try, one wave (`design:
+  {mode: "single", archetypeBudget: 1, repeatPolicy: "explore"}`), with the
+  normal study report. The Running and report screens word one persona as
+  one.
+
 - Studies can target Figma prototypes. Every browser server loads
   `browser/figma-proto-init.js`, which turns on the prototype viewer's
   screen reader mode and lifts its hotspots above the canvas, so the actor

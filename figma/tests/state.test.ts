@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { RunRowApi } from '../src/lib/api';
-import { DEFAULT_SETTINGS, type InitPayload, type StudyRecord } from '../src/lib/messages';
-import { INITIAL_STATE, reducer, type Action, type AppState } from '../src/lib/state';
+import { DEFAULT_PREFS, DEFAULT_SETTINGS, type InitPayload, type StudyRecord } from '../src/lib/messages';
+import { EMPTY_FLOW, INITIAL_STATE, reducer, type Action, type AppState } from '../src/lib/state';
 import { fixtureDoc, fixtureReport } from './helpers';
 
 const record: StudyRecord = { studyId: 's1', title: 'Connect a bank', startName: 'Dashboard', goalName: 'Bank connected', size: 'quick', launchedAt: 1000, status: 'running' };
@@ -16,6 +16,7 @@ function init(over: Partial<InitPayload> = {}): AppState {
     studies: [],
     lastStudyId: null,
     draft: null,
+    prefs: DEFAULT_PREFS,
     pluginVersion: '0.1.0',
     ...over,
   };
@@ -40,6 +41,12 @@ describe('panel state machine', () => {
     const s = init({ studies: [record], lastStudyId: 's1' });
     expect(s.screen).toBe('progress');
     expect(s.study).toMatchObject({ id: 's1', stage: 'watching', watchingSince: 5000 });
+  });
+
+  it('restores a Single persona draft, and starts from Quick when the draft names no size it knows', () => {
+    expect(init({ draft: { who: 'Nurses', size: 'single' } }).form.size).toBe('single');
+    expect(init({ draft: { who: 'Nurses', size: 'huge' as never } }).form.size).toBe('quick');
+    expect(init({ draft: { who: 'Nurses' } }).form.size).toBe('quick');
   });
 
   it('restores the draft', () => {
@@ -185,9 +192,62 @@ describe('panel state machine', () => {
     expect(reducer(init(), { type: 'signed-out', expired: false }).notice).toBeNull();
   });
 
+  it("keeps the Flow map card's map, paths, screens, following and Clear paths for its own study, until it is opened again", () => {
+    let s = run([{ type: 'launch-started', now: 1 }, { type: 'study-created', record }], init());
+    const map = { studyId: 's1', version: 2, baseVersion: 1, inputHash: 'h', docHash: 'd', nodes: [], edges: [], readings: [], dropped: [], completedAt: 'c', model: null, buildId: null };
+    s = reducer(s, { type: 'flow-map', studyId: 's1', map });
+    s = reducer(s, { type: 'flow-shot', studyId: 's1', node: '1:2', image: new Uint8Array([1]) });
+    s = reducer(s, { type: 'flow-follow', studyId: 's1', runId: 'r1' });
+    s = reducer(s, { type: 'flow-follow-note', studyId: 's1', note: 'On page Archive' });
+    expect(s.study?.flow).toMatchObject({ map, following: 'r1', followNote: 'On page Archive', cleared: false });
+    expect(Object.keys(s.study?.flow.shots ?? {})).toEqual(['1:2']);
+    s = reducer(s, { type: 'flow-clear', studyId: 's1' });
+    expect(s.study?.flow).toMatchObject({ cleared: true, following: null, followNote: null, map });
+    expect(reducer(s, { type: 'flow-clear', studyId: 's0' })).toBe(s);
+    expect(reducer(s, { type: 'flow-error', studyId: 's1', message: 'Archetype had a problem.' }).study?.flow).toMatchObject({ error: 'Archetype had a problem.', map });
+    // Opened again, the study shows its paths again.
+    expect(reducer(s, { type: 'open-study', record, now: 9 }).study?.flow).toEqual(EMPTY_FLOW);
+  });
+
+  it('keeps the gaps the live personas clicked, once each, for the card to draw', () => {
+    let s = run([{ type: 'launch-started', now: 1 }, { type: 'study-created', record }], init());
+    const status = { runId: 'r1', phase: 'acting' as const, frameName: 'Connect bank', node: '2:20', turn: 4, notices: [], ended: null };
+    const gap = { from: '2:20', to: '2:20', outcome: 'missing', label: 'Use routing number instead', reading: 'r4', turn: 3 };
+    s = reducer(s, { type: 'session', studyId: 's1', status: { ...status, move: gap } });
+    s = reducer(s, { type: 'session', studyId: 's1', status: { ...status, move: gap } });
+    s = reducer(s, { type: 'session', studyId: 's1', status: { ...status, move: { ...gap, outcome: 'accepted', reading: 'r8' } } });
+    s = reducer(s, { type: 'session', studyId: 's1', status: { ...status, move: { ...gap, outcome: 'nothing_happened', reading: null } } });
+    expect(s.study?.flow.gapsHit).toEqual(['r4@2:20']);
+  });
+
+  it('keeps the screens of the personas this panel runs for its own study, frees them when the report is in, and starts over on another study', () => {
+    let s = run([{ type: 'launch-started', now: 1 }, { type: 'study-created', record }], init());
+    const frame = (runId: string, turn: number) => ({
+      runId, turn, node: '1:2', screenName: 'Dashboard', image: new Uint8Array([turn]), viewport: { width: 1280, height: 800 }, action: null, target: null, outcome: null, toName: null, decidedAt: null,
+    });
+    s = reducer(s, { type: 'live-frame', studyId: 's1', frame: frame('r1', 1) });
+    s = reducer(s, { type: 'live-frame', studyId: 's1', frame: frame('r2', 1) });
+    s = reducer(s, { type: 'live-frame', studyId: 's1', frame: frame('r1', 2) });
+    expect(s.study?.screens.frames.map((f) => `${f.runId}/${f.turn}`)).toEqual(['r1/1', 'r2/1', 'r1/2']);
+    expect(reducer(s, { type: 'live-frame', studyId: 's0', frame: frame('r9', 1) })).toBe(s);
+    s = reducer(s, { type: 'live-pick', studyId: 's1', runId: 'r2' });
+    expect(s.study?.screens).toMatchObject({ pick: 'r2', back: 0 });
+    s = reducer(s, { type: 'live-step', studyId: 's1', runId: 'r1', step: 1 });
+    expect(s.study?.screens).toMatchObject({ back: 1, viewing: 'r1' });
+    expect(reducer(s, { type: 'open-study', record, now: 9 }).study?.screens.frames).toEqual([]);
+    const done = reducer(s, { type: 'report', report: { ...fixtureReport(), status: 'complete', partial: false }, now: 9 });
+    expect(done.study?.screens.frames).toEqual([]);
+  });
+
+  it("keeps the viewer's view choices from the init, and as they change", () => {
+    const s = init({ prefs: { flowMapOpen: true } });
+    expect(s.prefs).toEqual({ flowMapOpen: true });
+    expect(reducer(s, { type: 'prefs', prefs: { flowMapOpen: false } }).prefs).toEqual({ flowMapOpen: false });
+  });
+
   it('keeps what each session and the runner in this panel say, for their own study only', () => {
     let s = run([{ type: 'launch-started', now: 1 }, { type: 'study-created', record }], init());
-    const status = { runId: 'r1', phase: 'thinking' as const, frameName: 'Connect bank', turn: 3, notices: [] };
+    const status = { runId: 'r1', phase: 'thinking' as const, frameName: 'Connect bank', node: '2:20', turn: 3, notices: [], ended: null, move: null };
     s = reducer(s, { type: 'session', studyId: 's1', status });
     expect(s.study?.live).toEqual({ r1: status });
     s = reducer(s, { type: 'session', studyId: 's1', status: { ...status, phase: 'acting', turn: 4 } });

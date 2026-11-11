@@ -58,6 +58,8 @@ export class FakeNode {
   private _annotations: { label?: string }[] = [];
   refuseAnnotations = false;
   private pluginData = new Map<string, string>();
+  /** Shared plugin data, by `<namespace> <key>`: what any plugin (and an MCP host) can write. */
+  private sharedPluginData = new Map<string, string>();
 
   constructor(id: string, name: string, type: string) {
     this.id = id;
@@ -319,6 +321,12 @@ export class FakeNode {
   setPluginData(k: string, v: string) {
     this.pluginData.set(k, v);
   }
+  getSharedPluginData(namespace: string, k: string) {
+    return this.sharedPluginData.get(`${namespace} ${k}`) ?? '';
+  }
+  setSharedPluginData(namespace: string, k: string, v: string) {
+    this.sharedPluginData.set(`${namespace} ${k}`, v);
+  }
 }
 
 export const nav = (destinationId: string | null, navigation = 'NAVIGATE') => ({
@@ -489,6 +497,8 @@ function build(world: FixtureWorld, spec: FixtureNode): FakeNode {
   const node = new FakeNode(id, name, type);
   Object.assign(node, structuredClone(props));
   node.world = world;
+  // Figma's default text size, where the fixture gives none.
+  if (type === 'TEXT' && node.fontSize === undefined) node.fontSize = 16;
   if (type === 'PAGE') {
     node.loadAsync = vi.fn(async () => {});
     node.on = vi.fn((event: string, handler: NodeChangeHandler) => {
@@ -552,6 +562,11 @@ export function fakeFromFixture(fixture: ProtoFixture) {
     createRectangle: vi.fn(() => create('RECTANGLE', 'Rectangle')),
     loadFontAsync: vi.fn(async (font: unknown) => void world.log?.push(`loadFont ${JSON.stringify(font)}`)),
     commitUndo: vi.fn(() => void world.log?.push('commitUndo')),
+    viewport: { scrollAndZoomIntoView: vi.fn() },
+    setCurrentPageAsync: vi.fn(async (page: FakeNode) => {
+      api.currentPage = page;
+      world.currentPage = page;
+    }),
     get skipInvisibleInstanceChildren() {
       return world.flags.skipInvisibleInstanceChildren;
     },

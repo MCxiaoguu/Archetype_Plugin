@@ -3,6 +3,7 @@ import { continueLaunch } from '../lib/launch';
 import { isSafeWebUrl, studyWebUrl, type MainToUi, type Settings, type StudyRecord } from '../lib/messages';
 import { isStudyDone, pollDelay } from '../lib/poll';
 import { runPreflight } from '../lib/preflight';
+import type { ReadingKind } from '../lib/proto/flow';
 import { buildReportView, type StudyReport } from '../lib/report';
 import { indexFrames } from '../lib/frames';
 import { buildStudyRequest, shareKeyOf, validateForm } from '../lib/study';
@@ -196,6 +197,7 @@ export function createEffects(store: Store, deps: EffectsDeps = {}) {
     if (status === 'cancelled' || gen !== watchGen) return;
     // Only a running study has personas to run: a finished one is only shown.
     if (status === 'running') trace.start();
+    if (store.get().study?.record?.trace) void loadFlow(gen, { paths: false });
     void loop(gen);
   }
 
@@ -269,12 +271,101 @@ export function createEffects(store: Store, deps: EffectsDeps = {}) {
     try {
       const report = await api().getReport<StudyReport>(st.id);
       if (gen !== watchGen) return;
+      // A report whose parts don't fit together fails here, as a failed load, not on screen.
+      buildReportView(report, indexFrames(store.get().doc));
       store.dispatch({ type: 'report', report, now: Date.now() });
+      if (report.flow) void loadFlow(gen, { paths: true });
       const rec = store.get().study?.record;
       if (rec) toMain({ type: 'save-study', record: rec });
     } catch (err) {
       if (gen === watchGen) store.dispatch({ type: 'report-failed', message: message(err) });
     }
+  }
+
+  /**
+   * The Flow map card's data: the study's current map (none before its
+   * first commit), and once it ran, each run's path. What fails to load is
+   * shown in the card; the rest of the screen goes on.
+   */
+  async function loadFlow(gen: number, { paths }: { paths: boolean }) {
+    const id = store.get().study?.id;
+    if (!id) return;
+    let what = 'The flow map did not load';
+    try {
+      const map = await api()
+        .getFlowMap(id)
+        .then(({ map: m }) => m)
+        .catch((err: unknown) => {
+          if (err instanceof ApiError && err.code === 'flow_map_not_found') return null;
+          throw err;
+        });
+      if (gen !== watchGen) return;
+      store.dispatch({ type: 'flow-map', studyId: id, map });
+      if (!paths) return;
+      what = 'The paths did not load';
+      const { runs } = await api().getPaths(id);
+      if (gen !== watchGen) return;
+      if (!Array.isArray(runs)) throw new Error('Archetype sent paths the panel cannot read.');
+      store.dispatch({ type: 'flow-paths', studyId: id, paths: runs });
+    } catch (err) {
+      if (gen === watchGen) store.dispatch({ type: 'flow-error', studyId: id, message: `${what}: ${message(err)}` });
+    }
+  }
+
+  /**
+   * Edit map: sets one reading of the version the card shows, which writes
+   * the next version; runs claimed after it play that one. A map that moved
+   * meanwhile is loaded again, for the designer to set the reading on it.
+   */
+  async function editReading(readingId: string, kind: ReadingKind, to: string | null) {
+    const st = store.get().study;
+    const map = st?.flow.map;
+    if (!st?.id || !map) return;
+    const id = st.id;
+    if (kind === 'edge' && !to) throw new Error(`An edge reading needs the frame it goes to (reading ${readingId}).`);
+    try {
+      try {
+        const { map: next } = await api().editReading(id, readingId, { baseVersion: map.version, kind, ...(kind === 'edge' ? { to: to as string } : {}) });
+        store.dispatch({ type: 'flow-map', studyId: id, map: next });
+      } catch (err) {
+        if (!(err instanceof ApiError && err.code === 'flow_map_changed')) throw err;
+        const { map: current } = await api().getFlowMap(id);
+        store.dispatch({ type: 'flow-map', studyId: id, map: current });
+        store.dispatch({ type: 'notice', notice: { kind: 'info', text: `The flow map changed meanwhile (now version ${current.version}), so the panel loaded it again. Set the reading on it again.` } });
+      }
+    } catch (err) {
+      store.dispatch({ type: 'flow-error', studyId: id, message: `The reading was not saved: ${message(err)}` });
+    }
+  }
+
+  /** Follow persona: the viewport moves to the frame the persona is on, on each of its turns; null stops. */
+  function followPersona(runId: string | null) {
+    trace.followRun(runId);
+  }
+
+  /** The Live screen card's persona chips: which persona's screen it shows; null goes back to the default. Follow is untouched. */
+  function pickScreen(runId: string | null) {
+    const id = store.get().study?.id;
+    if (id) store.dispatch({ type: 'live-pick', studyId: id, runId });
+  }
+
+  /** Look back: one screen older or newer in the persona's run, or back to live. */
+  function stepScreen(runId: string, step: 1 | -1 | 'live') {
+    const id = store.get().study?.id;
+    if (id) store.dispatch({ type: 'live-step', studyId: id, runId, step });
+  }
+
+  /** Opens or folds the Running screen's Flow map, and keeps the choice for the next time. */
+  function setFlowMapOpen(open: boolean) {
+    const prefs = { ...store.get().prefs, flowMapOpen: open };
+    store.dispatch({ type: 'prefs', prefs });
+    toMain({ type: 'save-prefs', prefs });
+  }
+
+  /** Clear paths: the card shows none for this study until the panel opens it again. */
+  function clearPaths() {
+    const id = store.get().study?.id;
+    if (id) store.dispatch({ type: 'flow-clear', studyId: id });
   }
 
   function openStudy(record: StudyRecord) {
@@ -301,6 +392,11 @@ export function createEffects(store: Store, deps: EffectsDeps = {}) {
     await trace.forgetProgress();
   }
 
+  /** The flow map couldn't be completed: read it again, or launch with the drawn connections only. */
+  function retryMap(drawnOnly: boolean) {
+    trace.afterMapFailed(drawnOnly);
+  }
+
   function newTest() {
     watchGen++;
     toMain({ type: 'forget-last' });
@@ -317,7 +413,8 @@ export function createEffects(store: Store, deps: EffectsDeps = {}) {
     if (!s.study?.report) return;
     const view = buildReportView(s.study.report, indexFrames(s.doc));
     if (view.pins.length === 0) {
-      store.dispatch({ type: 'notice', notice: { kind: 'info', text: 'No findings point at frames on this page, so there is nothing to pin.' } });
+      const what = s.study.report.flow ? 'Nothing in this report points' : 'No findings point';
+      store.dispatch({ type: 'notice', notice: { kind: 'info', text: `${what} at frames on this page, so there is nothing to pin.` } });
       return;
     }
     toMain({ type: 'pin', pins: view.pins });
@@ -368,6 +465,13 @@ export function createEffects(store: Store, deps: EffectsDeps = {}) {
     closePanel,
     goToTestPage,
     forgetProgress,
+    retryMap,
+    followPersona,
+    clearPaths,
+    editReading,
+    pickScreen,
+    stepScreen,
+    setFlowMapOpen,
     retry,
     openStudy,
     newTest,

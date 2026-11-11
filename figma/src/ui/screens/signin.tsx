@@ -64,8 +64,9 @@ export function SignIn({ state, fx }: { state: AppState; fx: Effects }) {
           )}
         </button>
         <p class="fineprint">
-          Free to install. Tests run on your Archetype account. What you type, the file and page names and the screen names on the path leave this file, and during a test every step sends a screenshot, its visible
-          text and what can be clicked to Archetype and its AI model provider.
+          Free to install. Tests run on your Archetype account. What you type, the file and page names and the screen names on the path leave this file. When a test launches, so do the
+          prototype's flow map (every screen's name and text, its connections, and the labels of what has none), and during a test every step sends a screenshot, its visible text and what can
+          be clicked to Archetype and its AI model provider.
         </p>
       </div>
     </div>

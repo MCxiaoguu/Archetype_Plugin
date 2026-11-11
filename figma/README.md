@@ -22,10 +22,10 @@ studies API. The account is the product; the listing is free.
 | Screen | What you see |
 | :-- | :-- |
 | Sign in | One button. Archetype opens in your browser with a short code; approve it there and the panel carries on by itself. |
-| New test | Start and goal screens (from your selection or a list), the goal, who your user is, an optional product line, an optional share link, and Quick or Thorough. A preflight runs on every change. |
-| Running | Three stages (understanding your users, building personas, running), then one row per persona with its status, the screen it is on and its turn, while the panel itself walks each persona through the prototype. It says when it starts the next round of tries, when it lost touch with Archetype, and, for a test reopened on another page, which page the test runs on, with a button to go there. |
-| Report | How many tries reached the goal, the headline, each persona with the report's own confidence words ("99% likely lower completion"), the top findings with severity and the frames they happened on, where people gave up by screen, and what to change first. |
-| Past tests | Every test launched from this file, newest first. Reopening the plugin returns to the last one. |
+| New test | Start and goal screens (from your selection or a list), the goal, who your user is, an optional product line, an optional share link, and how deep: Single persona (one typical user from your description, one try), Quick or Thorough. A preflight runs on every change. |
+| Running | Three stages (understanding your users, building personas, running), then one row per persona with its status, the screen it is on and its turn, while the panel itself walks each persona through the prototype. It says when it starts the next round of tries, when it lost touch with Archetype, and, for a test reopened on another page, which page the test runs on, with a button to go there. The **Live screen** card shows the screen a persona sees, as it saw it, the element it acted on marked, with what it did and what came of it ("Clicked 'Billing' · Went to Billing settings"); chips switch between personas, and ‹ › step back through its earlier screens (the panel keeps the last 40) until **Live** returns. Under it the **Flow map** folds to one line ("Flow map · 13 screens · 1 gap reached"), opening to the whole map; the panel remembers which you chose. The Flow map card draws the prototype's screens left to right from the start, drawn links solid, links read from the screens dashed, and gaps as short stubs; each persona is a token that moves along it, and a screen a persona saw shows that screenshot. Click a persona to follow it: the canvas viewport moves to each frame it reaches (nothing else changes; a frame on another page is named instead). **Clear paths** hides the paths until you open the test again. **Edit map** lists what each unwired element was read as, screen by screen, and lets you set it to open a frame, be a control, or have no page yet; runs that start after the edit play it. |
+| Report | How many tries reached the goal, the headline, each persona with the report's own confidence words ("99% likely lower completion"), where people gave up by screen, and what to change first. A test run in the panel reports its flow instead of usability findings: what the personas looked for that has no page yet (in their own words), the links they took that the prototype doesn't draw yet, so you can wire them, and each persona's path. Other tests show the top findings with severity and the frames they happened on. |
+| Past tests | Every test launched from this file, newest first. Reopening the plugin returns to the last one. A past test run in the panel shows its Flow map with the paths its personas took, loaded from Archetype. |
 
 **Preflight, instant and free.** Before anything leaves the file the plugin walks
 the prototype's connections from your start screen:
@@ -41,9 +41,10 @@ the prototype's connections from your start screen:
   users both hear "link Rectangle 12". The plugin suggests a name from the text inside the layer when it can.
 
 **Results on the canvas.** Every frame chip in the panel selects and zooms to its
-frame. **Pin findings** writes one annotation per affected frame (labels start
-with `Archetype:`), and **Clear pins** removes only those, never yours. When
-Figma refuses annotations (view only access), the findings stay in the panel.
+frame. **Pin findings** (**Pin to frames** for a flow report) writes one
+annotation per affected frame (labels start with `Archetype:`), and **Clear
+pins** removes only those, never yours. When Figma refuses annotations (view
+only access), the results stay in the panel.
 
 ## Install it in the Figma desktop app
 
@@ -103,20 +104,35 @@ prototype as the file is when the wave starts; when you edit the file while a
 test runs, the steps after the edit are flagged, so the report can tell them
 apart.
 
+**The flow map.** A wireframe is never fully wired, so before it claims any
+run (at launch, and before each later wave) the panel commits the prototype's
+flow map: every frame, its drawn connections, and every element that has no
+connection of its own but looks clickable. The backend reads each of those
+once, as a link to a frame the prototype has, a control that takes input, or
+a gap with no page behind it, and stores the map as a new version when the
+file changed. A persona's click that no drawn connection handles then plays
+that reading: it opens the frame, selects the control, or tells the persona
+there is no page behind it yet. A run plays the map version it was claimed
+on for its whole life. When the backend can't read a screen, the panel says
+which and why, with **Try again** and **Launch with drawn connections only**
+(every unread element a gap).
+
 ## Privacy: what leaves the file
 
 | Sent to Archetype | Never sent |
 | :-- | :-- |
 | The goal, the user description and the product line you type | Screens no persona reaches, other files |
-| The file and page names, the start and goal frame ids, and the names of up to 20 screens on the paths from start to goal | Comments, the layer tree, variable values, the reaction graph |
+| The file and page names, the start and goal frame ids, and the names of up to 20 screens on the paths from start to goal | Comments, the layer tree, variable values |
+| At launch and before each wave, the flow map: every frame's name, page, largest text and up to 1,500 characters of its visible text; the drawn connections (which layer leads where, on which trigger); and for every element without a connection that looks clickable, its label, role, box and the 200 characters of text nearest to it | |
 | During a test, for every step: a screenshot of the screen the persona sees, its name and step URL (page name and frame ids), its visible text, and the labels, roles and boxes of what can be clicked | Anything from your clipboard |
 | When a step's action can't be played: what it was, which can name a variable, a variable collection or a mode (for example "Can't set Bank linked, a boolean variable, to a string") | |
 | When a timer opens a link: the link's address, up to 200 characters | |
 | The share link, if you paste one | |
 
 The screenshots and text of each step go to Archetype and its AI model provider,
-which decides what the persona does next. The flow graph, the preflight, the
-prototype interpreter and mapping results back to frames all run inside Figma.
+which decides what the persona does next; the flow map goes to them too, once
+per change of the file, to read the unwired elements. The preflight, the
+prototype interpreter and mapping results back to frames run inside Figma.
 The plugin stores its settings, your Archetype token, a short history of tests
 and the progress of running tests (so a closed panel can resume them) in Figma's
 `clientStorage` on your machine, and one random id in the file's plugin data so
@@ -152,12 +168,14 @@ the history follows the file.
 | `src/main/document.ts` | Turns the current page into a plain `DocSnapshot`: top level frames (sections included), every layer with reactions mapped to its frame, destinations resolved, conditional actions flattened. |
 | `src/main/protoReader.ts` | Reads the prototype into a `ProtoDoc` for the trace engine: frames, every reaction, the variants a CHANGE_TO can show, the local variables. |
 | `src/main/renderer.ts` | Renders a trace state on scratch copies of the screens, measures every layer and exports the viewport as a JPEG, then removes the copies. |
-| `src/main/trace.ts` | Answers the panel's trace requests (read, render by doc hash, save and load sessions, the edit access check, cleanup) and reports edits to the prototype's frames. |
+| `src/main/trace.ts` | Answers the panel's trace requests (read, render by doc hash, the flow map's candidates, follow a persona, save and load sessions, the edit access check, cleanup) and reports edits to the prototype's frames. |
+| `src/main/flowMap.ts`, `measure.ts` | The flow map's nodes, drawn edges and candidates, read from the original nodes (each variant's layers and hidden ones included) and keyed as the renderer keys what it measures. |
 | `src/main/watch.ts`, `scratch.ts` | Telling the designer's edits from the renderer's own copies; the scratch marks, the containers renders hold, and the one queue reads and renders run through. |
-| `src/main/canvas.ts` | Show on canvas, pin and clear annotations. |
+| `src/main/canvas.ts` | Show on canvas, pin and clear annotations, and Follow persona (a viewport move, nothing else). |
 | `src/main/storage.ts` | Settings, token, per file history and draft, and the saved progress of running tests. |
-| `src/lib/proto/*` | The prototype engine, pure: navigation, overlays, scroll, pointer and keys, timers, variables and conditions, variants, what a persona can act on, step URLs. |
-| `src/ui/trace/*` | The trace runner: the bridge to the main thread (one render at a time), a persona's session, the runner of a study's waves, and the launch gate and runner wiring. |
+| `src/lib/proto/*` | The prototype engine, pure: navigation, overlays, scroll, pointer and keys, timers, variables and conditions, variants, what a persona can act on, step URLs, and the flow map's readings where no reaction handles a click. |
+| `src/ui/trace/*` | The trace runner: the bridge to the main thread (one render at a time), a persona's session, the runner of a study's waves, and the launch gate and runner wiring (Follow persona included). |
+| `src/ui/screens/flowmap.tsx`, `src/lib/flowLayout.ts` | The Flow map card, and its layout: breadth first columns from the start node, edges, gap stubs, and what the live personas or past paths light. |
 | `src/lib/ids.ts`, `links.ts` | Colon and dash node ids, share link parsing, and the prototype URL. |
 | `src/lib/graph.ts`, `preflight.ts`, `names.ts` | The reaction graph, breadth first reachability, dead ends, broken links, generic names. |
 | `src/lib/study.ts`, `launch.ts` | The `POST /api/studies` body and the resumable launch sequence (factors, personas, wave 1). |
@@ -189,7 +207,12 @@ npm run check:manifest # manifest fields and dist paths
 `harness/` serves `dist/ui.html` inside a page that plays Figma's main thread
 over `postMessage`: a fixture prototype on a tiny canvas (click a frame to
 select it), storage, Show on canvas and pins. The panel runs in a sandboxed
-iframe with a null origin, exactly like in Figma.
+iframe with a null origin, exactly like in Figma. Its trace requests go to the
+plugin's real main thread (`harness/host/trace-main.ts`, bundled on start) on the
+tests' fake Farside file, each render drawn as a JPEG wireframe; with the mock
+backend, a test you launch runs two personas in the panel, so the Running screen,
+the Live screen and the Flow map show real turns. `flowMap=open` starts the
+Running screen's Flow map open.
 
 ```sh
 npm run build && npm run harness          # mock backend, http://localhost:4400
@@ -261,13 +284,14 @@ Listing copy, ready to paste:
 > others gave up and why, in their own words, with findings pinned to the frames they happened on.
 > A free preflight checks the flow first: unreachable goals, dead ends, broken hotspots and layer names like
 > "Rectangle 12" that personas and screen reader users hear as links. Requires a free Archetype account.
-> What you type, the file and page names and the screen names on the path leave the file, and during a test
-> every step sends a screenshot, its visible text and what can be clicked to Archetype and its AI model
-> provider. The share link is optional.
+> What you type, the file and page names and the screen names on the path leave the file. When a test
+> launches, so does the prototype's flow map (every screen's name and text, its connections, and the labels
+> of what has none), and during a test every step sends a screenshot, its visible text and what can be
+> clicked to Archetype and its AI model provider. The share link is optional.
 >
 > **Tags:** usability testing, user research, prototype, synthetic users, personas, accessibility, UX
 >
-> **Network access reasoning:** The panel talks to the Archetype API to sign you in, create a persona study for the selected prototype flow, run it and read its results. It sends the file and page names, the names of the screens on the path, the goal and the user description you type, and the prototype share link if you paste one. During a test, every step sends a screenshot of the screen a persona sees, its visible text and what can be clicked to Archetype and its AI model provider, so the persona can see and act on what you built.
+> **Network access reasoning:** The panel talks to the Archetype API to sign you in, create a persona study for the selected prototype flow, run it and read its results. It sends the file and page names, the names of the screens on the path, the goal and the user description you type, and the prototype share link if you paste one. When a test launches, and before each later round, it sends the prototype's flow map: every screen's name and visible text, its drawn connections, and the labels and nearby text of the elements without a connection, so Archetype and its AI model provider can read where each one leads. During a test, every step sends a screenshot of the screen a persona sees, its visible text and what can be clicked to Archetype and its AI model provider, so the persona can see and act on what you built.
 
 ## License
 

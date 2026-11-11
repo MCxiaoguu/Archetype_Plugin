@@ -70,3 +70,15 @@ export function namesIn(text: string, names: readonly string[]): string[] {
     return false;
   });
 }
+
+/** The prototype's sample greeting ("Welcome back, Mara"), read as a wrong user name. */
+const WRONG_NAME = /\bMara\b|\b(wrong|incorrect)\s+(user\s*)?name\b/i;
+
+/**
+ * Whether a debrief finding files the sample greeting as a wrong user name.
+ * Its description decides: the evidence quote is the screen's own text, so a
+ * finding about anything else on the Dashboard quotes "Mara" too.
+ */
+export function readsGreetingAsWrongName(finding: { description?: unknown; evidence?: { quote?: unknown } }): boolean {
+  return typeof finding.description === 'string' && WRONG_NAME.test(finding.description);
+}

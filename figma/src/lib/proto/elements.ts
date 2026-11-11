@@ -47,7 +47,8 @@ export function readableName(name: string): string | null {
 
 function cleanText(text: string): string {
   const flat = text.replace(/\s+/g, ' ').trim();
-  return flat.length > MAX_LABEL ? `${flat.slice(0, MAX_LABEL - 1).trimEnd()}…` : flat;
+  // No trimEnd: the main thread lists elements too, in Figma's ES2017 sandbox.
+  return flat.length > MAX_LABEL ? `${flat.slice(0, MAX_LABEL - 1).replace(/\s+$/, '')}…` : flat;
 }
 
 function intersect(a: Box, b: Box): Box | null {
@@ -120,9 +121,19 @@ function capped(candidates: Candidate[]): Candidate[] {
   return candidates.filter((c) => !dropped.has(c));
 }
 
-export function listElements(layers: RawLayer[], s: TraceState): { elements: Element[]; targets: Record<string, ElementTarget> } {
-  const index = indexLayers(layers);
-  const viewport: Box = { x: 0, y: 0, width: s.viewport.width, height: s.viewport.height };
+/** A layer listed as an element, before the viewport, overlays and the cap decide what the persona sees of it. */
+export interface Classified {
+  layer: RawLayer;
+  role: RoleHint;
+  label: string;
+}
+
+/**
+ * Every layer of the measured screen that lists as an element, as what and
+ * with which label, by how it looks and what it is (wiring decides nothing,
+ * bar the hotspot exception). The flow map's candidates come from the same.
+ */
+export function classifyElements(layers: RawLayer[], index: LayerIndex = indexLayers(layers)): Classified[] {
   const shown = layers.filter((l) => index.visible.has(l.key));
   const texts = shown.filter(isText);
 
@@ -144,12 +155,7 @@ export function listElements(layers: RawLayer[], s: TraceState): { elements: Ele
   }
 
   const consumed = new Set<string>();
-  const candidates: Candidate[] = [];
-  const add = (layer: RawLayer, role: RoleHint, label: string) => {
-    const view = intersect(layer.box, viewport);
-    if (view && !covered(index, s, layer, view)) candidates.push({ layer, view, order: layers.indexOf(layer), role, label });
-  };
-
+  const listed: Classified[] = [];
   for (const layer of others.filter((l) => controls.has(l.key))) {
     const own = ownTexts(index, texts, controls, layer.key).sort((a, b) => a.box.y - b.box.y || a.box.x - b.box.x);
     const role: RoleHint =
@@ -158,11 +164,22 @@ export function listElements(layers: RawLayer[], s: TraceState): { elements: Ele
     if (own.length === 1) consumed.add((own[0] as RawLayer).key);
     const first = own[0];
     const fallback = isHotspot(layer) ? 'unlabeled area' : role;
-    add(layer, role, first ? cleanText(first.text ?? '') : (readableName(layer.name) ?? fallback));
+    listed.push({ layer, role, label: first ? cleanText(first.text ?? '') : (readableName(layer.name) ?? fallback) });
   }
   for (const layer of texts) {
     if (consumed.has(layer.key)) continue;
-    add(layer, layer.roleHint === 'link' ? 'link' : 'text', cleanText(layer.text ?? ''));
+    listed.push({ layer, role: layer.roleHint === 'link' ? 'link' : 'text', label: cleanText(layer.text ?? '') });
+  }
+  return listed;
+}
+
+export function listElements(layers: RawLayer[], s: TraceState): { elements: Element[]; targets: Record<string, ElementTarget> } {
+  const index = indexLayers(layers);
+  const viewport: Box = { x: 0, y: 0, width: s.viewport.width, height: s.viewport.height };
+  const candidates: Candidate[] = [];
+  for (const { layer, role, label } of classifyElements(layers, index)) {
+    const view = intersect(layer.box, viewport);
+    if (view && !covered(index, s, layer, view)) candidates.push({ layer, view, order: layers.indexOf(layer), role, label });
   }
 
   const elements: Element[] = [];

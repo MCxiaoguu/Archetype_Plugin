@@ -1,4 +1,5 @@
 import type { RunSize, StudyForm } from './form';
+import type { FlowCandidate, FlowEdge, FlowNode } from './proto/flow';
 import type { ProtoDoc, RawLayer, Size, TraceState } from './proto/model';
 import type { TimerEffect, TurnLast } from './turn';
 import type { DocSnapshot, NodeRef, Pin } from './types';
@@ -61,6 +62,14 @@ export interface TraceRecord {
 
 export type Draft = Pick<StudyForm, 'goal' | 'who' | 'product' | 'link' | 'size'>;
 
+/** The panel's view choices, kept across sessions. */
+export interface Prefs {
+  /** The Flow map card on the Running screen is open (it starts as one line). */
+  flowMapOpen: boolean;
+}
+
+export const DEFAULT_PREFS: Prefs = { flowMapOpen: false };
+
 export interface InitPayload {
   settings: Settings;
   token: string | null;
@@ -70,6 +79,7 @@ export interface InitPayload {
   studies: StudyRecord[];
   lastStudyId: string | null;
   draft: Partial<Draft> | null;
+  prefs: Prefs;
   pluginVersion: string;
 }
 
@@ -78,6 +88,21 @@ export interface InitPayload {
 // Every request carries a requestId; the main thread answers it with
 // trace-result or trace-error carrying the same id, so parallel sessions
 // get their own replies.
+
+/** The flow of a read ProtoDoc, by its hash: nodes, drawn edges and candidates for the flow map (main/flowMap.ts). */
+export interface TraceCandidatesRequest {
+  docHash: string;
+}
+
+/** Follow persona: bring a frame into view, moving nothing but the viewport (main/canvas.ts). */
+export interface TraceFollowRequest {
+  frameId: string;
+}
+
+/** Null when the viewport moved to the frame; the name of its page when that isn't the current one, and the viewport stayed. */
+export interface TraceFollowReply {
+  otherPage: string | null;
+}
 
 export interface TraceReadRequest {
   /** Whether the read may import library variants, which adds them to the designer's file. */
@@ -88,6 +113,14 @@ export interface TraceRenderRequest {
   /** The ProtoDoc to render with, by its hash: one the main thread answered a trace-read with. */
   docHash: string;
   state: TraceState;
+}
+
+/** What the panel commits to the backend for a study's flow map (spec, Commit). */
+export interface FlowRead {
+  docHash: string;
+  nodes: FlowNode[];
+  edges: FlowEdge[];
+  candidates: FlowCandidate[];
 }
 
 /** A font the render could not load: its text was left as designed. */
@@ -106,7 +139,7 @@ export interface TraceRenderReply {
 }
 
 /** The shape of SavedSession (and the TraceState in it) this plugin saves and can resume from. */
-export const SAVED_SESSION_VERSION = 1;
+export const SAVED_SESSION_VERSION = 2;
 
 /** What resuming a persona needs (spec, Data flow 7 and 10). */
 export interface SavedSession {
@@ -122,6 +155,10 @@ export interface SavedSession {
   timerEffects: TimerEffect[];
   /** Frames a loop of timers ran through since that turn, for the next turn's `timer_loop` flag. */
   loopFrames: string[];
+  /** The flow map version the run plays (its claim's); null for a run claimed with no map. */
+  flowMapVersion: number | null;
+  /** The labels of the elements that turn's click hit that the map has no reading for, for the next turn's `map_miss` flag. */
+  mapMisses: string[];
   /** SAVED_SESSION_VERSION when it was saved: another version's saved state isn't resumed. */
   version: number;
 }
@@ -163,6 +200,8 @@ export interface TraceCalls {
   'trace-scratch-check': { request: Record<string, never>; reply: ScratchCheckReply };
   'trace-cleanup': { request: Record<string, never>; reply: TraceCleanupReply };
   'trace-forget': { request: TraceForgetRequest; reply: null };
+  'trace-candidates': { request: TraceCandidatesRequest; reply: FlowRead };
+  'trace-follow': { request: TraceFollowRequest; reply: TraceFollowReply };
 }
 
 export type TraceCallType = keyof TraceCalls;
@@ -178,7 +217,7 @@ export type TraceReplyMessage =
   | { type: 'trace-result'; requestId: string; result: unknown }
   | { type: 'trace-error'; requestId: string; message: string; code?: TraceErrorCode };
 
-export const TRACE_CALLS: readonly TraceCallType[] = ['trace-read', 'trace-render', 'trace-save', 'trace-load', 'trace-scratch-check', 'trace-cleanup', 'trace-forget'];
+export const TRACE_CALLS: readonly TraceCallType[] = ['trace-read', 'trace-render', 'trace-save', 'trace-load', 'trace-scratch-check', 'trace-cleanup', 'trace-forget', 'trace-candidates', 'trace-follow'];
 
 export function isTraceRequest(msg: { type: string }): msg is TraceRequestMessage {
   return (TRACE_CALLS as readonly string[]).includes(msg.type);
@@ -205,6 +244,7 @@ export type UiToMain =
   | { type: 'save-study'; record: StudyRecord }
   | { type: 'forget-last' }
   | { type: 'save-draft'; draft: Partial<Draft> }
+  | { type: 'save-prefs'; prefs: Prefs }
   | { type: 'open-url'; url: string }
   | { type: 'show-node'; nodeId: string }
   | { type: 'pin'; pins: Pin[] }

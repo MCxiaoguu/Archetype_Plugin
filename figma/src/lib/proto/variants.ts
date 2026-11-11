@@ -22,7 +22,7 @@ export function variantOf(doc: ProtoDoc, instanceKey: string, variantId: string)
 }
 
 /** The innermost overridden instance at or around `layerKey`, and the layer's path inside its variant. */
-function swappedAround(doc: ProtoDoc, s: TraceState, layerKey: string): { variant: ProtoVariant; path: string } | null {
+function swappedAround(doc: ProtoDoc, s: Pick<TraceState, 'variants'>, layerKey: string): { variant: ProtoVariant; path: string } | null {
   let found: { instanceKey: string; variantId: string } | null = null;
   for (const overrides of Object.values(s.variants)) {
     for (const [instanceKey, variantId] of Object.entries(overrides)) {
@@ -37,7 +37,7 @@ function swappedAround(doc: ProtoDoc, s: TraceState, layerKey: string): { varian
 }
 
 /** A layer's reactions: its variant's when it is (or is inside) an instance with an override, the document's otherwise. */
-export function reactionsFor(doc: ProtoDoc, s: TraceState, layerKey: string): ProtoReaction[] {
+export function reactionsFor(doc: ProtoDoc, s: Pick<TraceState, 'variants'>, layerKey: string): ProtoReaction[] {
   const swapped = swappedAround(doc, s, layerKey);
   if (swapped) return swapped.variant.reactions[swapped.path] ?? [];
   return doc.reactions[layerKey] ?? [];

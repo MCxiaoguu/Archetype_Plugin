@@ -42,6 +42,33 @@ const SCENARIOS = [
   { name: '14-waiting-for-runner', q: 'token=mock&study=study-queued&queuedAgo=5', wait: 'text=Waiting for a runner.' },
   { name: '15-report', q: 'token=mock&study=study-done', wait: '.score' },
   { name: '16-report-full', q: 'token=mock&study=study-done', wait: '.score', height: 1200 },
+  { name: '16b-report-flow', q: 'token=mock&study=study-flow', wait: '.score', height: 1700 },
+  // A launch the panel runs itself, two personas side by side, a turn or two in: the Live screen over the folded Flow map.
+  { name: '13c-running-map-open', q: 'token=mock&draft=1&flowMap=open', wait: '#pick-start', act: async (f) => {
+      await pickGoal(f);
+      await f.getByRole('button', { name: 'Launch test' }).click();
+      await f.getByRole('button', { name: 'Add and launch' }).click({ timeout: 20000 });
+      await f.getByRole('button', { name: 'Launch', exact: true }).click({ timeout: 20000 });
+      await f.locator('.fm').first().waitFor({ timeout: 30000 });
+      await f.locator('.fm-more').first().waitFor({ timeout: 30000 });
+      await f.locator('#flowmap-h').scrollIntoViewIfNeeded();
+    }, height: 1100 },
+  { name: '13b-running-live', q: 'token=mock&draft=1', wait: '#pick-start', act: async (f) => {
+      await pickGoal(f);
+      await f.getByRole('button', { name: 'Launch test' }).click();
+      // The fake file asks to add its library variants, one of which can't be added: launch anyway.
+      await f.getByRole('button', { name: 'Add and launch' }).click({ timeout: 20000 });
+      await f.getByRole('button', { name: 'Launch', exact: true }).click({ timeout: 20000 });
+      await f.locator('.ls-frame img').first().waitFor({ timeout: 30000 });
+      await f.locator('.ls-chips li').nth(1).waitFor({ timeout: 30000 });
+      // The moment after a click: its target marked on the screen it was on.
+      await f.locator('.ls-marks .ls-target').first().waitFor({ state: 'attached', timeout: 30000 });
+    }, height: 1100 },
+  { name: '16c-report-flow-map', q: 'token=mock&study=study-flow', wait: '.fm', act: async (f) => f.locator('#flowmap-h').scrollIntoViewIfNeeded(), after: '.fm-token' },
+  { name: '16d-report-flow-edit', q: 'token=mock&study=study-flow', wait: '.fm', act: async (f) => {
+      await f.getByRole('button', { name: 'Edit map' }).click();
+      await f.locator('.fm-editor').scrollIntoViewIfNeeded();
+    }, after: '.fm-edit-row' },
   { name: '17-history', q: 'token=mock&history=1&study=study-done', wait: '.score', act: async (f) => f.getByRole('button', { name: 'Past tests for this file' }).click(), after: '.history-item' },
   { name: '18-history-empty', q: 'token=mock', wait: '#pick-start', act: async (f) => f.getByRole('button', { name: 'Past tests for this file' }).click(), after: 'text=No tests from this file yet' },
   { name: '19-settings', q: 'token=mock', wait: '#pick-start', act: async (f) => f.getByRole('button', { name: 'Settings' }).click(), after: '#api' },

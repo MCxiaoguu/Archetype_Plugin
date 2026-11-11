@@ -12,12 +12,14 @@ import { ExprError, type ExprScope } from './expr';
 import { chainOf, checkMeasured, indexLayers, isShown, type LayerIndex, layerOf, rootOf } from './hitTest';
 import { keyCodes, type KeyDeps, matchesKeys, pressKey, typeText } from './keys';
 import type {
+  ElementReading,
   ElementTarget,
   ProtoAction,
   ProtoDoc,
   ProtoReaction,
   ProtoTrigger,
   RawLayer,
+  ReadingLookup,
   Size,
   TraceAction,
   TraceOutcome,
@@ -40,6 +42,8 @@ export interface ApplyResult {
   effects: EngineEffect[];
   /** Set when a `wait` met the loop guard, as in `SettleResult`. */
   looped: string[] | null;
+  /** The flow map's reading that decided the outcome; null when the prototype's own reactions did. */
+  reading: ElementReading | null;
 }
 
 export interface SettleResult {
@@ -106,10 +110,24 @@ function checkDoc(doc: ProtoDoc, state: TraceState): void {
   }
 }
 
+/** How an edge the flow map read plays: as a drawn NAVIGATE that resets the scroll and keeps the components' variants. */
+const INFERRED_NAVIGATE: NodeAction = {
+  type: 'NODE',
+  navigation: 'NAVIGATE',
+  destinationId: null,
+  resetScrollPosition: true,
+  preserveScrollPosition: false,
+  resetInteractiveComponents: false,
+  overlayRelativePosition: null,
+};
+
 /**
  * Plays one persona action. `layers` are the measured layers of the screen
  * the action was taken on, and `targets` map that screen's element ids to
- * their layer and point. Never mutates `state`, `doc` or `layers`.
+ * their layer and point. `readingOf` looks up the run's flow map: a click
+ * that lands where no reaction handles it, or a `type` into a control no
+ * key reaction takes, plays the reading of the element's own layer (spec,
+ * Traversal). Never mutates `state`, `doc` or `layers`.
  */
 export function apply(
   doc: ProtoDoc,
@@ -117,6 +135,7 @@ export function apply(
   action: TraceAction,
   layers: RawLayer[],
   targets: Record<string, ElementTarget>,
+  readingOf: ReadingLookup | null = null,
 ): ApplyResult {
   if (action.type === 'give_up' || action.type === 'done') {
     throw new EngineError('run_ending_action', `${action.type} ends the run, which the backend handles`);
@@ -128,13 +147,19 @@ export function apply(
   const ctx = context(doc, index);
   const pointer = pointerDeps(ctx, index);
   const at = (element: string) => targetOf(targets, element);
+  /** The reading of the element's own layer, on the node (frame or overlay) it is in. */
+  const readingAt = (target: ElementTarget) => (readingOf ? readingOf(rootOf(index, target.layerKey), target.layerKey) : null);
 
   let fallback: TraceOutcome = 'nothing_happened';
   let looped: string[] | null = null;
+  let read: ElementReading | null = null;
   switch (action.type) {
-    case 'click':
-      click(pointer, s, at(action.element).point);
+    case 'click': {
+      const target = at(action.element);
+      const clicked = click(pointer, s, target.point);
+      if (clicked.landed && !clicked.handled) read = readingAt(target);
       break;
+    }
     case 'hover':
       movePointer(pointer, s, at(action.element).point);
       break;
@@ -164,7 +189,9 @@ export function apply(
       if (!movePointer(pointer, s, target.point)) break;
       // Typing into an element focuses it first.
       s.focus = { layerKey: target.layerKey, frameId: rootOf(index, target.layerKey) };
-      typeText(keyDeps(ctx, index), s, action.text);
+      if (typeText(keyDeps(ctx, index), s, action.text)) break;
+      const typedInto = readingAt(target);
+      if (typedInto?.kind === 'control') read = typedInto;
       break;
     }
     case 'wait': {
@@ -176,11 +203,31 @@ export function apply(
       // A wait the loop guard stopped keeps the state the loop reached, clock included.
       if (!result.looped) s.clockMs = Math.max(s.clockMs, end);
       prune(s);
-      return { state: s, outcome: result.fired ? 'timers_fired' : 'waited', effects: ctx.effects, looped: result.looped };
+      return { state: s, outcome: result.fired ? 'timers_fired' : 'waited', effects: ctx.effects, looped: result.looped, reading: null };
     }
   }
+  if (read) {
+    // The reading's outcome stands for the action, whatever the pointer's move changed on the way.
+    const outcome = playReading(ctx, s, read);
+    prune(s);
+    return { state: s, outcome, effects: ctx.effects, looped, reading: read };
+  }
   prune(s);
-  return { state: s, outcome: outcomeOf(state, s, ctx.effects, fallback), effects: ctx.effects, looped };
+  return { state: s, outcome: outcomeOf(state, s, ctx.effects, fallback), effects: ctx.effects, looped, reading: null };
+}
+
+/**
+ * Plays the flow map's reading of an element: an edge navigates, unless it
+ * goes to the frame the screen shows (overlays open on it or not), where
+ * the persona already is.
+ */
+function playReading(ctx: Context, s: TraceState, reading: ElementReading): TraceOutcome {
+  if (reading.kind === 'control') return 'accepted';
+  if (reading.kind === 'gap') return 'missing';
+  if (reading.to === null) throw new EngineError('invalid_doc', `The flow map's edge ${reading.id} goes nowhere`);
+  if (reading.to === s.frameId) return 'already_here';
+  showBase(ctx, s, frameOf(ctx, reading.to), { ...INFERRED_NAVIGATE, destinationId: reading.to }, true);
+  return 'navigated';
 }
 
 /**
@@ -207,10 +254,24 @@ function targetOf(targets: Record<string, ElementTarget>, element: string): Elem
   return targets[element] as ElementTarget;
 }
 
+/**
+ * A connection the designer started and didn't finish: a NODE action with
+ * no destination, or to a frame or variant the prototype doesn't have
+ * (preflight reports it as broken).
+ */
+function unfinished(ctx: Context, action: ProtoAction): boolean {
+  if (action.type !== 'NODE') return false;
+  const to = action.destinationId;
+  if (to === null) return true;
+  if (action.navigation === 'CHANGE_TO') return !Object.values(ctx.doc.variantSets).some((set) => set.variants.some((v) => v.id === to));
+  return action.navigation !== 'SCROLL_TO' && !ctx.frames.has(to);
+}
+
 function pointerDeps(ctx: Context, layers: LayerIndex): PointerDeps {
   return {
     layers,
     handles: (s, key, trigger) => reactionsFor(ctx.doc, s, key).some((r) => r.trigger.type === trigger),
+    takes: (s, key, trigger) => reactionsFor(ctx.doc, s, key).some((r) => r.trigger.type === trigger && !r.actions.every((a) => unfinished(ctx, a))),
     fire: (s, key, trigger) => fire(ctx, layers, s, key, trigger),
     setVariant: (s, frameId, instanceKey, variantId) => setVariant(ctx, s, frameId, instanceKey, variantId),
   };

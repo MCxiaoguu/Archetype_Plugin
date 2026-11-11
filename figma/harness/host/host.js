@@ -103,7 +103,7 @@ drawCanvas();
 
 // Storage keys mirror src/main/storage.ts
 
-const K = { settings: 'settings', token: 'token', studies: 'studies', last: 'last', draft: 'draft' };
+const K = { settings: 'settings', token: 'token', studies: 'studies', last: 'last', draft: 'draft', prefs: 'prefs' };
 
 function initPayload() {
   const now = Date.now();
@@ -147,13 +147,22 @@ function initPayload() {
   if (lastStudyId) storage.set(K.last, lastStudyId);
   const settings = storage.get(K.settings) ?? { apiBase: config.apiBase, webBase: config.webBase };
   const sel = selection ? doc.frames.find((f) => f.id === selection) : null;
-  return { type: 'init', settings, token, fileKey: null, doc, selection: sel ? { id: sel.id, name: sel.name } : null, studies, lastStudyId, draft, pluginVersion: 'harness' };
+  const prefs = storage.get(K.prefs) ?? { flowMapOpen: params.get('flowMap') === 'open' };
+  return { type: 'init', settings, token, fileKey: null, doc, selection: sel ? { id: sel.id, name: sel.name } : null, studies, lastStudyId, draft, prefs, pluginVersion: 'harness' };
 }
+
+// The trace requests go to the plugin's real main thread, on the fake Farside file (host/trace-main.ts).
+// Loaded without waiting, so the listener below is there for the panel's first message.
+const traceMain = import('/host/trace-main.js').then(({ startTraceMain }) => startTraceMain((msg) => post(msg)));
 
 window.addEventListener('message', (event) => {
   if (event.source !== iframe.contentWindow) return;
   const msg = event.data && event.data.pluginMessage;
   if (!msg || typeof msg.type !== 'string') return;
+  if (msg.type.startsWith('trace-')) {
+    traceMain.then((main) => main.handle(msg)).catch((err) => log('trace', `${msg.type} failed: ${err?.message ?? err}`));
+    return;
+  }
   switch (msg.type) {
     case 'ready':
       log('ready', 'panel loaded');
@@ -192,6 +201,10 @@ window.addEventListener('message', (event) => {
       break;
     case 'save-draft':
       storage.set(K.draft, msg.draft);
+      break;
+    case 'save-prefs':
+      storage.set(K.prefs, msg.prefs);
+      log('prefs', JSON.stringify(msg.prefs));
       break;
     case 'open-url':
       log('openExternal', msg.url);

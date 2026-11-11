@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import fixtureJson from '../harness/fixtures/farside-proto.json';
-import type { StudyRecord, UiToMain } from '../src/lib/messages';
+import type { FlowRead, StudyRecord, UiToMain } from '../src/lib/messages';
 import { start } from '../src/lib/proto/engine';
 import type { ProtoDoc, RawLayer } from '../src/lib/proto/model';
 import { runPreflight } from '../src/lib/preflight';
@@ -226,6 +226,14 @@ describe('main thread controller', () => {
     expect(api.ui.postMessage).toHaveBeenLastCalledWith({ type: 'pin-result', ok: true, count: 1, message: 'Cleared pins from 1 frame.' });
   });
 
+  it('keeps the record of a Single persona test', async () => {
+    const { api, storage } = makeFigma();
+    const c = createController(api, '0.1.0');
+    await c.handle({ type: 'save-study', record: { ...rec('s-single', 1), size: 'single' } });
+    expect([...storage.values()].some((v) => Array.isArray(v) && v.some((r: StudyRecord) => r.studyId === 's-single' && r.size === 'single'))).toBe(true);
+    await expect(c.handle({ type: 'save-study', record: { ...rec('s-odd', 1), size: 'huge' } } as unknown as UiToMain)).rejects.toThrow(/^The panel sent/);
+  });
+
   it('refuses panel messages it cannot act on safely, and says so', async () => {
     const { api, nodes, storage } = makeFigma();
     const c = createController(api, '0.1.0');
@@ -323,6 +331,19 @@ function* ancestors(node: FakeNode): Generator<FakeNode> {
   for (let n = node.parent as FakeNode | null; n; n = n.parent as FakeNode | null) yield n;
 }
 
+describe("the viewer's view choices", () => {
+  it('start closed, are kept in clientStorage as the panel saves them, and come back with the next init', async () => {
+    const t = traceMain();
+    await t.controller.handle({ type: 'ready' });
+    expect(t.posted().find((m) => m.type === 'init')).toMatchObject({ prefs: { flowMapOpen: false } });
+    await t.controller.handle({ type: 'save-prefs', prefs: { flowMapOpen: true } } as UiToMain);
+    t.postMessage.mockClear();
+    await t.controller.handle({ type: 'ready' });
+    expect(t.posted().find((m) => m.type === 'init')).toMatchObject({ prefs: { flowMapOpen: true } });
+    await expect(t.controller.handle({ type: 'save-prefs', prefs: { flowMapOpen: 'yes' } } as unknown as UiToMain)).rejects.toThrow('flowMapOpen');
+  });
+});
+
 describe('trace requests on the main thread', () => {
   it('answers each of the five requests with its request id', async () => {
     const t = traceMain();
@@ -341,7 +362,7 @@ describe('trace requests on the main thread', () => {
     expect(drawn.layers.map((l) => l.key)).toContain('1:7');
     expect(drawn.viewport).toEqual(state.viewport);
 
-    const session = { owner: 'p_7f3a', runId: 'r1', turn: 3, state, lastOutcome: { action: { type: 'click', element: 'e1' }, outcome: 'navigated', target: 'Billing (e1)' }, timerEffects: [], loopFrames: [], version: 1 };
+    const session = { owner: 'p_7f3a', runId: 'r1', turn: 3, state, lastOutcome: { action: { type: 'click', element: 'e1' }, outcome: 'navigated', target: 'Billing (e1)' }, timerEffects: [], loopFrames: [], flowMapVersion: null, mapMisses: [], version: 2 };
     expect(await t.ask({ type: 'trace-save', requestId: 'q3', studyId: 's1', runId: 'r1', session })).toEqual({ type: 'trace-result', requestId: 'q3', result: null });
     expect(await t.ask({ type: 'trace-load', requestId: 'q4', studyId: 's1' })).toEqual({ type: 'trace-result', requestId: 'q4', result: { sessions: [session] } });
     expect((await t.ask({ type: 'trace-load', requestId: 'q5', studyId: 's2' })).result).toEqual({ sessions: [] });
@@ -353,6 +374,48 @@ describe('trace requests on the main thread', () => {
     expect((t.api.currentPage as unknown as FakeNode).children.filter((n) => isScratch(n as unknown as BaseNode))).toEqual([]);
     expect(t.api.commitUndo).not.toHaveBeenCalled();
     expect(t.api.notify).not.toHaveBeenCalled();
+  });
+
+  describe('capture frames marked through shared plugin data', () => {
+    /** A frame on the Prototype page as a capture through an MCP host leaves it: locked, off canvas, marked in shared plugin data. */
+    function capture(t: ReturnType<typeof traceMain>, namespace: string, key: string, value: string): FakeNode {
+      const frame = t.api.createFrame() as unknown as FakeNode;
+      Object.assign(frame, { name: 'Archetype trace (scratch)', x: -100000, y: 0, locked: true });
+      frame.setSharedPluginData(namespace, key, value);
+      return frame;
+    }
+
+    it('are removed when the plugin starts, like the ones a render left', async () => {
+      const t = traceMain();
+      const marked = capture(t, 'archetype.trace', 'archetype.trace', 'scratch');
+      await t.controller.handle({ type: 'ready' });
+      expect(marked.removed).toBe(true);
+    });
+
+    it('are never screens: not in the trace read, the flow map or the preflight', async () => {
+      const t = traceMain();
+      const marked = capture(t, 'archetype.trace', 'archetype.trace', 'scratch');
+      expect(isScratch(marked as unknown as BaseNode)).toBe(true);
+      const doc = (await t.ask({ type: 'trace-read', requestId: 'r', importLibraryVariants: false })).result as ProtoDoc;
+      expect(doc.frames.map((f) => f.id)).not.toContain(marked.id);
+      const flow = (await t.ask({ type: 'trace-candidates', requestId: 'c', docHash: doc.docHash })).result as FlowRead;
+      expect(flow.nodes.map((n) => n.id)).not.toContain(marked.id);
+      expect((await readDocument(t.api)).frames.map((f) => f.id)).not.toContain(marked.id);
+      expect(t.controller.removeLeftovers()).toBe(1);
+    });
+
+    it('leave alone a frame marked under another key or value', async () => {
+      const t = traceMain();
+      const others = [
+        capture(t, 'archetype.trace', 'archetype.other', 'scratch'),
+        capture(t, 'archetype.trace', 'archetype.trace', 'kept'),
+        capture(t, 'archetype.other', 'archetype.trace', 'scratch'),
+      ];
+      for (const frame of others) expect(isScratch(frame as unknown as BaseNode)).toBe(false);
+      await t.controller.handle({ type: 'ready' });
+      expect(others.map((f) => f.removed)).toEqual([false, false, false]);
+      expect(t.controller.removeLeftovers()).toBe(0);
+    });
   });
 
   it('removes leftover scratch containers when the panel asks, once no render is running', async () => {
@@ -381,8 +444,8 @@ describe('trace requests on the main thread', () => {
     const t = traceMain();
     const doc = (await t.ask({ type: 'trace-read', requestId: 'a', importLibraryVariants: false })).result as ProtoDoc;
     const state = start(doc, '1:2');
-    const one = { owner: 'p_1', runId: 'r1', turn: 1, state, lastOutcome: null, timerEffects: [], loopFrames: [], version: 1 };
-    const two = { owner: 'p_1', runId: 'r2', turn: 4, state, lastOutcome: null, timerEffects: [], loopFrames: [], version: 1 };
+    const one = { owner: 'p_1', runId: 'r1', turn: 1, state, lastOutcome: null, timerEffects: [], loopFrames: [], flowMapVersion: null, mapMisses: [], version: 2 };
+    const two = { owner: 'p_1', runId: 'r2', turn: 4, state, lastOutcome: null, timerEffects: [], loopFrames: [], flowMapVersion: null, mapMisses: [], version: 2 };
     await t.ask({ type: 'trace-save', requestId: 'b', studyId: 's1', runId: 'r1', session: one });
     await t.ask({ type: 'trace-save', requestId: 'c', studyId: 's1', runId: 'r2', session: two });
     expect((await t.ask({ type: 'trace-load', requestId: 'd', studyId: 's1' })).result).toEqual({ sessions: [one, two] });
@@ -395,7 +458,7 @@ describe('trace requests on the main thread', () => {
     const t = traceMain();
     const doc = (await t.ask({ type: 'trace-read', requestId: 'a', importLibraryVariants: false })).result as ProtoDoc;
     const state = start(doc, '1:2');
-    const session = (runId: string, turn: number) => ({ owner: 'p_1', runId, turn, state, lastOutcome: null, timerEffects: [], loopFrames: [], version: 1 });
+    const session = (runId: string, turn: number) => ({ owner: 'p_1', runId, turn, state, lastOutcome: null, timerEffects: [], loopFrames: [], flowMapVersion: null, mapMisses: [], version: 2 });
     // Parallel personas: their saves reach the main thread together.
     await Promise.all([
       t.ask({ type: 'trace-save', requestId: 'b', studyId: 's1', runId: 'r1', session: session('r1', 1) }),
@@ -415,7 +478,7 @@ describe('trace requests on the main thread', () => {
     const t = traceMain();
     const doc = (await t.ask({ type: 'trace-read', requestId: 'a', importLibraryVariants: false })).result as ProtoDoc;
     const state = start(doc, '1:2');
-    const one = { owner: 'p_1', runId: 'r1', turn: 1, state, lastOutcome: null, timerEffects: [], loopFrames: [], version: 1 };
+    const one = { owner: 'p_1', runId: 'r1', turn: 1, state, lastOutcome: null, timerEffects: [], loopFrames: [], flowMapVersion: null, mapMisses: [], version: 2 };
     (t.api.clientStorage.setAsync as unknown as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('The storage quota is full'));
     const [refused, saved] = await Promise.all([
       t.ask({ type: 'trace-save', requestId: 'b', studyId: 's1', runId: 'r1', session: one }),
@@ -433,22 +496,24 @@ describe('trace requests on the main thread', () => {
     const cases: Array<[Record<string, unknown>, string]> = [
       [{ type: 'trace-read', requestId: 'm1', importLibraryVariants: 'yes' }, 'importLibraryVariants'],
       [{ type: 'trace-render', requestId: 'm2', docHash: null, state }, 'docHash'],
+      [{ type: 'trace-candidates', requestId: 'm19' }, 'docHash'],
+      [{ type: 'trace-candidates', requestId: 'm20', docHash: 'f00' }, 'not read since it opened'],
       [{ type: 'trace-render', requestId: 'm3', docHash: doc.docHash, state: { ...state, frameId: 7 } }, 'state'],
       [{ type: 'trace-render', requestId: 'm4', docHash: doc.docHash, state: { ...state, viewport: null } }, 'state'],
-      [{ type: 'trace-save', requestId: 'm5', studyId: 's1', runId: 'r1', session: { owner: 'p', runId: 'r2', turn: 1, state, lastOutcome: null, timerEffects: [], loopFrames: [], version: 1 } }, 'runId'],
-      [{ type: 'trace-save', requestId: 'm6', studyId: 's1', runId: 'r1', session: { owner: '', runId: 'r1', turn: 1, state, lastOutcome: null, timerEffects: [], loopFrames: [], version: 1 } }, 'owner'],
-      [{ type: 'trace-save', requestId: 'm7', studyId: 's1', runId: 'r1', session: { owner: 'p', runId: 'r1', turn: -1, state, lastOutcome: null, timerEffects: [], loopFrames: [], version: 1 } }, 'turn'],
-      [{ type: 'trace-save', requestId: 'm8', studyId: 's1', runId: 'r1', session: { owner: 'p', runId: 'r1', turn: 1, state: {}, lastOutcome: null, timerEffects: [], loopFrames: [], version: 1 } }, 'state'],
-      [{ type: 'trace-save', requestId: 'm9', studyId: 's1', runId: 'r1', session: { owner: 'p', runId: 'r1', turn: 1, state, lastOutcome: 'clicked', timerEffects: [], loopFrames: [], version: 1 } }, 'lastOutcome'],
+      [{ type: 'trace-save', requestId: 'm5', studyId: 's1', runId: 'r1', session: { owner: 'p', runId: 'r2', turn: 1, state, lastOutcome: null, timerEffects: [], loopFrames: [], flowMapVersion: null, mapMisses: [], version: 2 } }, 'runId'],
+      [{ type: 'trace-save', requestId: 'm6', studyId: 's1', runId: 'r1', session: { owner: '', runId: 'r1', turn: 1, state, lastOutcome: null, timerEffects: [], loopFrames: [], flowMapVersion: null, mapMisses: [], version: 2 } }, 'owner'],
+      [{ type: 'trace-save', requestId: 'm7', studyId: 's1', runId: 'r1', session: { owner: 'p', runId: 'r1', turn: -1, state, lastOutcome: null, timerEffects: [], loopFrames: [], flowMapVersion: null, mapMisses: [], version: 2 } }, 'turn'],
+      [{ type: 'trace-save', requestId: 'm8', studyId: 's1', runId: 'r1', session: { owner: 'p', runId: 'r1', turn: 1, state: {}, lastOutcome: null, timerEffects: [], loopFrames: [], flowMapVersion: null, mapMisses: [], version: 2 } }, 'state'],
+      [{ type: 'trace-save', requestId: 'm9', studyId: 's1', runId: 'r1', session: { owner: 'p', runId: 'r1', turn: 1, state, lastOutcome: 'clicked', timerEffects: [], loopFrames: [], flowMapVersion: null, mapMisses: [], version: 2 } }, 'lastOutcome'],
       [{ type: 'trace-save', requestId: 'm10', studyId: '', runId: 'r1', session: null }, 'study'],
       [{ type: 'trace-save', requestId: 'm11', studyId: 's1', session: null }, 'run'],
       [{ type: 'trace-load', requestId: 'm12' }, 'study'],
-      [{ type: 'trace-save', requestId: 'm13', studyId: 's1', runId: 'r1', session: { owner: 'p', runId: 'r1', turn: 1, state, lastOutcome: null, loopFrames: [], version: 1 } }, 'timerEffects'],
-      [{ type: 'trace-save', requestId: 'm14', studyId: 's1', runId: 'r1', session: { owner: 'p', runId: 'r1', turn: 1, state, lastOutcome: null, timerEffects: [{ type: 'left_prototype' }], loopFrames: [], version: 1 } }, 'timerEffects'],
-      [{ type: 'trace-save', requestId: 'm15', studyId: 's1', runId: 'r1', session: { owner: 'p', runId: 'r1', turn: 1, state, lastOutcome: null, timerEffects: [], loopFrames: [7], version: 1 } }, 'loopFrames'],
-      [{ type: 'trace-save', requestId: 'm16', studyId: 's1', runId: 'r1', session: { owner: 'p', runId: 'r1', turn: 1, state: { ...state, timers: undefined }, lastOutcome: null, timerEffects: [], loopFrames: [], version: 1 } }, 'timers'],
+      [{ type: 'trace-save', requestId: 'm13', studyId: 's1', runId: 'r1', session: { owner: 'p', runId: 'r1', turn: 1, state, lastOutcome: null, loopFrames: [], flowMapVersion: null, mapMisses: [], version: 2 } }, 'timerEffects'],
+      [{ type: 'trace-save', requestId: 'm14', studyId: 's1', runId: 'r1', session: { owner: 'p', runId: 'r1', turn: 1, state, lastOutcome: null, timerEffects: [{ type: 'left_prototype' }], loopFrames: [], flowMapVersion: null, mapMisses: [], version: 2 } }, 'timerEffects'],
+      [{ type: 'trace-save', requestId: 'm15', studyId: 's1', runId: 'r1', session: { owner: 'p', runId: 'r1', turn: 1, state, lastOutcome: null, timerEffects: [], loopFrames: [7], flowMapVersion: null, mapMisses: [], version: 2 } }, 'loopFrames'],
+      [{ type: 'trace-save', requestId: 'm16', studyId: 's1', runId: 'r1', session: { owner: 'p', runId: 'r1', turn: 1, state: { ...state, timers: undefined }, lastOutcome: null, timerEffects: [], loopFrames: [], flowMapVersion: null, mapMisses: [], version: 2 } }, 'timers'],
       [{ type: 'trace-save', requestId: 'm18', studyId: 's1', runId: 'r1', session: { owner: 'p', runId: 'r1', turn: 1, state, lastOutcome: null, timerEffects: [], loopFrames: [] } }, 'another version'],
-      [{ type: 'trace-save', requestId: 'm17', studyId: 's1', runId: 'r1', session: { owner: 'p', runId: 'r1', turn: 1, state: { ...state, pointer: { point: null } }, lastOutcome: null, timerEffects: [], loopFrames: [], version: 1 } }, 'pointer'],
+      [{ type: 'trace-save', requestId: 'm17', studyId: 's1', runId: 'r1', session: { owner: 'p', runId: 'r1', turn: 1, state: { ...state, pointer: { point: null } }, lastOutcome: null, timerEffects: [], loopFrames: [], flowMapVersion: null, mapMisses: [], version: 2 } }, 'pointer'],
     ];
     for (const [msg, words] of cases) {
       const reply = await t.ask(msg);
@@ -456,6 +521,42 @@ describe('trace requests on the main thread', () => {
       expect(reply.message, String(msg.requestId)).toContain(words);
     }
     expect(t.api.notify).not.toHaveBeenCalled();
+  });
+
+  it("answers trace-candidates with the read prototype's nodes, edges and candidates, reading hidden instance layers too", async () => {
+    const t = traceMain();
+    const doc = (await t.ask({ type: 'trace-read', requestId: 'r', importLibraryVariants: true })).result as ProtoDoc;
+    t.api.skipInvisibleInstanceChildren = true;
+    const reply = await t.ask({ type: 'trace-candidates', requestId: 'c', docHash: doc.docHash });
+    expect(reply).toMatchObject({ type: 'trace-result', requestId: 'c' });
+    const flow = reply.result as FlowRead;
+    expect(flow.docHash).toBe(doc.docHash);
+    expect(flow.nodes.map((n) => n.id)).toEqual(doc.frames.map((f) => f.id));
+    expect(flow.edges.find((e) => e.layerKey === '1:7')).toMatchObject({ from: '1:2', to: '2:10', label: 'Billing' });
+    expect(flow.candidates.find((c) => c.layerKey === '2:27')).toMatchObject({ node: '2:20', label: 'Use routing number instead' });
+    // The hidden spinner inside Continue, which Figma skips unless asked.
+    expect(flow.candidates.find((c) => c.layerKey === 'I2:22;6:4')).toMatchObject({ node: '2:20', role: 'icon' });
+    expect(t.api.skipInvisibleInstanceChildren).toBe(true);
+    expect(t.api.commitUndo).not.toHaveBeenCalled();
+  });
+
+  it('follows a persona by moving the viewport only: never the selection or the page', async () => {
+    const t = traceMain();
+    const page = t.api.currentPage;
+    const selected = [traceNode(t, '1:2')];
+    (page as unknown as FakeNode).selection = selected;
+    expect(await t.ask({ type: 'trace-follow', requestId: 'f1', frameId: '2:20' })).toEqual({ type: 'trace-result', requestId: 'f1', result: { otherPage: null } });
+    expect(t.api.viewport.scrollAndZoomIntoView).toHaveBeenCalledWith([traceNode(t, '2:20')]);
+    // A frame on another page: the viewport stays, and the answer names the page.
+    expect((await t.ask({ type: 'trace-follow', requestId: 'f2', frameId: '7:1' })).result).toEqual({ otherPage: 'Archive' });
+    expect(t.api.viewport.scrollAndZoomIntoView).toHaveBeenCalledTimes(1);
+    expect(t.api.currentPage).toBe(page);
+    expect(t.api.setCurrentPageAsync).not.toHaveBeenCalled();
+    expect((page as unknown as FakeNode).selection).toBe(selected);
+    expect(t.api.commitUndo).not.toHaveBeenCalled();
+    const gone = await t.ask({ type: 'trace-follow', requestId: 'f3', frameId: '9:99' });
+    expect(gone).toMatchObject({ type: 'trace-error', message: "The frame 9:99 isn't in the file any more" });
+    expect((await t.ask({ type: 'trace-follow', requestId: 'f4' })).message).toContain('the frame to show');
   });
 
   it('learns which frame each reaction layer is in from the read, looking no reaction layer up', async () => {
@@ -556,7 +657,7 @@ describe('trace requests on the main thread', () => {
   it('refuses stored sessions it cannot read instead of writing over them', async () => {
     const t = traceMain();
     const doc = (await t.ask({ type: 'trace-read', requestId: 'a', importLibraryVariants: false })).result as ProtoDoc;
-    const one = { owner: 'p_1', runId: 'r1', turn: 1, state: start(doc, '1:2'), lastOutcome: null, timerEffects: [], loopFrames: [], version: 1 };
+    const one = { owner: 'p_1', runId: 'r1', turn: 1, state: start(doc, '1:2'), lastOutcome: null, timerEffects: [], loopFrames: [], flowMapVersion: null, mapMisses: [], version: 2 };
     await t.ask({ type: 'trace-save', requestId: 'b', studyId: 's1', runId: 'r1', session: one });
     const key = (t.api.clientStorage.setAsync as unknown as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as string;
 
@@ -579,7 +680,7 @@ describe('trace requests on the main thread', () => {
   it("refuses saved progress another version of the plugin made, and forgets a study's progress when asked", async () => {
     const t = traceMain();
     const doc = (await t.ask({ type: 'trace-read', requestId: 'a', importLibraryVariants: false })).result as ProtoDoc;
-    const one = { owner: 'p_1', runId: 'r1', turn: 1, state: start(doc, '1:2'), lastOutcome: null, timerEffects: [], loopFrames: [], version: 1 };
+    const one = { owner: 'p_1', runId: 'r1', turn: 1, state: start(doc, '1:2'), lastOutcome: null, timerEffects: [], loopFrames: [], flowMapVersion: null, mapMisses: [], version: 2 };
     await t.ask({ type: 'trace-save', requestId: 'b', studyId: 's1', runId: 'r1', session: one });
     await t.ask({ type: 'trace-save', requestId: 'b2', studyId: 's2', runId: 'r1', session: one });
     const key = (t.api.clientStorage.setAsync as unknown as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as string;

@@ -4,8 +4,10 @@ import type { RenderNote, SavedSession, TraceRenderReply } from '../src/lib/mess
 import { listElements } from '../src/lib/proto/elements';
 import { apply, start } from '../src/lib/proto/engine';
 import { EngineError, type EngineErrorCode } from '../src/lib/proto/errors';
+import type { FlowMap, FlowReading } from '../src/lib/proto/flow';
 import type { ProtoDoc, TraceAction, TraceState } from '../src/lib/proto/model';
-import { NOTICE, runSession, type SessionResult, type SessionRun, type SessionStatus } from '../src/ui/trace/session';
+import type { LiveFrame } from '../src/lib/liveScreen';
+import { NOTICE, runSession, type SessionDeps, type SessionResult, type SessionRun, type SessionStatus } from '../src/ui/trace/session';
 import { BridgeError, createBridge, type TraceReplyMessage } from '../src/ui/trace/bridge';
 import type { FakeNode } from './fake-figma';
 import { clock, click, DONE, farside, lastOf, mainThread, type Decision, type Fake } from './trace-fakes';
@@ -87,6 +89,7 @@ async function play(
     signal?: AbortSignal;
     /** The session is meant to throw: the error comes back with everything else. */
     fails?: boolean;
+    onFrame?: SessionDeps['onFrame'];
   } = {},
 ) {
   const main = options.main ?? (await mainThread(options.edit));
@@ -103,6 +106,7 @@ async function play(
     startFrameId: '1:2',
     resume: null,
     fileChanged: false,
+    map: null,
     ...options.run?.(main.doc),
   };
   let result: SessionResult | null = null;
@@ -117,6 +121,7 @@ async function play(
       watchFile: options.watchFile ?? (() => () => {}),
       postTurnTimeoutMs: options.postTurnTimeoutMs,
       signal: options.signal,
+      onFrame: options.onFrame,
     });
   } catch (err) {
     if (!options.fails) throw err;
@@ -203,6 +208,107 @@ describe('one persona session', () => {
       target: "What's new (e5)",
       unsupported: 'UPDATE_MEDIA_RUNTIME',
     });
+  });
+});
+
+describe('the flow map', () => {
+  type Read = Pick<FlowReading, 'kind' | 'to'>;
+  const reading = (id: string, node: string, layerKey: string, label: string, read: Read): FlowReading => ({
+    id, shareKey: `L:${node}:${layerKey}`, nodes: [node], layerKeys: [layerKey], label, role: 'text', by: 'model', reason: 'r', ...read,
+  });
+  /** Version 3 of a map that reads the routing link as `routing`, and the Dashboard's greeting as an edge to the Dashboard. */
+  const map = (routing: Read | null): FlowMap => ({
+    studyId: 's1', version: 3, baseVersion: 2, inputHash: 'h', docHash: 'any', nodes: [], edges: [], dropped: [],
+    readings: [
+      ...(routing ? [reading('r4', '2:20', '2:27', 'Use routing number instead', routing)] : []),
+      reading('r9', '1:2', '1:5', 'Welcome back, Mara', { kind: 'edge', to: '1:2' }),
+    ],
+    completedAt: '2026-11-10T21:40:00+00:00', model: 'google:gemini-2.5-flash', buildId: 'b3',
+  });
+  /** The greeting, then Billing, Connect a bank and the routing link, then done. */
+  const routing = (body: TurnBody): Decision => {
+    if (body.turn === 1) return { action: click(body, 'Welcome back, Mara') };
+    if (body.screen.title === 'Dashboard') return { action: click(body, 'Billing') };
+    if (body.screen.title === 'Billing settings') return { action: click(body, 'Connect a bank') };
+    if (body.screen.title === 'Connect bank' && body.last?.target?.startsWith('Connect a bank')) return { action: click(body, 'Use routing number instead') };
+    return DONE;
+  };
+
+  it('reports the reading of a gap with missing, and of an edge to the screen it is on as already here', async () => {
+    const { posted, saves } = await play(routing, { run: () => ({ map: map({ kind: 'gap', to: null }) }) });
+    expect(posted[1]?.last).toMatchObject({ outcome: 'already_here', reading: 'r9', target: expect.stringMatching(/^Welcome back, Mara/) });
+    expect(lastOf(posted)?.last).toMatchObject({ outcome: 'missing', reading: 'r4', target: expect.stringMatching(/^Use routing number instead/) });
+    expect(lastOf(posted)?.screen.title).toBe('Connect bank');
+    expect(saves.filter((x) => x !== null).every((x) => x?.flowMapVersion === 3)).toBe(true);
+  });
+
+  it('moves the screen on an edge, reported as navigated with its reading, and accepts a control', async () => {
+    const edge = await play(routing, { run: () => ({ map: map({ kind: 'edge', to: '2:30' }) }) });
+    expect(lastOf(edge.posted)?.screen.title).toBe('Verify phone');
+    expect(lastOf(edge.posted)?.last).toMatchObject({ outcome: 'navigated', reading: 'r4' });
+    const control = await play(routing, { run: () => ({ map: map({ kind: 'control', to: null }) }) });
+    expect(lastOf(control.posted)?.last).toMatchObject({ outcome: 'accepted', reading: 'r4' });
+  });
+
+  it('reports nothing of the map for an outcome the prototype decided', async () => {
+    const { posted } = await play(routing, { run: () => ({ map: map({ kind: 'gap', to: null }) }) });
+    expect(posted[2]?.last).toEqual({ action: { type: 'click', element: expect.any(String) }, outcome: 'navigated', target: expect.stringMatching(/^Billing/) });
+    expect(posted.every((b) => !b.flags.includes('map_miss'))).toBe(true);
+  });
+
+  it('flags a click on a candidate the map has no reading of as map_miss, with its label, on the next turn only', async () => {
+    const { posted, saves } = await play(routing, { run: () => ({ map: map(null) }) });
+    const after = lastOf(posted) as TurnBody;
+    expect(after.last).toMatchObject({ outcome: 'nothing_happened', target: expect.stringMatching(/^Use routing number instead/) });
+    expect(after.last?.reading).toBeUndefined();
+    expect(after.flags).toContain('map_miss');
+    expect(after.flag_details?.map_miss).toEqual({ labels: ['Use routing number instead'] });
+    expect(posted.slice(0, -1).every((b) => !b.flags.includes('map_miss'))).toBe(true);
+    // Saved with the turn, so a resumed run still sends it.
+    expect(saves.filter((x) => x !== null).map((x) => x?.mapMisses)).toContainEqual(['Use routing number instead']);
+  });
+
+  it('plays a none reading (text that is not interactive) as no reading at all: nothing happens, and the map missed nothing', async () => {
+    const { posted } = await play(routing, { run: () => ({ map: map({ kind: 'none', to: null }) }) });
+    const after = lastOf(posted) as TurnBody;
+    expect(after.last).toEqual({ action: { type: 'click', element: expect.any(String) }, outcome: 'nothing_happened', target: expect.stringMatching(/^Use routing number instead/) });
+    expect(after.flags).not.toContain('map_miss');
+    expect(after.flag_details?.map_miss).toBeUndefined();
+  });
+
+  it('flags no map_miss without a map', async () => {
+    const { posted } = await play(routing);
+    expect(lastOf(posted)?.last?.outcome).toBe('nothing_happened');
+    expect(posted.every((b) => !b.flags.includes('map_miss'))).toBe(true);
+  });
+
+  it('refuses to resume a run under another version than the one it was saved with', async () => {
+    const main = await mainThread();
+    const saved: SavedSession = { owner: 'p_7f3a', runId: 'r1', turn: 0, state: start(main.doc, '1:2'), lastOutcome: null, timerEffects: [], loopFrames: [], flowMapVersion: 2, mapMisses: [], version: 2 };
+    const { error, aborted } = await play(routing, { main, run: () => ({ resume: saved, map: map({ kind: 'gap', to: null }) }), fails: true });
+    expect(String(error)).toContain('saved playing flow map version 2, but was resumed with 3');
+    expect(aborted).toEqual([expect.objectContaining({ code: 'engine_error' })]);
+  });
+});
+
+describe('the screens for the Live screen card', () => {
+  it('reports each turn as rendered, then with what the persona did there and what came of it, and the action that ended the run', async () => {
+    const frames: LiveFrame[] = [];
+    const { posted } = await play(farside, { onFrame: (f) => frames.push(structuredClone(f)) });
+    const first = frames.filter((f) => f.turn === 1);
+    expect(first).toHaveLength(2);
+    expect(first[0]).toMatchObject({ runId: 'r1', node: '1:2', screenName: 'Dashboard', viewport: { width: 1280, height: 800 }, action: null, target: null, outcome: null });
+    expect(first[0]?.image.length).toBeGreaterThan(0);
+    const billing = posted[0]?.elements.find((e) => e.label === 'Billing');
+    expect(first[1]).toMatchObject({ action: { type: 'click', element: billing?.id }, target: { label: 'Billing', box: billing?.box }, outcome: 'navigated', toName: 'Billing settings' });
+    const [x, y, w, h] = billing?.box as [number, number, number, number];
+    expect(first[1]?.target?.point).toEqual({ x: x + w / 2, y: y + h / 2 });
+    // The same image both times: the card shows the render the turn posted.
+    expect(first[1]?.image).toEqual(first[0]?.image);
+    expect(frames.find((f) => f.outcome === 'nothing_happened')).toMatchObject({ target: { label: 'Use routing number instead' } });
+    // The last screen: the persona said it was done, and nothing was played.
+    expect(lastOf(frames)).toMatchObject({ screenName: 'Bank connected', action: { type: 'done' }, outcome: null });
+    expect(new Set(frames.map((f) => f.turn)).size).toBe(posted.length);
   });
 });
 
@@ -315,7 +421,9 @@ describe('resuming a run this panel owns', () => {
       lastOutcome: { action: { type: 'click', element: 'e1' }, outcome: 'nothing_happened', target: 'Back (e1)' },
       timerEffects: [],
       loopFrames: [],
-      version: 1,
+      flowMapVersion: null,
+      mapMisses: [],
+      version: 2,
     };
   }
 
@@ -363,7 +471,7 @@ describe('resuming a run this panel owns', () => {
     const wait = (b: TurnBody): Decision => (b.turn === 1 ? { action: { type: 'wait', seconds: 6 } } : DONE);
     const whole = await play(wait, { edit: waitLink });
     const afterWait = whole.saves[0] as SavedSession;
-    expect(afterWait).toMatchObject({ turn: 1, timerEffects: [{ type: 'left_prototype', detail: 'https://help.example.com/late' }], loopFrames: [], version: 1 });
+    expect(afterWait).toMatchObject({ turn: 1, timerEffects: [{ type: 'left_prototype', detail: 'https://help.example.com/late' }], loopFrames: [], flowMapVersion: null, mapMisses: [], version: 2 });
     const reopened = await play(wait, { main: await mainThread(waitLink), run: () => ({ resume: afterWait }) });
     expect(reopened.posted[0]!.last).toEqual(whole.posted[1]!.last);
   });
@@ -450,7 +558,9 @@ describe('when things go wrong', () => {
       lastOutcome: { action: { type: 'click', element: 'e1' }, outcome: 'opened_overlay', target: 'Help (e1)' },
       timerEffects: [],
       loopFrames: [],
-      version: 1,
+      flowMapVersion: null,
+      mapMisses: [],
+      version: 2,
     };
     const { result, aborted, posted, call } = await play(() => DONE, { main, run: () => ({ resume }) });
     expect(aborted).toEqual([{ owner: 'p_7f3a', code: 'engine_error', detail: 'More than 20 overlays are open, more than a turn can carry.' }]);
@@ -503,7 +613,9 @@ describe('when things go wrong', () => {
       lastOutcome: { action: { type: 'click', element: billing.id }, outcome: 'navigated', target: `Billing (${billing.id})` },
       timerEffects: [],
       loopFrames: [],
-      version: 1,
+      flowMapVersion: null,
+      mapMisses: [],
+      version: 2,
     };
     const server = backend((b) => (b.turn === 3 ? DONE : { action: null }));
     server.decisions.set(2, { action: { type: 'click', element: 'e2' } }); // "Connect a bank", decided before the panel closed
@@ -512,7 +624,7 @@ describe('when things go wrong', () => {
     });
     const time = clock();
     const result = await runSession(
-      { runId: 'r1', studyId: 's1', owner: 'p_7f3a', doc: main.doc, shareKey: null, startFrameId: '1:2', resume, fileChanged: false },
+      { runId: 'r1', studyId: 's1', owner: 'p_7f3a', doc: main.doc, shareKey: null, startFrameId: '1:2', resume, fileChanged: false, map: null },
       { bridge: main.bridge, api: server.api, now: time.now, sleep: time.sleep, onStatus: () => {}, watchFile: () => () => {} },
     );
     return { result, server };

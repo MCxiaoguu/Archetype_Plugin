@@ -1,5 +1,9 @@
-import type { DeviceCode, RunRowApi, StudyStatusValue } from './api';
-import { DEFAULT_SETTINGS, type Draft, type InitPayload, type Settings, type StudyRecord } from './messages';
+import type { DeviceCode, RunPath, RunRowApi, StudyStatusValue } from './api';
+import { gapId } from './flowLayout';
+import type { FlowMap } from './proto/flow';
+import { isRunSize } from './form';
+import { EMPTY_SCREENS, type LiveFrame, type LiveScreens, addFrame, stepBack } from './liveScreen';
+import { DEFAULT_PREFS, DEFAULT_SETTINGS, type Draft, type InitPayload, type Prefs, type Settings, type StudyRecord } from './messages';
 import { nextQueuedSince } from './poll';
 import type { StudyReport } from './report';
 import type { FailedImport } from './launch';
@@ -31,7 +35,32 @@ export interface ActiveStudy {
   /** What the sessions this panel runs say, by run id (plugin mode). */
   live: Record<string, LiveRun>;
   runner: RunnerStatus | null;
+  flow: FlowCard;
+  /** The screens the personas this panel runs saw, for the Live screen card. */
+  screens: LiveScreens;
 }
+
+/** The Flow map card of a plugin-mode study (spec, The Flow map in the panel). */
+export interface FlowCard {
+  /** The study's current map version; null until it is known, and for a study that has none. */
+  map: FlowMap | null;
+  /** Each run's path from its steps, for a study that ran. */
+  paths: RunPath[] | null;
+  /** Why the map or the paths didn't load. */
+  error: string | null;
+  /** Clear paths: hidden until the panel opens the study again. */
+  cleared: boolean;
+  /** Follow persona: the run whose node the viewport moves to on each of its turns. */
+  following: string | null;
+  /** "On page <name>": the followed persona's frame is on another page, where the viewport doesn't go. */
+  followNote: string | null;
+  /** The screen each persona last saw on a node, by node: a visited node shows it. */
+  shots: Record<string, Uint8Array>;
+  /** The gaps the personas this panel runs clicked, by gapId: the card draws those. */
+  gapsHit: string[];
+}
+
+export const EMPTY_FLOW: FlowCard = { map: null, paths: null, error: null, cleared: false, following: null, followNote: null, shots: {}, gapsHit: [] };
 
 /** What stands between the form and a launch (spec, Data flow 1). */
 export type LaunchGate =
@@ -73,6 +102,7 @@ export interface AppState {
   history: StudyRecord[];
   notice: Notice | null;
   gate: LaunchGate | null;
+  prefs: Prefs;
 }
 
 export const INITIAL_STATE: AppState = {
@@ -91,6 +121,7 @@ export const INITIAL_STATE: AppState = {
   history: [],
   notice: null,
   gate: null,
+  prefs: DEFAULT_PREFS,
 };
 
 export type Action =
@@ -125,7 +156,18 @@ export type Action =
   | { type: 'notice'; notice: Notice | null }
   | { type: 'gate'; gate: LaunchGate | null }
   | { type: 'session'; studyId: string; status: LiveRun }
-  | { type: 'runner'; studyId: string; status: RunnerStatus };
+  | { type: 'runner'; studyId: string; status: RunnerStatus }
+  | { type: 'flow-map'; studyId: string; map: FlowMap | null }
+  | { type: 'flow-paths'; studyId: string; paths: RunPath[] }
+  | { type: 'flow-error'; studyId: string; message: string }
+  | { type: 'flow-shot'; studyId: string; node: string; image: Uint8Array }
+  | { type: 'flow-clear'; studyId: string }
+  | { type: 'flow-follow'; studyId: string; runId: string | null }
+  | { type: 'flow-follow-note'; studyId: string; note: string | null }
+  | { type: 'live-frame'; studyId: string; frame: LiveFrame }
+  | { type: 'live-pick'; studyId: string; runId: string | null }
+  | { type: 'live-step'; studyId: string; runId: string; step: 1 | -1 | 'live' }
+  | { type: 'prefs'; prefs: Prefs };
 
 function emptyStudy(now: number, record: StudyRecord | null, stage: Stage): ActiveStudy {
   return {
@@ -144,7 +186,29 @@ function emptyStudy(now: number, record: StudyRecord | null, stage: Stage): Acti
     reportError: null,
     live: {},
     runner: null,
+    flow: EMPTY_FLOW,
+    screens: EMPTY_SCREENS,
   };
+}
+
+/** The Flow map card after one of its actions. */
+function flowCard(flow: FlowCard, action: Extract<Action, { type: `flow-${string}` }>): FlowCard {
+  switch (action.type) {
+    case 'flow-map':
+      return { ...flow, map: action.map, error: null };
+    case 'flow-paths':
+      return { ...flow, paths: action.paths, error: null };
+    case 'flow-error':
+      return { ...flow, error: action.message };
+    case 'flow-shot':
+      return { ...flow, shots: { ...flow.shots, [action.node]: action.image } };
+    case 'flow-clear':
+      return { ...flow, cleared: true, following: null, followNote: null };
+    case 'flow-follow':
+      return { ...flow, following: action.runId, followNote: null };
+    case 'flow-follow-note':
+      return { ...flow, followNote: action.note };
+  }
 }
 
 /** A top level frame on the page that the prototype can open as a screen. */
@@ -171,7 +235,8 @@ function mergeDraft(form: StudyForm, draft: Partial<Draft> | null): StudyForm {
     who: draft.who ?? form.who,
     product: draft.product ?? form.product,
     link: draft.link ?? form.link,
-    size: draft.size === 'thorough' ? 'thorough' : 'quick',
+    // A draft from a plugin with sizes this one doesn't have starts from the form's default.
+    size: isRunSize(draft.size) ? draft.size : form.size,
   };
 }
 
@@ -197,6 +262,7 @@ export function reducer(state: AppState, action: Action): AppState {
         form,
         history: p.studies,
         study: last ? emptyStudy(action.now, last, 'watching') : null,
+        prefs: p.prefs,
       };
       return { ...next, screen: landing(next) };
     }
@@ -281,6 +347,8 @@ export function reducer(state: AppState, action: Action): AppState {
         reportError: null,
         stage: done ? 'done' : state.study.stage,
         status: (action.report.status as StudyStatusValue) ?? state.study.status,
+        // The run is over: its screens go, and the report shows the paths instead.
+        screens: done ? EMPTY_SCREENS : state.study.screens,
       };
       const screen = done && state.screen === 'progress' ? 'report' : state.screen;
       return {
@@ -331,12 +399,38 @@ export function reducer(state: AppState, action: Action): AppState {
       return { ...state, notice: action.notice };
     case 'gate':
       return { ...state, gate: action.gate };
-    case 'session':
+    case 'session': {
       if (state.study?.id !== action.studyId) return state;
-      return patchStudy(state, { live: { ...state.study.live, [action.status.runId]: action.status } });
+      const move = action.status.move;
+      const flow = state.study.flow;
+      const gap = move && move.outcome === 'missing' && move.reading ? gapId(move.reading, move.to) : null;
+      const gapsHit = gap && !flow.gapsHit.includes(gap) ? [...flow.gapsHit, gap] : flow.gapsHit;
+      return patchStudy(state, { live: { ...state.study.live, [action.status.runId]: action.status }, flow: gapsHit === flow.gapsHit ? flow : { ...flow, gapsHit } });
+    }
     case 'runner':
       if (state.study?.id !== action.studyId) return state;
       return patchStudy(state, { runner: action.status });
+    case 'live-frame':
+      if (state.study?.id !== action.studyId) return state;
+      return patchStudy(state, { screens: addFrame(state.study.screens, action.frame) });
+    case 'live-pick':
+      if (state.study?.id !== action.studyId) return state;
+      return patchStudy(state, { screens: { ...state.study.screens, pick: action.runId, back: 0, viewing: action.runId } });
+    case 'live-step':
+      if (state.study?.id !== action.studyId) return state;
+      return patchStudy(state, { screens: stepBack(state.study.screens, action.runId, action.step) });
+    case 'prefs':
+      return { ...state, prefs: action.prefs };
+    case 'flow-map':
+    case 'flow-paths':
+    case 'flow-error':
+    case 'flow-shot':
+    case 'flow-clear':
+    case 'flow-follow':
+    case 'flow-follow-note': {
+      if (state.study?.id !== action.studyId) return state;
+      return patchStudy(state, { flow: flowCard(state.study.flow, action) });
+    }
     default:
       return state;
   }

@@ -15,9 +15,14 @@ export const EMPTY_FORM: StudyForm = {
   size: 'quick',
 };
 
-export const RUN_SIZES: Record<RunSize, { mode: 'ofat_stress'; archetypeBudget: number; repeatPolicy: 'explore' | 'confirm'; label: string; detail: string }> = {
-  quick: { mode: 'ofat_stress', archetypeBudget: 5, repeatPolicy: 'explore', label: 'Quick', detail: '5 synthetic users, one try each' },
-  thorough: { mode: 'ofat_stress', archetypeBudget: 6, repeatPolicy: 'confirm', label: 'Thorough', detail: 'About 8 to 12 tries, repeats where results disagree' },
+/** The study design: `single` is one baseline persona from the designer's description, one try, one wave. */
+export type StudyDesign = { mode: 'single' | 'ofat_stress'; archetypeBudget: number; repeatPolicy: 'explore' | 'confirm' };
+
+/** Each size's design, what the form says of it, and the action bar's estimate of how long it takes. */
+export const RUN_SIZES: Record<RunSize, StudyDesign & { label: string; detail: string; estimate: string }> = {
+  single: { mode: 'single', archetypeBudget: 1, repeatPolicy: 'explore', label: 'Single persona', detail: 'One synthetic user, one try, fastest', estimate: 'Takes about 1 to 3 minutes' },
+  quick: { mode: 'ofat_stress', archetypeBudget: 5, repeatPolicy: 'explore', label: 'Quick', detail: '5 synthetic users, one try each', estimate: 'Takes about 5 to 10 minutes' },
+  thorough: { mode: 'ofat_stress', archetypeBudget: 6, repeatPolicy: 'confirm', label: 'Thorough', detail: 'About 8 to 12 tries, repeats where results disagree', estimate: 'Takes about 15 to 30 minutes' },
 };
 
 
@@ -80,7 +85,7 @@ export interface CreateStudyBody {
     checks: { type: 'frame_reached'; value: string; required: true; rationale: string }[];
   };
   context: { productDescription: string; keyFeatures: string[] };
-  design: { mode: 'ofat_stress'; archetypeBudget: number; repeatPolicy: 'explore' | 'confirm' };
+  design: StudyDesign;
   source: 'figma';
   /** The panel runs the personas itself (spec, Data flow 2). */
   execution: 'plugin';

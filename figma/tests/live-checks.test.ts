@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { hiddenFrameNames, namesIn } from './live-checks';
+import { hiddenFrameNames, namesIn, readsGreetingAsWrongName } from './live-checks';
 import { fakeFile } from './trace-plugin';
 import { readProto } from '../src/main/protoReader';
 
@@ -40,5 +40,21 @@ describe('a persona naming a frame', () => {
     // A scenario made from the goal "Connect your business bank account".
     expect(namesIn('Connect bank account for invoice payments', names)).toEqual([]);
     expect(namesIn('Dashboard looks empty so far.', names)).toEqual([]);
+  });
+});
+
+describe('a finding about the sample greeting', () => {
+  it('is one that calls the name wrong, in its description', () => {
+    expect(readsGreetingAsWrongName({ description: "The dashboard displays the wrong user name ('Mara' instead of 'Alex').", evidence: {} })).toBe(true);
+    expect(readsGreetingAsWrongName({ description: 'It greets me as Mara, who is not me.', evidence: {} })).toBe(true);
+  });
+
+  it('is not one that quotes the dashboard as evidence of something else', () => {
+    expect(
+      readsGreetingAsWrongName({
+        description: 'The application enters an infinite loop where the user is told the bank is linked, but the dashboard does not update.',
+        evidence: { quote: "Welcome back, Mara · Dark mode · Billing · What's new" },
+      }),
+    ).toBe(false);
   });
 });

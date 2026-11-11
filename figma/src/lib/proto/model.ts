@@ -333,7 +333,22 @@ export type TraceOutcome =
   | 'waited'
   | 'typed_nothing'
   | 'left_prototype'
-  | 'unsupported';
+  | 'unsupported'
+  // What the flow map reads an element no reaction took as (spec, Traversal).
+  | 'already_here'
+  | 'accepted'
+  | 'missing';
+
+/** The flow map's reading of an element no drawn reaction handles, as the engine plays it (flow.ts). */
+export interface ElementReading {
+  id: string;
+  kind: 'edge' | 'control' | 'gap';
+  /** The frame an edge goes to; null for a control or a gap. */
+  to: string | null;
+}
+
+/** The reading of the layer `layerKey` on the node (frame or overlay) `node`, or null when the map has none. */
+export type ReadingLookup = (node: string, layerKey: string) => ElementReading | null;
 
 // --- Rendering: measured layers and what the persona sees --------------
 

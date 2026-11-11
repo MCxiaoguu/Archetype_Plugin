@@ -17,6 +17,8 @@ export interface PointerDeps {
   layers: LayerIndex;
   /** Whether the layer has a reaction for this trigger. */
   handles(s: TraceState, layerKey: string, trigger: TriggerType): boolean;
+  /** Whether one of the layer's reactions for this trigger is more than an unfinished wire (see `Clicked`). */
+  takes(s: TraceState, layerKey: string, trigger: TriggerType): boolean;
   /** Fires the layer's reactions for this trigger: now, or as a timer when the trigger has a delay. */
   fire(s: TraceState, layerKey: string, trigger: TriggerType): void;
   /** Sets (or, with null, clears) an instance's variant override, as undoing a held effect does. */
@@ -54,6 +56,19 @@ export function movePointer(deps: PointerDeps, s: TraceState, point: Point): boo
 }
 
 /**
+ * What a click reached. `landed`: the pointer's move left the screen as
+ * it was and the click hit a layer. `handled`: one of its triggers bubbled
+ * to a layer with a reaction for it, whatever that reaction then did (a
+ * variant already shown, a false condition, a delay that only set a
+ * timer), unless all it does is follow unfinished wires: connections
+ * without a destination, or to one the prototype doesn't have.
+ */
+export interface Clicked {
+  landed: boolean;
+  handled: boolean;
+}
+
+/**
  * MOUSE_DOWN, ON_PRESS, MOUSE_UP and ON_CLICK at one point, each on the
  * layer the hit bubbles to for that trigger. Once one of them shows a
  * different frame or overlay that lasts, the rest don't fire; a "while
@@ -63,8 +78,8 @@ export function movePointer(deps: PointerDeps, s: TraceState, point: Point): boo
  * found among the layers the persona saw, so an overlay this click's own
  * pointer move opened can't take it.
  */
-export function click(deps: PointerDeps, s: TraceState, point: Point): void {
-  if (!movePointer(deps, s, point)) return;
+export function click(deps: PointerDeps, s: TraceState, point: Point): Clicked {
+  if (!movePointer(deps, s, point)) return { landed: false, handled: false };
 
   const { layers } = deps;
   const hit = hitAt(layers, s, point);
@@ -74,15 +89,17 @@ export function click(deps: PointerDeps, s: TraceState, point: Point): void {
     const top = hittableFrame(layers, s);
     const overlay = s.overlays.find((o) => o.frameId === top);
     if (overlay?.closeOnOutsideClick) s.overlays.splice(s.overlays.indexOf(overlay), 1);
-    return;
+    return { landed: false, handled: false };
   }
 
   const shown = screenOf(s);
   let stopped = false;
+  let handled = false;
   const press = (trigger: TriggerType) => {
     if (stopped) return;
     const key = bubble(layers, hit.key, (k) => deps.handles(s, k, trigger));
     if (key === null) return;
+    handled = handled || deps.takes(s, key, trigger);
     deps.fire(s, key, trigger);
     stopped = screenOf(s) !== shown;
   };
@@ -90,7 +107,10 @@ export function click(deps: PointerDeps, s: TraceState, point: Point): void {
   s.pointer.pressing = hit.key;
   press('MOUSE_DOWN');
   const pressed = stopped ? null : bubble(layers, hit.key, (k) => deps.handles(s, k, 'ON_PRESS'));
-  if (pressed !== null) hold(deps, s, pressed, 'ON_PRESS');
+  if (pressed !== null) {
+    handled = handled || deps.takes(s, pressed, 'ON_PRESS');
+    hold(deps, s, pressed, 'ON_PRESS');
+  }
   s.pointer.pressing = null;
   for (const held of [...s.pointer.held]) {
     if (held.trigger === 'ON_PRESS') undo(deps, s, held);
@@ -99,6 +119,7 @@ export function click(deps: PointerDeps, s: TraceState, point: Point): void {
   stopped = stopped || screenOf(s) !== shown;
   press('MOUSE_UP');
   press('ON_CLICK');
+  return { landed: true, handled };
 }
 
 export function drag(deps: PointerDeps, s: TraceState, point: Point): void {

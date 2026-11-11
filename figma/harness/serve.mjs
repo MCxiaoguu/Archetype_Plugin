@@ -16,6 +16,7 @@ import { createServer } from 'node:http';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, extname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { build } from 'esbuild';
 import { createMockBackend } from './mock-backend.mjs';
 import { themeUi } from './theme.mjs';
 
@@ -48,7 +49,19 @@ export function startServer(opts = {}) {
   const standIn = opts.start && opts.goal ? standInDoc(opts.start, opts.goal, opts.file) : null;
   const quiet = opts.quiet ?? false;
   const log = (m) => quiet || console.log(`[harness] ${m}`);
-  const mock = createMockBackend({ log });
+  const mock = createMockBackend({ log, thinkingPolls: 2, traceScripts: harnessScript });
+  /** The plugin's main thread for trace requests, bundled once: trace.ts on the fake Farside file (host/trace-main.ts). */
+  let traceMain = null;
+  const traceMainJs = () =>
+    (traceMain ??= build({
+      entryPoints: [join(here, 'host/trace-main.ts')],
+      bundle: true,
+      write: false,
+      format: 'esm',
+      target: 'chrome100',
+      alias: { vitest: join(here, 'host/vi-shim.ts') },
+      logLevel: 'silent',
+    }).then((r) => r.outputFiles[0].text));
 
   const server = createServer(async (req, res) => {
     const url = new URL(req.url, 'http://localhost');
@@ -88,6 +101,7 @@ export function startServer(opts = {}) {
         return send(res, 200, themeUi(readFileSync(file, 'utf8'), url.searchParams.get('theme') === 'dark' ? 'dark' : 'light'), TYPES['.html']);
       }
       if (path === '/' || path === '/index.html') return send(res, 200, readFileSync(join(here, 'host/index.html'), 'utf8'), TYPES['.html']);
+      if (path === '/host/trace-main.js') return send(res, 200, await traceMainJs(), TYPES['.js']);
       if (path.startsWith('/host/') || path.startsWith('/fixtures/')) {
         const file = join(here, path);
         if (!file.startsWith(here) || !existsSync(file)) return send(res, 404, 'not found', 'text/plain');
@@ -115,6 +129,38 @@ export function startServer(opts = {}) {
       });
     });
   });
+}
+
+/**
+ * What the harness's personas do in a plugin-mode study the panel launches:
+ * the first takes the bank flow (with the routing link, a gap, on the way),
+ * the second tries Plans and gives up; the rest get no run, so the Running
+ * screen shows two personas side by side.
+ */
+function harnessScript(archetype) {
+  const index = ['Baseline founder', 'Low trust founder'].indexOf(archetype.archetypeName);
+  if (index === 0) {
+    return [
+      { expect: 'Dashboard', click: 'Billing' },
+      { expect: 'Billing settings', click: 'Connect a bank' },
+      { expect: 'Connect bank', click: 'Use routing number instead' },
+      { expect: 'Connect bank', click: 'Sign in with your bank' },
+      { expect: 'Connect bank', click: 'Try again' },
+      { expect: 'Connect bank', scroll: 'down' },
+      { expect: 'Connect bank', click: 'Continue' },
+      { expect: 'Verify phone', click: 'Send code' },
+      { expect: 'Bank connected', done: 'The bank account is connected.' },
+    ];
+  }
+  if (index === 1) {
+    return [
+      { expect: 'Dashboard', click: 'unlabeled area' },
+      { expect: 'Plans', click: 'Yearly' },
+      { expect: 'Plans', click: 'Monthly' },
+      { expect: 'Plans', give_up: 'Plans only sells subscriptions; there is no way back to billing here.' },
+    ];
+  }
+  return null;
 }
 
 /** A page with the real file's start and goal frames and one hotspot between them. */

@@ -16,6 +16,8 @@ export interface ClaimBody {
   browser: TraceBrowser;
   /** This panel's id; every turn and abort of the run must carry it. */
   owner: string;
+  /** The study's current flow map version, which the run will play; null when it has none. 409 flow_map_stale otherwise. */
+  flowMapVersion: number | null;
 }
 
 /** The claim's briefing (only the fields the panel uses). */
@@ -26,9 +28,12 @@ export interface RunBriefing {
   brief: string;
   persona: { name: string };
   instructions: { targetUrl: string; goal: string };
+  /** The flow map version the run plays for its whole life: its first claim's; null when it had none. */
+  flowMapVersion: number | null;
 }
 
-export type TurnFlag = 'file_changed' | 'timer_loop' | 'missing_font';
+/** `map_miss`: the click `last` reports hit an element the flow map should have read and has no reading for. */
+export type TurnFlag = 'file_changed' | 'timer_loop' | 'missing_font' | 'map_miss';
 
 /** What a timer fired during settle or wait that the outcome does not say. */
 export interface TimerEffect {
@@ -44,6 +49,12 @@ export interface TurnLast {
   target: string | null;
   /** Required with the unsupported outcome, and only then: what did nothing, at most 200 characters. */
   unsupported?: string;
+  /**
+   * The flow map reading that decided the outcome, of the run's version:
+   * required with already_here, accepted and missing, and with navigated
+   * exactly when a reading (not a drawn reaction) moved the screen.
+   */
+  reading?: string;
   /** At most 10. */
   timer_effects?: TimerEffect[];
 }
@@ -71,7 +82,7 @@ export interface TurnBody {
   /** Required, [] when nothing applies. */
   flags: TurnFlag[];
   /** Each detail only with its flag in `flags`. */
-  flag_details?: { timer_loop?: { frames: string[] }; missing_font?: { fonts: string[] } };
+  flag_details?: { timer_loop?: { frames: string[] }; missing_font?: { fonts: string[] }; map_miss?: { labels: string[] } };
   elapsed_s: number;
   client_ts: string;
 }

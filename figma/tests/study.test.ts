@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { runPreflight } from '../src/lib/preflight';
-import { EMPTY_FORM, buildStudyRequest, clip, icpLabel, productDescription, validateForm, type StudyForm } from '../src/lib/study';
+import { EMPTY_FORM, RUN_SIZES, buildStudyRequest, clip, icpLabel, productDescription, validateForm, type StudyForm } from '../src/lib/study';
 import { fixtureDoc } from './helpers';
 
 const KEY = 'AbCdEfGh1234567890XyZ';
@@ -72,6 +72,23 @@ describe('study request', () => {
     const d = { ...fixtureDoc(), fileName: 'F'.repeat(130), pageName: 'P'.repeat(130) };
     const body = buildStudyRequest({ ...form, link: '' }, { doc: d, preflight, pluginVersion: '0', knownFileKey: null });
     expect([body.figma.fileName.length, body.figma.pageName.length]).toEqual([120, 120]);
+  });
+
+  it('offers Single persona, Quick and Thorough, in that order, each with an honest time', () => {
+    expect(Object.keys(RUN_SIZES)).toEqual(['single', 'quick', 'thorough']);
+    expect(RUN_SIZES.single).toEqual({
+      mode: 'single', archetypeBudget: 1, repeatPolicy: 'explore', label: 'Single persona', detail: 'One synthetic user, one try, fastest', estimate: 'Takes about 1 to 3 minutes',
+    });
+    expect(RUN_SIZES.quick.estimate).toBe('Takes about 5 to 10 minutes');
+    expect(RUN_SIZES.thorough.estimate).toBe('Takes about 15 to 30 minutes');
+    expect(EMPTY_FORM.size).toBe('quick');
+  });
+
+  it('asks for a one-persona study with the single design', () => {
+    const body = buildStudyRequest({ ...form, size: 'single' }, { doc, preflight, pluginVersion: '0.1.0', knownFileKey: null });
+    expect(body.design).toEqual({ mode: 'single', archetypeBudget: 1, repeatPolicy: 'explore' });
+    // The persona is built from who the designer said their user is.
+    expect(body.icp.description).toBe(form.who);
   });
 
   it('uses the thorough design and a null flow name off a flow start', () => {
