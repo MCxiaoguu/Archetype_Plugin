@@ -62,6 +62,14 @@ export interface TraceRecord {
 
 export type Draft = Pick<StudyForm, 'goal' | 'who' | 'product' | 'link' | 'size'>;
 
+/** The panel's view choices, kept across sessions. */
+export interface Prefs {
+  /** The Flow map card on the Running screen is open (it starts as one line). */
+  flowMapOpen: boolean;
+}
+
+export const DEFAULT_PREFS: Prefs = { flowMapOpen: false };
+
 export interface InitPayload {
   settings: Settings;
   token: string | null;
@@ -71,6 +79,7 @@ export interface InitPayload {
   studies: StudyRecord[];
   lastStudyId: string | null;
   draft: Partial<Draft> | null;
+  prefs: Prefs;
   pluginVersion: string;
 }
 
@@ -235,6 +244,7 @@ export type UiToMain =
   | { type: 'save-study'; record: StudyRecord }
   | { type: 'forget-last' }
   | { type: 'save-draft'; draft: Partial<Draft> }
+  | { type: 'save-prefs'; prefs: Prefs }
   | { type: 'open-url'; url: string }
   | { type: 'show-node'; nodeId: string }
   | { type: 'pin'; pins: Pin[] }

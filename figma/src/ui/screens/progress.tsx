@@ -7,6 +7,7 @@ import { NOTICE } from '../trace/session';
 import { IconCheck, IconClock, IconExternal } from '../icons';
 import { Banner, Section, Spinner, elapsed, plural } from '../parts';
 import { FlowMapCard, walkersOf } from './flowmap';
+import { LiveScreenCard } from './livescreen';
 import { useTicker } from '../store';
 
 function stepIndex(stage: Stage): number {
@@ -80,6 +81,10 @@ export function Progress({ state, fx }: { state: AppState; fx: Effects }) {
           >
             {st.error}
           </Banner>
+        )}
+
+        {inPanel && st.screens.frames.length > 0 && (
+          <LiveScreenCard screens={st.screens} following={st.flow.following} nameOf={(id) => st.runs.find((r) => r.runId === id)?.archetypeName || id} fx={fx} />
         )}
 
         <ol class="stages" aria-label="Progress">
@@ -173,7 +178,15 @@ export function Progress({ state, fx }: { state: AppState; fx: Effects }) {
           </Section>
         )}
         {inPanel && st.record?.trace && (st.flow.map || st.flow.error) && (
-          <FlowMapCard flow={st.flow} start={st.record.trace.startFrameId} walkers={walkersOf(st.runs, st.live)} live goal={null} fx={fx} />
+          <FlowMapCard
+            flow={st.flow}
+            start={st.record.trace.startFrameId}
+            walkers={walkersOf(st.runs, st.live)}
+            live
+            goal={null}
+            fx={fx}
+            fold={{ open: state.prefs.flowMapOpen, toggle: (open) => fx.setFlowMapOpen(open) }}
+          />
         )}
         {st.stage === 'done' && !st.report && !st.reportError && (
           <div class="placeholder" role="status">

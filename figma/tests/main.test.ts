@@ -331,6 +331,19 @@ function* ancestors(node: FakeNode): Generator<FakeNode> {
   for (let n = node.parent as FakeNode | null; n; n = n.parent as FakeNode | null) yield n;
 }
 
+describe("the viewer's view choices", () => {
+  it('start closed, are kept in clientStorage as the panel saves them, and come back with the next init', async () => {
+    const t = traceMain();
+    await t.controller.handle({ type: 'ready' });
+    expect(t.posted().find((m) => m.type === 'init')).toMatchObject({ prefs: { flowMapOpen: false } });
+    await t.controller.handle({ type: 'save-prefs', prefs: { flowMapOpen: true } } as UiToMain);
+    t.postMessage.mockClear();
+    await t.controller.handle({ type: 'ready' });
+    expect(t.posted().find((m) => m.type === 'init')).toMatchObject({ prefs: { flowMapOpen: true } });
+    await expect(t.controller.handle({ type: 'save-prefs', prefs: { flowMapOpen: 'yes' } } as unknown as UiToMain)).rejects.toThrow('flowMapOpen');
+  });
+});
+
 describe('trace requests on the main thread', () => {
   it('answers each of the five requests with its request id', async () => {
     const t = traceMain();

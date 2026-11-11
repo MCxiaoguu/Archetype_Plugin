@@ -124,6 +124,7 @@ export function FlowMapCard({
   live,
   goal,
   fx,
+  fold,
 }: {
   flow: FlowCard;
   /** The node the layout starts from: the test's start frame. */
@@ -134,6 +135,8 @@ export function FlowMapCard({
   live: boolean;
   goal: string | null;
   fx: Pick<Effects, 'followPersona' | 'clearPaths' | 'editReading'>;
+  /** On the Running screen the card folds to one line, open as the viewer last left it. */
+  fold?: { open: boolean; toggle: (open: boolean) => void };
 }) {
   const [editing, setEditing] = useState(false);
   const shots = useShots(flow.shots);
@@ -169,6 +172,23 @@ export function FlowMapCard({
   }
   if (!map || !layout) return null;
 
+  if (fold && !fold.open) {
+    const reached = new Set([...hit].map((id) => id.slice(0, id.indexOf('@')))).size;
+    return (
+      <section class="section" aria-label="Flow map">
+        <button type="button" class="fm-fold" aria-expanded={false} onClick={() => fold.toggle(true)}>
+          <span class="fm-fold-title">Flow map</span>
+          <span class="muted">
+            · {layout.nodes.length} {layout.nodes.length === 1 ? 'screen' : 'screens'} · {reached === 0 ? 'no gap reached yet' : `${reached} ${reached === 1 ? 'gap' : 'gaps'} reached`}
+          </span>
+          <span class="fm-fold-mark" aria-hidden="true">
+            ▸
+          </span>
+        </button>
+      </section>
+    );
+  }
+
   const marks: Marks = flow.cleared ? liveMarks([]) : live ? liveMarks(walkers) : pastMarks(flow.paths ?? [], goal);
   const at = new Map(layout.nodes.map((n) => [n.id, n]));
   const nameOf = (id: string) => (at.get(id) as { name: string }).name;
@@ -191,6 +211,11 @@ export function FlowMapCard({
           <button type="button" class="link-btn quiet" aria-expanded={editing} onClick={() => setEditing(!editing)}>
             {editing ? 'Done editing' : 'Edit map'}
           </button>
+          {fold && (
+            <button type="button" class="link-btn quiet" aria-expanded={true} onClick={() => fold.toggle(false)}>
+              Fold ▾
+            </button>
+          )}
         </span>
       }
     >
@@ -237,10 +262,15 @@ export function FlowMapCard({
                 {(() => {
                   const without = (graph?.hidden.get(n.id) ?? 0) + n.moreGaps;
                   const drawn = layout.gaps.some((g) => g.node === n.id);
+                  const words = `${without} ${drawn ? 'more ' : ''}without a page`;
+                  // On a band of its own, so the edges passing under it don't cross it out.
                   return without > 0 ? (
-                    <text class="fm-more" x={0} y={NODE_HEIGHT + 9}>
-                      {without} {drawn ? 'more ' : ''}without a page
-                    </text>
+                    <>
+                      <rect class="fm-more-bg" x={-2} y={NODE_HEIGHT + 2} width={words.length * 4.3 + 4} height={10} rx={2} />
+                      <text class="fm-more" x={0} y={NODE_HEIGHT + 9}>
+                        {words}
+                      </text>
+                    </>
                   ) : null;
                 })()}
                 {(tokensOn.get(n.id) ?? []).map((t, i) => (

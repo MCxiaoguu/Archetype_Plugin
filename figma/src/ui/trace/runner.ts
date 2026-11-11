@@ -62,6 +62,8 @@ export interface RunnerDeps {
   onMap?: (map: FlowMap) => void;
   /** The screen a persona's turn showed, on the node it is of. */
   onScreen?: (runId: string, node: string, image: Uint8Array) => void;
+  /** Each turn's screen and what the persona did there, for the Live screen card. */
+  onFrame?: SessionDeps['onFrame'];
   watchFile: SessionDeps['watchFile'];
   /** Reads the prototype again, for a new wave. */
   readDoc: () => Promise<DocRead>;
@@ -331,7 +333,7 @@ async function run(study: StudyTrace, deps: RunnerDeps, results: SessionResult[]
     if (phase !== 'running') report('running');
     const run: SessionRun = { runId, studyId, owner, doc: current.doc, shareKey: study.shareKey, startFrameId: study.startFrameId, resume, fileChanged: current.changed(), map };
     const onScreen = deps.onScreen ? (node: string, image: Uint8Array) => deps.onScreen?.(runId, node, image) : undefined;
-    started.set(runId, runSession(run, { bridge, api, now: deps.now, sleep: deps.sleep, onStatus: deps.onSession, onScreen, watchFile: deps.watchFile, postTurnTimeoutMs: deps.postTurnTimeoutMs, signal: deps.signal }));
+    started.set(runId, runSession(run, { bridge, api, now: deps.now, sleep: deps.sleep, onStatus: deps.onSession, onScreen, onFrame: deps.onFrame, watchFile: deps.watchFile, postTurnTimeoutMs: deps.postTurnTimeoutMs, signal: deps.signal }));
   }
 
   /**

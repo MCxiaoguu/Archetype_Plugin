@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { InitPayload, StudyRecord, TraceRecord, UiToMain } from '../src/lib/messages';
-import { DEFAULT_SETTINGS } from '../src/lib/messages';
+import { DEFAULT_PREFS, DEFAULT_SETTINGS } from '../src/lib/messages';
 import { indexFrames } from '../src/lib/frames';
 import { start } from '../src/lib/proto/engine';
 import type { LibraryVariant } from '../src/lib/proto/model';
@@ -65,6 +65,7 @@ function initStore(token: string | null, main?: MainThread, over: Partial<InitPa
     studies: [],
     lastStudyId: null,
     draft: null,
+    prefs: DEFAULT_PREFS,
     pluginVersion: '9.9.9',
     ...over,
   });

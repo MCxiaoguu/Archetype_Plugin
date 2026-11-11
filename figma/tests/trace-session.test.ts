@@ -6,7 +6,8 @@ import { apply, start } from '../src/lib/proto/engine';
 import { EngineError, type EngineErrorCode } from '../src/lib/proto/errors';
 import type { FlowMap, FlowReading } from '../src/lib/proto/flow';
 import type { ProtoDoc, TraceAction, TraceState } from '../src/lib/proto/model';
-import { NOTICE, runSession, type SessionResult, type SessionRun, type SessionStatus } from '../src/ui/trace/session';
+import type { LiveFrame } from '../src/lib/liveScreen';
+import { NOTICE, runSession, type SessionDeps, type SessionResult, type SessionRun, type SessionStatus } from '../src/ui/trace/session';
 import { BridgeError, createBridge, type TraceReplyMessage } from '../src/ui/trace/bridge';
 import type { FakeNode } from './fake-figma';
 import { clock, click, DONE, farside, lastOf, mainThread, type Decision, type Fake } from './trace-fakes';
@@ -88,6 +89,7 @@ async function play(
     signal?: AbortSignal;
     /** The session is meant to throw: the error comes back with everything else. */
     fails?: boolean;
+    onFrame?: SessionDeps['onFrame'];
   } = {},
 ) {
   const main = options.main ?? (await mainThread(options.edit));
@@ -119,6 +121,7 @@ async function play(
       watchFile: options.watchFile ?? (() => () => {}),
       postTurnTimeoutMs: options.postTurnTimeoutMs,
       signal: options.signal,
+      onFrame: options.onFrame,
     });
   } catch (err) {
     if (!options.fails) throw err;
@@ -285,6 +288,27 @@ describe('the flow map', () => {
     const { error, aborted } = await play(routing, { main, run: () => ({ resume: saved, map: map({ kind: 'gap', to: null }) }), fails: true });
     expect(String(error)).toContain('saved playing flow map version 2, but was resumed with 3');
     expect(aborted).toEqual([expect.objectContaining({ code: 'engine_error' })]);
+  });
+});
+
+describe('the screens for the Live screen card', () => {
+  it('reports each turn as rendered, then with what the persona did there and what came of it, and the action that ended the run', async () => {
+    const frames: LiveFrame[] = [];
+    const { posted } = await play(farside, { onFrame: (f) => frames.push(structuredClone(f)) });
+    const first = frames.filter((f) => f.turn === 1);
+    expect(first).toHaveLength(2);
+    expect(first[0]).toMatchObject({ runId: 'r1', node: '1:2', screenName: 'Dashboard', viewport: { width: 1280, height: 800 }, action: null, target: null, outcome: null });
+    expect(first[0]?.image.length).toBeGreaterThan(0);
+    const billing = posted[0]?.elements.find((e) => e.label === 'Billing');
+    expect(first[1]).toMatchObject({ action: { type: 'click', element: billing?.id }, target: { label: 'Billing', box: billing?.box }, outcome: 'navigated', toName: 'Billing settings' });
+    const [x, y, w, h] = billing?.box as [number, number, number, number];
+    expect(first[1]?.target?.point).toEqual({ x: x + w / 2, y: y + h / 2 });
+    // The same image both times: the card shows the render the turn posted.
+    expect(first[1]?.image).toEqual(first[0]?.image);
+    expect(frames.find((f) => f.outcome === 'nothing_happened')).toMatchObject({ target: { label: 'Use routing number instead' } });
+    // The last screen: the persona said it was done, and nothing was played.
+    expect(lastOf(frames)).toMatchObject({ screenName: 'Bank connected', action: { type: 'done' }, outcome: null });
+    expect(new Set(frames.map((f) => f.turn)).size).toBe(posted.length);
   });
 });
 

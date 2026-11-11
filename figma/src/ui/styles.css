@@ -459,4 +459,22 @@ button.fm-persona:hover { background: var(--bg-hover); }
 .fm-edit-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .fm-edit-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fm-edit-row select { flex: none; max-width: 55%; font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: 4px; padding: 2px 4px; }
+.fm-more-bg { fill: var(--bg-2); }
+.fm-fold { display: flex; align-items: center; gap: 4px; width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.fm-fold:hover { background: var(--bg-hover); }
+.fm-fold-title { font-weight: 600; }
+.fm-fold-mark { margin-left: auto; color: var(--text-3); }
+
+/* The Live screen card. */
+.ls-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.ls-view { max-height: 420px; overflow-y: auto; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-2); }
+.ls-frame { position: relative; line-height: 0; }
+.ls-frame img { display: block; width: 100%; height: auto; }
+.ls-marks { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.ls-target { fill: none; stroke: var(--accent); stroke-width: 3; vector-effect: non-scaling-stroke; }
+.ls-pulse { fill: var(--accent); opacity: 0; transform-box: fill-box; transform-origin: center; animation: ls-pulse 1s ease-out 2; }
+@keyframes ls-pulse { 0% { opacity: 0.45; transform: scale(0.3); } 100% { opacity: 0; transform: scale(1.6); } }
+@media (prefers-reduced-motion: reduce) { .ls-pulse { animation: none; opacity: 0.3; } }
+.ls-caption { display: flex; flex-direction: column; gap: 2px; }
+.ls-nav { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 

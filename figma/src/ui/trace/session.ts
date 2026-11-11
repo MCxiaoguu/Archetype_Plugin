@@ -16,6 +16,7 @@ import { ApiError, TURN_TIMEOUT_MS, type AbortCode, type ApiClient, type TimerEf
 import { SAVED_SESSION_VERSION, type SavedSession, type TraceRenderReply } from '../../lib/messages';
 import { listElements } from '../../lib/proto/elements';
 import { apply, settle, start, type EngineEffect } from '../../lib/proto/engine';
+import type { LiveFrame } from '../../lib/liveScreen';
 import { isCandidate, readingLookup, type FlowMap } from '../../lib/proto/flow';
 import { EngineError, type EngineErrorCode } from '../../lib/proto/errors';
 import { indexLayers } from '../../lib/proto/hitTest';
@@ -122,6 +123,8 @@ export interface SessionDeps {
   onStatus: (status: SessionStatus) => void;
   /** The screen a turn showed the persona, on the node it is of, for the Flow map. */
   onScreen?: (node: string, image: Uint8Array) => void;
+  /** Each turn's screen for the Live screen card: once rendered, and again with what the persona did and what came of it. */
+  onFrame?: (frame: LiveFrame) => void;
   /** Subscribes to the main thread's trace-file-changed; returns the unsubscribe. */
   watchFile: (onChange: (frameIds: string[]) => void) => () => void;
   /** How long a turn post may take; a backend deciding inside the request needs longer. */
@@ -244,6 +247,15 @@ function settledOutcome(last: TurnLast, before: TraceState, after: TraceState): 
   const seen = outcomeOf(before, after, [], last.outcome);
   if (seen === last.outcome) return last;
   return { ...last, outcome: last.outcome === 'waited' ? 'timers_fired' : seen };
+}
+
+/** The element an action names, for the Live screen: its label, its box in the viewport, and where a click lands. */
+function frameTarget(action: TraceAction, listed: { elements: Element[]; targets: Record<string, ElementTarget> }): LiveFrame['target'] {
+  if (!('element' in action) || !action.element) return null;
+  const element = listed.elements.find((e) => e.id === action.element);
+  const target = listed.targets[action.element];
+  if (!element || !target) throw new EngineError('invalid_action', `The action names ${action.element}, which isn't on this screen`);
+  return { label: element.label, box: element.box, point: target.point };
 }
 
 /** The node a state shows on top: the topmost overlay, else the frame. */
@@ -544,6 +556,12 @@ export async function runSession(run: SessionRun, deps: SessionDeps): Promise<Se
 
     const rendered = await render();
     deps.onScreen?.(nodeOf(state), rendered.image);
+    const shownAt = nodeOf(state);
+    const frame: LiveFrame = {
+      runId: run.runId, turn, node: shownAt, screenName: frameName(shownAt), image: rendered.image,
+      viewport: { ...rendered.viewport }, action: null, target: null, outcome: null, toName: null, decidedAt: null,
+    };
+    deps.onFrame?.(frame);
     let listed: { elements: Element[]; targets: Record<string, ElementTarget> };
     let turnBody: TurnBody;
     try {
@@ -566,6 +584,8 @@ export async function runSession(run: SessionRun, deps: SessionDeps): Promise<Se
       stopFor(err);
     }
     if (view.status === 'failed') throw new Stop({ ended: view.ended, stop: 'ended', message: view.error.message });
+    // The action that ended the run (done, give up) shows on its screen, and plays nothing.
+    if (view.ended && view.action) deps.onFrame?.({ ...frame, action: view.action, target: frameTarget(view.action, listed), decidedAt: deps.now() });
     if (view.ended) throw new Stop({ ended: view.ended, stop: 'ended', message: null });
     const action = view.action;
     if (!action) throw new Abort('brain_invalid_action', `Turn ${turn} was ready without an action or an end.`);
@@ -583,6 +603,7 @@ export async function runSession(run: SessionRun, deps: SessionDeps): Promise<Se
     }
     const label = 'element' in action && action.element ? listed.elements.find((e) => e.id === action.element)?.label ?? null : null;
     move = { from: nodeOf(state), to: nodeOf(applied.state), outcome: applied.outcome, label, reading: applied.reading?.id ?? null, turn };
+    deps.onFrame?.({ ...frame, action, target: frameTarget(action, listed), outcome: applied.outcome, toName: frameName(nodeOf(applied.state)), decidedAt: deps.now() });
     state = applied.state;
     if (action.type === 'wait') {
       // What a wait fires is a timer's doing, reported with the next turn.

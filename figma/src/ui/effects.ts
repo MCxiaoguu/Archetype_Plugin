@@ -343,6 +343,25 @@ export function createEffects(store: Store, deps: EffectsDeps = {}) {
     trace.followRun(runId);
   }
 
+  /** The Live screen card's persona chips: which persona's screen it shows; null goes back to the default. Follow is untouched. */
+  function pickScreen(runId: string | null) {
+    const id = store.get().study?.id;
+    if (id) store.dispatch({ type: 'live-pick', studyId: id, runId });
+  }
+
+  /** Look back: one screen older or newer in the persona's run, or back to live. */
+  function stepScreen(runId: string, step: 1 | -1 | 'live') {
+    const id = store.get().study?.id;
+    if (id) store.dispatch({ type: 'live-step', studyId: id, runId, step });
+  }
+
+  /** Opens or folds the Running screen's Flow map, and keeps the choice for the next time. */
+  function setFlowMapOpen(open: boolean) {
+    const prefs = { ...store.get().prefs, flowMapOpen: open };
+    store.dispatch({ type: 'prefs', prefs });
+    toMain({ type: 'save-prefs', prefs });
+  }
+
   /** Clear paths: the card shows none for this study until the panel opens it again. */
   function clearPaths() {
     const id = store.get().study?.id;
@@ -450,6 +469,9 @@ export function createEffects(store: Store, deps: EffectsDeps = {}) {
     followPersona,
     clearPaths,
     editReading,
+    pickScreen,
+    stepScreen,
+    setFlowMapOpen,
     retry,
     openStudy,
     newTest,

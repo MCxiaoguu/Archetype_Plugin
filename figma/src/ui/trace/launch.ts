@@ -205,6 +205,7 @@ export function createTracePanel(deps: TracePanelDeps) {
           onRunner: report,
           onMap: (map) => store.dispatch({ type: 'flow-map', studyId, map }),
           onScreen: (_runId, node, image) => store.dispatch({ type: 'flow-shot', studyId, node, image }),
+          onFrame: (frame) => store.dispatch({ type: 'live-frame', studyId, frame }),
           watchFile: (onChange) => {
             fileWatchers.add(onChange);
             return () => fileWatchers.delete(onChange);

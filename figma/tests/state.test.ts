@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { RunRowApi } from '../src/lib/api';
-import { DEFAULT_SETTINGS, type InitPayload, type StudyRecord } from '../src/lib/messages';
+import { DEFAULT_PREFS, DEFAULT_SETTINGS, type InitPayload, type StudyRecord } from '../src/lib/messages';
 import { EMPTY_FLOW, INITIAL_STATE, reducer, type Action, type AppState } from '../src/lib/state';
 import { fixtureDoc, fixtureReport } from './helpers';
 
@@ -16,6 +16,7 @@ function init(over: Partial<InitPayload> = {}): AppState {
     studies: [],
     lastStudyId: null,
     draft: null,
+    prefs: DEFAULT_PREFS,
     pluginVersion: '0.1.0',
     ...over,
   };
@@ -217,6 +218,31 @@ describe('panel state machine', () => {
     s = reducer(s, { type: 'session', studyId: 's1', status: { ...status, move: { ...gap, outcome: 'accepted', reading: 'r8' } } });
     s = reducer(s, { type: 'session', studyId: 's1', status: { ...status, move: { ...gap, outcome: 'nothing_happened', reading: null } } });
     expect(s.study?.flow.gapsHit).toEqual(['r4@2:20']);
+  });
+
+  it('keeps the screens of the personas this panel runs for its own study, frees them when the report is in, and starts over on another study', () => {
+    let s = run([{ type: 'launch-started', now: 1 }, { type: 'study-created', record }], init());
+    const frame = (runId: string, turn: number) => ({
+      runId, turn, node: '1:2', screenName: 'Dashboard', image: new Uint8Array([turn]), viewport: { width: 1280, height: 800 }, action: null, target: null, outcome: null, toName: null, decidedAt: null,
+    });
+    s = reducer(s, { type: 'live-frame', studyId: 's1', frame: frame('r1', 1) });
+    s = reducer(s, { type: 'live-frame', studyId: 's1', frame: frame('r2', 1) });
+    s = reducer(s, { type: 'live-frame', studyId: 's1', frame: frame('r1', 2) });
+    expect(s.study?.screens.frames.map((f) => `${f.runId}/${f.turn}`)).toEqual(['r1/1', 'r2/1', 'r1/2']);
+    expect(reducer(s, { type: 'live-frame', studyId: 's0', frame: frame('r9', 1) })).toBe(s);
+    s = reducer(s, { type: 'live-pick', studyId: 's1', runId: 'r2' });
+    expect(s.study?.screens).toMatchObject({ pick: 'r2', back: 0 });
+    s = reducer(s, { type: 'live-step', studyId: 's1', runId: 'r1', step: 1 });
+    expect(s.study?.screens).toMatchObject({ back: 1, viewing: 'r1' });
+    expect(reducer(s, { type: 'open-study', record, now: 9 }).study?.screens.frames).toEqual([]);
+    const done = reducer(s, { type: 'report', report: { ...fixtureReport(), status: 'complete', partial: false }, now: 9 });
+    expect(done.study?.screens.frames).toEqual([]);
+  });
+
+  it("keeps the viewer's view choices from the init, and as they change", () => {
+    const s = init({ prefs: { flowMapOpen: true } });
+    expect(s.prefs).toEqual({ flowMapOpen: true });
+    expect(reducer(s, { type: 'prefs', prefs: { flowMapOpen: false } }).prefs).toEqual({ flowMapOpen: false });
   });
 
   it('keeps what each session and the runner in this panel say, for their own study only', () => {

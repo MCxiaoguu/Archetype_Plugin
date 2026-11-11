@@ -71,12 +71,13 @@ export function createController(api: PluginAPI, pluginVersion: string): MainCon
 
   async function start() {
     trace.removeLeftovers();
-    const [settings, token, doc, history, draft] = await Promise.all([
+    const [settings, token, doc, history, draft, prefs] = await Promise.all([
       store.loadSettings(api),
       store.loadToken(api),
       documentNow(),
       store.loadStudies(api),
       store.loadDraft(api),
+      store.loadPrefs(api),
     ]);
     post({
       type: 'init',
@@ -88,6 +89,7 @@ export function createController(api: PluginAPI, pluginVersion: string): MainCon
       studies: history.studies,
       lastStudyId: history.lastStudyId,
       draft,
+      prefs,
       pluginVersion,
     });
   }
@@ -132,6 +134,10 @@ export function createController(api: PluginAPI, pluginVersion: string): MainCon
       case 'save-draft':
         if (!isObject(msg.draft)) invalid('a draft that is not an object');
         await store.saveDraft(api, msg.draft);
+        return;
+      case 'save-prefs':
+        if (!isObject(msg.prefs) || typeof msg.prefs.flowMapOpen !== 'boolean') invalid('view choices that are not {flowMapOpen: true or false}');
+        await store.savePrefs(api, msg.prefs);
         return;
       case 'open-url':
         api.openExternal(checkUrl(msg.url));
