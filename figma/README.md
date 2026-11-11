@@ -60,8 +60,12 @@ Development, Archetype**. Use `npm run watch` while you work; Figma reloads the
 plugin each time you run it.
 
 Pointing at a local backend: open the gear, set the API to
-`http://localhost:5013` (already in `devAllowedDomains`), and under Development
-paste any token (local backends run with the development bypass).
+`http://localhost:5013` (already in `devAllowedDomains`) and the web app to
+`http://localhost:5173`, and under Development paste any token (local backends
+run with the development bypass). The tests live where the API is, so Open in
+Archetype needs the web app on the same side: with one local and the other not,
+settings say so and Open in Archetype explains instead of opening a site that
+can't find the study.
 
 ## Edit access, and the optional share link
 

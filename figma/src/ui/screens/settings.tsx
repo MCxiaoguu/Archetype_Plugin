@@ -1,5 +1,5 @@
 import { useState } from 'preact/hooks';
-import { DEFAULT_SETTINGS, isSafeWebUrl } from '../../lib/messages';
+import { DEFAULT_SETTINGS, isSafeWebUrl, webAppMismatch } from '../../lib/messages';
 import type { AppState } from '../../lib/state';
 import type { Effects } from '../effects';
 import { Banner, Field } from '../parts';
@@ -27,6 +27,9 @@ export function SettingsScreen({ state, fx }: { state: AppState; fx: Effects }) 
         <Field id="web" label="Archetype web app" error={valid(webBase) ? undefined : 'Use a full https address (http only for localhost).'} hint="Where Open in Archetype goes.">
           {(aria) => <input {...aria} type="url" value={webBase} onInput={(e) => setWeb((e.currentTarget as HTMLInputElement).value)} />}
         </Field>
+        {valid(apiBase) && valid(webBase) && webAppMismatch({ apiBase: apiBase.trim(), webBase: webBase.trim() }) && (
+          <Banner kind="warn">{webAppMismatch({ apiBase: apiBase.trim(), webBase: webBase.trim() })}</Banner>
+        )}
         <div class="row gap-s">
           <button type="submit" class="btn btn-primary">
             Save

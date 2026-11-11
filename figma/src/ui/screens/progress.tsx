@@ -5,7 +5,7 @@ import type { AppState, Stage } from '../../lib/state';
 import type { Effects } from '../effects';
 import { NOTICE } from '../trace/session';
 import { IconCheck, IconClock, IconExternal } from '../icons';
-import { Banner, Section, Spinner, elapsed, plural } from '../parts';
+import { Banner, OpenWhy, Section, Spinner, elapsed, plural, useOpenInArchetype } from '../parts';
 import { FlowMapCard, walkersOf } from './flowmap';
 import { LiveScreenCard } from './livescreen';
 import { useTicker } from '../store';
@@ -40,6 +40,7 @@ function PersonaList({ rows }: { rows: PersonaRow[] }) {
 
 export function Progress({ state, fx }: { state: AppState; fx: Effects }) {
   const st = state.study;
+  const open = useOpenInArchetype(fx.openInArchetype);
   const now = useTicker(!!st && st.stage !== 'done');
   if (!st) return <div class="screen" />;
   const idx = stepIndex(st.stage);
@@ -206,12 +207,13 @@ export function Progress({ state, fx }: { state: AppState; fx: Effects }) {
           </Banner>
         )}
       </div>
+      <OpenWhy why={open.why} />
       <footer class="actionbar">
         <p class="actionbar-note">
           <IconClock size={12} /> {inPanel && st.stage !== 'done' ? texts.keepOpen : st.stage === 'watching' ? 'Updates every few seconds' : 'Keep this panel open for now'}
         </p>
         {st.id && (
-          <button type="button" class="btn btn-secondary" onClick={() => fx.openInArchetype()}>
+          <button type="button" class="btn btn-secondary" onClick={open.onClick}>
             Open in Archetype <IconExternal />
           </button>
         )}
