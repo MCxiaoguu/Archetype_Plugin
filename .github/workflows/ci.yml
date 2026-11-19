@@ -14,13 +14,19 @@ concurrency:
 
 jobs:
   core-server:
-    name: core server (python ${{ matrix.python }})
-    runs-on: ubuntu-latest
+    name: core server (python ${{ matrix.python }}, ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
-        python: ["3.9", "3.10", "3.12", "3.14"]
+        os: [ubuntu-latest]
+        python: ["3.10", "3.12", "3.14"]
+        # 3.9 is the python3 that ships with macOS, and current Ubuntu
+        # runners no longer offer it.
+        include:
+          - os: macos-latest
+            python: "3.9"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
