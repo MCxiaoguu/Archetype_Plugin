@@ -4373,8 +4373,8 @@ TOOLS: dict[str, dict[str, Any]] = {
                         "or state. Specifics a precondition implies but "
                         "doesn't state are invented by the persona in "
                         "character, never asked, never skipped. Example: "
-                        "'test Relay with your own suite of endpoints': the "
-                        "goal is evaluating Relay; the precondition is that "
+                        "'test the API console with your own suite of endpoints': "
+                        "the goal is evaluating the API console; the precondition is that "
                         "the tester owns endpoints, which THEY know even "
                         "though the prompt doesn't say what they are."
                     ),

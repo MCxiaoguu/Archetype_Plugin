@@ -18,8 +18,7 @@ folder. Output per worker:
 
 A plugin loaded with --plugin-dir gets its own data folder, which would not
 hold the user's login. The shadow copy wraps every server and hook command
-so CLAUDE_PLUGIN_DATA points at the real one (the pattern of Farside's
-harness): workers share auth.json.
+so CLAUDE_PLUGIN_DATA points at the real one: workers share auth.json.
 
 When the queue is empty the runner asks the backend for the next wave
 (POST /api/studies/<id>/runs/next) and runs it, until the backend answers
