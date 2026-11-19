@@ -15,7 +15,20 @@ every command in the guide against a fresh account.
   network error. A timed out `report_result` then lost its "call get_run
   before retrying" warning, which risked a duplicate ingest. CI now runs
   on 3.9 as well.
-- The status dashboard lists only runs made against the current backend.
+- The status dashboard lists only runs made against the current backend,
+  by the account that is signed in.
+- Unattended study workers (`study_runner.py`) no longer use
+  `--dangerously-skip-permissions`. They run with `--permission-mode
+  dontAsk` and allow only Agent, ToolSearch, the core server and the four
+  isolated browsers, minus the browser tools that run code, read the
+  network or upload files.
+- Unattended workers wait for their actor. `claude -p` stops background
+  subagents 10 minutes after its last turn, so a study run longer than
+  that was cut off and aborted.
+- The session start hook downloads the pinned browser server once in the
+  background, so the first validation does not wait on npm.
+- Notes and e2e scripts no longer carry a developer's home folder paths
+  (every install clones the whole repo).
 - `/archetype:status` no longer tells the user a dashboard line is missing
   when the login has expired.
 - A browser server gets 300 s to start (was 180 s), enough for a cold npx
