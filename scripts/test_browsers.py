@@ -362,6 +362,10 @@ def case_runner_shadow_and_command(tmp: Path) -> None:
     for flag in ("--no-chrome", "--no-session-persistence", "--verbose"):
         expect(flag in args, f"{flag} set")
     expect("--dangerously-skip-permissions" not in args, "workers never bypass permissions")
+    expect(runner.WORKER_ENV.get("CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS") == "0",
+           "workers wait for their actor instead of stopping it after 10 minutes")
+    kept = runner.clean_child_env({"CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS": "5"}, runner.WORKER_ENV)
+    expect(kept.get("CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS") == "0", f"the wait setting survives the scrub: {kept}")
     expect(args[args.index("--permission-mode") + 1] == "dontAsk", "anything not allowed is denied, not prompted")
     allowed = args[args.index("--allowedTools") + 1].split(",")
     expect("mcp__plugin_archetype_core" in allowed and "Agent" in allowed

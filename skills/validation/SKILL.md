@@ -64,7 +64,10 @@ the run when the actor claims it, so there is nothing to parse or confirm.
 2. Pick the actor from `browser=`: `chrome` → `feature-validator` (with the
    Chrome preflight of step 2 below); any other value, or none →
    `feature-validator-headless`. One run, one actor.
-3. Dispatch it with ONLY the run id and the browser name, for example:
+3. Dispatch it in the foreground (`run_in_background: false`) and wait for
+   its report: in an unattended `claude -p` worker a background actor is
+   stopped when the session ends. Pass ONLY the run id and the browser
+   name, for example:
    "Claim and execute Archetype run `<run_id>`. Your browser is
    `<name>`." Nothing about the product, the study or other runs: the actor
    learns who it is from `start_run`.

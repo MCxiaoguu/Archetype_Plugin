@@ -204,6 +204,12 @@ def worker_prompt(run_id: str, slot: int) -> str:
     return f"/archetype:validation --run {run_id} browser=archetype-browser-{slot} (headless, unattended)"
 
 
+# `claude -p` stops background subagents 10 minutes after its last turn. A
+# worker that dispatched its actor in the background would lose any run
+# longer than that, so workers wait for their actor; the runner's own
+# --timeout-min and --stall-min still bound every worker.
+WORKER_ENV = {"CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS": "0"}
+
 # What a worker may use, and nothing else: no permission bypass. A worker's
 # main agent claims the run and dispatches the headless actor (Agent,
 # ToolSearch, the core tools); the actor drives one of the isolated browsers.
@@ -445,7 +451,7 @@ class Runner:
         prompt = worker_prompt(run_id, slot)
         assert self.shadow is not None
         args = claude_args(self.opts.claude, prompt, self.shadow, self.opts.model)
-        env = clean_child_env(dict(os.environ), {"ARCHETYPE_BACKEND_URL": self.opts.backend})
+        env = clean_child_env(dict(os.environ), WORKER_ENV | {"ARCHETYPE_BACKEND_URL": self.opts.backend})
         self.worker(run_id, state="running", slot=slot, browser=f"archetype-browser-{slot}",
                     started_at=time.time(), stream=str(run_dir / "stream.jsonl"))
         log(f"run {run_id} on archetype-browser-{slot}")
