@@ -13,8 +13,12 @@ isolated browser, all at once.
 `claude-code-plugin` · `synthetic-users` · `behavioral-studies` ·
 `ux-research` · `playwright` · `persona-testing` · `v0.6.0`
 
+Inside Claude Code:
+
 ```
-/plugin install archetype --marketplace MCxiaoguu/Archetype_Plugin
+/plugin marketplace add MCxiaoguu/Archetype_Plugin
+/plugin install archetype@archetype
+/archetype:setup
 ```
 
 ## What you can ask
@@ -30,6 +34,23 @@ isolated browser, all at once.
 A **validation** is one persona, one run, in Claude in Chrome when it is
 connected (so you can watch), with a verdict, findings with evidence and the
 persona's own words.
+
+### Testing behind a sign-in
+
+Give the tester a test account in the request, and it signs in like a real
+user would:
+
+```
+/archetype:validation "export a report as PDF" url=https://staging.example.com, with the staging login qa@example.com / <test password>
+```
+
+The plugin passes the login to the run as a precondition, so it is stored
+with the run in your Archetype workspace: use an account made for testing.
+Claude signs in only to your own product (localhost, staging or production
+you run); it will not log in to a third party site, and it will not create
+accounts unless the request says it may. If you would rather not share a
+password, sign in yourself in Chrome and run with `browser=chrome`: the
+tester then arrives already signed in.
 
 A **study** answers a sharper question: for this group of people and this
 task, which behavioral factors change whether they finish? The backend picks
@@ -126,13 +147,16 @@ The full wiring (every tool, endpoint, file and variable) is in
 
 ## Requirements
 
-- Claude Code 2.1.275 or later, Python 3.10 or later.
+- Claude Code 2.1.275 or later, Python 3.9 or later (the `python3` that
+  comes with macOS works once the Xcode Command Line Tools are installed:
+  `xcode-select --install`).
 - For the isolated browsers: Node 18 or later and Google Chrome, or
-  Playwright's bundled Chromium (`npx playwright install chromium`), used
-  when Chrome is missing. The first
+  Playwright's bundled Chromium (`npx playwright install chromium`, with
+  `--with-deps` on Linux), used when Chrome is missing. The first
   browser call of a session downloads the pinned server through `npx`.
-- For Chrome runs: Chrome with the Claude extension, `claude --chrome`, an
-  unlocked screen.
+- Optional, for runs in your own Chrome profile: Chrome with the Claude
+  extension, `claude --chrome`, an unlocked screen. Without it, validations
+  run in the isolated browsers.
 - An Archetype account (`/archetype:setup`).
 
 ## Commands
@@ -184,7 +208,7 @@ own servers.
 ### Tests
 
 ```bash
-python3 scripts/test_core_server.py     # stdio harness, stub backend, 92 cases
+python3 scripts/test_core_server.py     # stdio harness, stub backend, 111 cases
 python3 scripts/test_action_hook.py     # raw action capture
 python3 scripts/test_browsers.py        # lazy proxy, permission hook, swarm runner
 python3 scripts/test_agents_in_sync.py  # the two actors share one procedure
@@ -194,8 +218,8 @@ python3 e2e/test_relay_matrix.py        # Relay study grader
 claude plugin validate --strict .
 ```
 
-CI (`.github/workflows/ci.yml`) runs all of them on Python 3.10, 3.12 and
-3.14. The live end to end runbook is `e2e/RUNBOOK.md`.
+CI (`.github/workflows/ci.yml`) runs all of them on Python 3.9, 3.10, 3.12
+and 3.14. The live end to end runbook is `e2e/RUNBOOK.md`.
 
 ## Layout
 
