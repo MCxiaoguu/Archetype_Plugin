@@ -359,8 +359,16 @@ def case_runner_shadow_and_command(tmp: Path) -> None:
     args = runner.claude_args("claude", runner.worker_prompt("r-1", 3), shadow, "sonnet")
     expect(args[:3] == ["claude", "-p", "/archetype:validation --run r-1 browser=archetype-browser-3 (headless, unattended)"],
            f"prompt: {args[:3]}")
-    for flag in ("--dangerously-skip-permissions", "--no-chrome", "--no-session-persistence", "--verbose"):
+    for flag in ("--no-chrome", "--no-session-persistence", "--verbose"):
         expect(flag in args, f"{flag} set")
+    expect("--dangerously-skip-permissions" not in args, "workers never bypass permissions")
+    expect(args[args.index("--permission-mode") + 1] == "dontAsk", "anything not allowed is denied, not prompted")
+    allowed = args[args.index("--allowedTools") + 1].split(",")
+    expect("mcp__plugin_archetype_core" in allowed and "Agent" in allowed
+           and "mcp__plugin_archetype_archetype-browser-4" in allowed, f"plugin tools allowed: {allowed}")
+    expect(not any(t.startswith(("Bash", "Edit", "Write", "Read")) for t in allowed), f"nothing else: {allowed}")
+    denied = args[args.index("--disallowedTools") + 1].split(",")
+    expect("mcp__plugin_archetype_archetype-browser-3__browser_run_code_unsafe" in denied, f"code tools denied: {denied[:2]}")
     expect(args[args.index("--output-format") + 1] == "stream-json" and args[-2:] == ["--model", "sonnet"], "stream and model")
     expect("--strict-mcp-config" not in args, "never strict MCP config (it drops the plugin servers)")
 

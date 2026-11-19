@@ -5,7 +5,8 @@ workers, up to --parallel at a time (plan 5.6 mode 3).
 Each worker is a fresh Claude Code session that claims one run:
 
     claude -p "/archetype:validation --run <run_id> browser=archetype-browser-<slot> (headless, unattended)"
-        --plugin-dir <shadow copy of this plugin> --dangerously-skip-permissions
+        --plugin-dir <shadow copy of this plugin> --permission-mode dontAsk
+        --allowedTools <the plugin's own tools>
         --output-format stream-json --verbose --no-chrome --no-session-persistence [--model M]
 
 with the parent's Claude Code markers removed from its environment. Worker
@@ -203,9 +204,25 @@ def worker_prompt(run_id: str, slot: int) -> str:
     return f"/archetype:validation --run {run_id} browser=archetype-browser-{slot} (headless, unattended)"
 
 
+# What a worker may use, and nothing else: no permission bypass. A worker's
+# main agent claims the run and dispatches the headless actor (Agent,
+# ToolSearch, the core tools); the actor drives one of the isolated browsers.
+# dontAsk denies anything outside this list instead of prompting, which a
+# headless worker could never answer. The browser tools that run code, read
+# the network or upload files stay denied, as in the actor's own definition.
+WORKER_BROWSERS = [f"mcp__plugin_archetype_archetype-browser-{i}" for i in range(1, 5)]
+WORKER_ALLOWED = ["Agent", "Task", "ToolSearch", "mcp__plugin_archetype_core", *WORKER_BROWSERS]
+NOT_AUTO = ("browser_run_code_unsafe", "browser_evaluate", "browser_file_upload",
+            "browser_network_requests", "browser_network_request", "browser_drop")
+WORKER_DENIED = [f"{server}__{tool}" for server in WORKER_BROWSERS for tool in NOT_AUTO]
+
+
 def claude_args(claude: str, prompt: str, plugin_dir: Path, model: str | None) -> list[str]:
     # No --strict-mcp-config: it would drop the plugin's own servers.
-    args = [claude, "-p", prompt, "--plugin-dir", str(plugin_dir), "--dangerously-skip-permissions",
+    args = [claude, "-p", prompt, "--plugin-dir", str(plugin_dir),
+            "--permission-mode", "dontAsk",
+            "--allowedTools", ",".join(WORKER_ALLOWED),
+            "--disallowedTools", ",".join(WORKER_DENIED),
             "--output-format", "stream-json", "--verbose", "--no-chrome", "--no-session-persistence"]
     return args + (["--model", model] if model else [])
 
