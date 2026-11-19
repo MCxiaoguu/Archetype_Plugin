@@ -1799,6 +1799,20 @@ def case_22b_status_tolerates_legacy_run_log(srv: ServerProc, data_dir: Path) ->
     contains(text, "old persona run", "legacy entry goal still renders")
 
 
+def case_22c_status_hides_runs_from_another_backend(srv: ServerProc, data_dir: Path) -> None:
+    # A run recorded against another backend cannot be looked up from this one.
+    write_auth(data_dir)
+    (data_dir / "runs.json").write_text(json.dumps([
+        {"run_id": "elsewhere-run", "goal": "run on another backend",
+         "backend": "https://staging.example.com", "started_at": 1},
+        {"run_id": "here-run", "goal": "run on this backend",
+         "backend": f"http://127.0.0.1:{srv.port}", "started_at": 2},
+    ]))
+    text = result_text(call_tool(srv, "status", {}))
+    contains(text, "here-run", "a run on this backend is listed")
+    expect("elsewhere-run" not in text, f"a run on another backend must be hidden, got {text!r}")
+
+
 def case_23_create_feature(srv: ServerProc, data_dir: Path) -> None:
     write_auth(data_dir)
     result = call_tool(
@@ -3316,6 +3330,7 @@ CASES = [
     ("start_run maps pool_id -> poolId + logs it", case_21_start_run_pool_id),
     ("start_run aborts when backend ignores poolId", case_22_start_run_pool_not_honored),
     ("status tolerates legacy persona_id run-log entries", case_22b_status_tolerates_legacy_run_log),
+    ("status hides runs recorded against another backend", case_22c_status_hides_runs_from_another_backend),
     ("create_feature POSTs title+fields, returns id", case_23_create_feature),
     ("create_feature sends the test target", case_23b_create_feature_with_target),
     ("create_feature warns when the backend drops the target", case_23c_create_feature_old_backend_drops_target),

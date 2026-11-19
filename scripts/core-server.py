@@ -961,6 +961,7 @@ def record_run_start(run_body: dict[str, Any], arguments: dict[str, Any]) -> Non
         "url": arguments.get("url"),
         "feature_id": arguments.get("feature_id"),
         "pool_id": arguments.get("pool_id"),
+        "backend": BACKEND_BASE,
         "started_at": int(time.time()),
     }
     with _run_log_lock:
@@ -4196,7 +4197,10 @@ def _token_expiry_line(auth: dict[str, Any]) -> str | None:
 
 
 def _recent_runs_lines() -> list[str]:
-    entries = load_run_log()
+    # Leave out runs recorded against another backend (a local one, staging):
+    # their ids cannot be looked up from here. Entries from before 0.6.1 do not
+    # record a backend and are still shown.
+    entries = [e for e in load_run_log() if e.get("backend", BACKEND_BASE) == BACKEND_BASE]
     if not entries:
         return ["Recent runs (this machine): none recorded yet"]
     lines = ["Recent runs (this machine):"]
