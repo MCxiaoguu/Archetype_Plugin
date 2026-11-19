@@ -334,6 +334,12 @@ DEVICE_TOKEN_RESPONSE = {
     "expires_in": 86400,
 }
 
+REFRESH_RESPONSE = {
+    "access_token": "renewed-token-789",
+    "token_type": "Bearer",
+    "expires_in": 86400,
+}
+
 VALIDATE_RESPONSE = {
     "valid": True,
     "user_id": "auth0|abc123",
@@ -547,6 +553,8 @@ class Handler(BaseHTTPRequestHandler):
             return 200, DEVICE_CODE_RESPONSE
         if path.startswith("/api/oauth/device/token"):
             return 200, DEVICE_TOKEN_RESPONSE
+        if path.startswith("/api/oauth/refresh"):
+            return 200, REFRESH_RESPONSE
         if path.startswith("/api/oauth/validate-token"):
             return 200, VALIDATE_RESPONSE
         if path.startswith("/api/persona/vibe"):
@@ -2073,6 +2081,36 @@ def case_34_login_modal_leads_with_code_and_url(srv: ServerProc, data_dir: Path)
     expect(not (data_dir / "pending_login.json").exists(), "pending login cleared on success")
 
 
+def case_34b_expired_login_renews_with_refresh_token(srv: ServerProc, data_dir: Path) -> None:
+    """An expired token plus a saved refresh token: renewed with no modal and
+    no device code, keeping the refresh token when Auth0 does not rotate it."""
+    write_auth_full(data_dir, refresh_token="rt-1")
+    STATE.error_overrides["/api/oauth/validate-token"] = (401, {"valid": False, "error": "invalid_token"})
+    result = call_tool(srv, "login", {})
+    expect(not result.get("isError"), f"renewal should succeed, got {result_text(result)!r}")
+    contains(result_text(result), "login renewed", "says the login was renewed")
+    expect(not srv.elicitations, "no login modal")
+    expect(count_requests("/api/oauth/device/code") == 0, "no device code requested")
+    sent = STATE.last_for("/api/oauth/refresh")
+    expect(sent is not None and sent["body"].get("refresh_token") == "rt-1", f"refresh token sent, got {sent}")
+    saved = json.loads((data_dir / "auth.json").read_text())
+    expect(saved.get("access_token") == "renewed-token-789", f"new access token saved, got {saved}")
+    expect(saved.get("refresh_token") == "rt-1", "refresh token kept when not rotated")
+
+
+def case_34c_rejected_refresh_token_falls_back_to_browser(srv: ServerProc, data_dir: Path) -> None:
+    write_auth_full(data_dir, refresh_token="rt-revoked")
+    STATE.error_overrides["/api/oauth/validate-token"] = (401, {"valid": False, "error": "invalid_token"})
+    STATE.error_overrides["/api/oauth/refresh"] = (403, {"error": "invalid_grant"})
+    srv.elicit_action = "accept"
+    result = call_tool(srv, "login", {})
+    expect(not result.get("isError"), f"device login should succeed, got {result_text(result)!r}")
+    expect(count_requests("/api/oauth/device/code") == 1, "falls back to the device flow")
+    saved = json.loads((data_dir / "auth.json").read_text())
+    expect(saved.get("access_token") == "new-token-456", f"device token saved, got {saved}")
+    expect("refresh_token" not in saved, "the rejected refresh token is gone")
+
+
 def case_35_login_resumes_when_modal_unavailable(srv: ServerProc, data_dir: Path) -> None:
     """No modal (headless client): the tool hands back URL + code, and the
     next login call picks up the browser approval with no new modal."""
@@ -3348,6 +3386,8 @@ CASES = [
     ("cancelled call sends no reply; ping works", case_32_cancelled_call_gets_no_reply),
     ("non-object JSON body is an error, not a crash", case_33_non_object_json_body),
     ("login modal leads with the code and the URL", case_34_login_modal_leads_with_code_and_url),
+    ("expired login renews with the refresh token", case_34b_expired_login_renews_with_refresh_token, LOGIN_FAST),
+    ("rejected refresh token falls back to the browser", case_34c_rejected_refresh_token_falls_back_to_browser, LOGIN_FAST),
     ("login resumes after a modal that could not render", case_35_login_resumes_when_modal_unavailable, LOGIN_FAST),
     ("login modal never answered: bounded, resumable", case_36_login_modal_never_answered, LOGIN_FAST),
     ("login accepted before approving: bounded, resumable", case_37_login_accepted_before_approving, LOGIN_FAST),

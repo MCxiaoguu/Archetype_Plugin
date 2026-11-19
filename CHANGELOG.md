@@ -34,6 +34,12 @@ every command in the guide against a fresh account.
 
 ### Added
 
+- An expired login renews itself with the saved refresh token (backend
+  `POST /api/oauth/refresh`), with no browser and no `/archetype:setup`,
+  including inside the subagents that run a study. A refresh token the
+  backend rejects is dropped and the next login uses the browser. The
+  session start nudge stays quiet while a refresh token is saved. Needs
+  the Auth0 API to allow offline access, or Auth0 issues no refresh token.
 - README: how to test a product behind a sign-in with a test account.
 
 ## Unreleased: Figma prototypes

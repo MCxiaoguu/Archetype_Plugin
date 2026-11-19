@@ -35,6 +35,8 @@ def main() -> int:
         ("no access token", {"token_type": "Bearer"}, "not connected"),
         ("expired", {"access_token": "t", "saved_at": now - 90000, "expires_in": 86400}, "has expired"),
         ("expiring soon", {"access_token": "t", "saved_at": now - 86000, "expires_in": 86400}, "expires in about"),
+        ("expired, renewable with a refresh token",
+         {"access_token": "t", "refresh_token": "r", "saved_at": now - 90000, "expires_in": 86400}, ""),
         ("valid", {"access_token": "t", "saved_at": now, "expires_in": 86400}, ""),
         ("valid, no lifetime recorded", {"access_token": "t"}, ""),
     ]

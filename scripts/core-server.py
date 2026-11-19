@@ -730,6 +730,38 @@ def perform_device_login(stale_token: str | None = None) -> tuple[str | None, st
         return _device_login_locked()
 
 
+def _refresh_login(auth_path: Path) -> str | None:
+    """Renew the login with the saved refresh token, without a browser.
+
+    Returns the new access token, or None when there is no refresh token or
+    the backend would not renew it. A refresh token the backend rejects
+    (revoked, expired) is dropped so the next login goes straight to the
+    browser. Works in subagents, which cannot show the login prompt.
+    """
+    try:
+        saved = json.loads(auth_path.read_text())
+    except Exception:
+        return None
+    refresh_token = saved.get("refresh_token") if isinstance(saved, dict) else None
+    if not refresh_token:
+        return None
+    status, body = backend_post("/api/oauth/refresh", {"refresh_token": refresh_token})
+    if status == 200 and body.get("access_token"):
+        if not body.get("refresh_token"):
+            body = dict(body, refresh_token=refresh_token)  # no rotation: keep the old one
+        _save_token(auth_path, body)
+        log("renewed the login with the saved refresh token")
+        return body["access_token"]
+    log(f"refresh failed (status={status}, error={body.get('error')})")
+    if status in (400, 401, 403):
+        saved.pop("refresh_token", None)
+        try:
+            _write_private(auth_path, json.dumps(saved, indent=2) + "\n")
+        except Exception as exc:
+            log(f"could not drop the rejected refresh token: {exc}")
+    return None
+
+
 def _device_login_locked() -> tuple[str | None, str]:
     if not BACKEND_IS_SAFE:
         # The flow sends no bearer token, but its last answer is the token.
@@ -740,6 +772,9 @@ def _device_login_locked() -> tuple[str | None, str]:
             "CLAUDE_PLUGIN_DATA is not set; cannot determine where to store credentials."
         )
     auth_path = Path(plugin_data) / "auth.json"
+    renewed = _refresh_login(auth_path)
+    if renewed:
+        return renewed, f"Connected to Archetype (login renewed). Token saved to {auth_path}."
     connected = (
         f"Connected to Archetype. Access token saved to {auth_path} (mode 0600).\n"
         "Next: /archetype:persona to meet your persona pools, or "

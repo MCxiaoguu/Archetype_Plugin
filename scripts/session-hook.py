@@ -28,6 +28,9 @@ def nudge() -> str | None:
         return "archetype: saved login is unreadable. Run /archetype:setup to reconnect."
     if not isinstance(auth, dict) or not auth.get("access_token"):
         return "archetype: not connected. Run /archetype:setup to get started."
+    if auth.get("refresh_token"):
+        # The core server renews an expired login with it, no prompt needed.
+        return None
     saved_at, expires_in = auth.get("saved_at"), auth.get("expires_in")
     if isinstance(saved_at, (int, float)) and isinstance(expires_in, (int, float)):
         remaining = saved_at + expires_in - time.time()
