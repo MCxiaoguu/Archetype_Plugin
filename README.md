@@ -11,7 +11,7 @@ refund terms, the one who has never used anything like it, each in its own
 isolated browser, all at once.
 
 `claude-code-plugin` · `synthetic-users` · `behavioral-studies` ·
-`ux-research` · `playwright` · `persona-testing` · `v0.6.0`
+`ux-research` · `playwright` · `persona-testing` · `v0.6.1`
 
 Inside Claude Code:
 

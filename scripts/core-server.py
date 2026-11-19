@@ -70,7 +70,7 @@ _NET_TIMEOUTS = (TimeoutError, socket.timeout)
 
 PROTOCOL_VERSION = "2025-06-18"
 SERVER_NAME = "archetype-core"
-SERVER_VERSION = "0.6.0"
+SERVER_VERSION = "0.6.1"
 
 
 

@@ -3,6 +3,32 @@
 All notable changes to the Archetype plugin. Versions follow
 `.claude-plugin/plugin.json`.
 
+## 0.6.1: ready for the first customer
+
+From a full trial as a new customer: install from the marketplace, then
+every command in the guide against a fresh account.
+
+### Fixed
+
+- On Python 3.9 (the `python3` that comes with macOS) a backend read that
+  timed out raised `socket.timeout`, which the core server reported as a
+  network error. A timed out `report_result` then lost its "call get_run
+  before retrying" warning, which risked a duplicate ingest. CI now runs
+  on 3.9 as well.
+- The status dashboard lists only runs made against the current backend.
+- `/archetype:status` no longer tells the user a dashboard line is missing
+  when the login has expired.
+- A browser server gets 300 s to start (was 180 s), enough for a cold npx
+  download on a slow network.
+- The Chromium install hint adds `--with-deps` on Linux.
+- The README's install command works in current Claude Code
+  (`/plugin marketplace add`, then `/plugin install archetype@archetype`),
+  and the requirements say Python 3.9 works and Chrome is optional.
+
+### Added
+
+- README: how to test a product behind a sign-in with a test account.
+
 ## Unreleased: Figma prototypes
 
 ### Added
