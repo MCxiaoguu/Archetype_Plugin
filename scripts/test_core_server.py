@@ -3323,7 +3323,9 @@ def case_71_dispatch_study_runs_the_swarm(srv: ServerProc, data_dir: Path) -> No
         expect(argv[0] == "-p" and argv[1].startswith("/archetype:validation --run r-base-1 browser=archetype-browser-"),
                f"worker prompt: {argv[:2]}")
         expect(Path(argv[argv.index("--plugin-dir") + 1]).resolve() == (folder / "plugin").resolve(), "the shadow plugin")
-        expect(first["nested"] == [], f"Claude Code markers removed: {first['nested']}")
+        # Only the runner's own setting may reach a worker (it waits for its actor).
+        expect(first["nested"] == ["CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS"],
+               f"Claude Code markers removed: {first['nested']}")
         expect(first["backend"] == f"http://127.0.0.1:{srv.port}", "backend passed to workers")
         expect(count_requests("/runs/next", "POST") >= 1, "asked for the next wave")
         shown = result_text(call_tool(own, "study_status", {"study_id": STUDY_ID}))
