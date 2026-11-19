@@ -34,7 +34,7 @@ Everything marked **[verified]** was actually executed on this machine
 ```
 tmux -V                  → tmux 3.5a
 claude --version         → 2.1.170 (Claude Code)
-which claude             → /Users/hanyanggu/.nvm/versions/node/v22.16.0/bin/claude
+which claude             → ~/.nvm/versions/node/<version>/bin/claude
 python3 --version        → Python 3.11.14   (system; backend venv uses 3.13)
 uv --version             → uv 0.8.12
 docker --version         → 28.2.2, but daemon NOT running (docker ps fails)
@@ -87,7 +87,7 @@ No docker needed. Real Mongo = Atlas dev cluster (reachable from this machine),
 real Redis = local brew service (already running).
 
 ```bash
-cd /Users/hanyanggu/Personal_Files/Coding/Archetype_all/Archetype_Core/Archetype_Backend
+cd <workspace>/Archetype_Backend
 nohup uv run python app.py > /tmp/e2e_backend.log 2>&1 &
 echo $! > /tmp/e2e_backend.pid
 # wait ~10-12s (Atlas index init on startup), then:
@@ -139,7 +139,7 @@ Teardown: `kill $(cat /tmp/e2e_backend.pid)`.
 ```bash
 mkdir -p /tmp/e2e_inner            # scratch cwd keeps project settings out
 tmux new-session -d -s inner -x 220 -y 50
-tmux send-keys -t inner -l 'cd /tmp/e2e_inner && ARCHETYPE_BACKEND_URL=http://localhost:5001 claude --plugin-dir /Users/hanyanggu/Personal_Files/Coding/Archetype_all/Archetype_Plugins --debug-file /tmp/e2e_inner_debug.log'
+tmux send-keys -t inner -l 'cd /tmp/e2e_inner && ARCHETYPE_BACKEND_URL=http://localhost:5001 claude --plugin-dir <workspace>/Archetype_Plugins --debug-file /tmp/e2e_inner_debug.log'
 tmux send-keys -t inner Enter
 ```
 
@@ -278,7 +278,7 @@ From `https://code.claude.com/docs/en/chrome.md` + local observation:
 
 ```bash
 cd /tmp/e2e_inner && claude -p \
-  --plugin-dir /Users/hanyanggu/Personal_Files/Coding/Archetype_all/Archetype_Plugins \
+  --plugin-dir <workspace>/Archetype_Plugins \
   'Output only the exact full tool name of the archetype login MCP tool available to you, nothing else.'
 # → mcp__plugin_archetype_core__login
 ```

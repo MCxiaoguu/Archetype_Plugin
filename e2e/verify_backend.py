@@ -8,9 +8,9 @@ talk to Mongo Atlas. Those imports + the .env (Mongo URI, TLS) only resolve
 when the current working directory is the backend repo. So this script MUST be
 invoked FROM the backend dir with the backend's ``uv`` environment:
 
-    cd /Users/hanyanggu/Personal_Files/Coding/Archetype_all/Archetype_Core/Archetype_Backend \
+    cd <workspace>/Archetype_Backend \
       && uv run python \
-         /Users/hanyanggu/Personal_Files/Coding/Archetype_all/Archetype_Plugins/e2e/verify_backend.py \
+         <workspace>/Archetype_Plugins/e2e/verify_backend.py \
          --user-id <auth0-sub> --run-id <test_id>
 
 The script does ``sys.path.insert(0, os.getcwd())`` so ``infrastructure`` and
@@ -69,8 +69,7 @@ except ImportError as exc:  # pragma: no cover - operator guidance
     sys.stderr.write(
         "ERROR: could not import infrastructure.database (%s).\n"
         "Run FROM the backend dir with uv, e.g.:\n"
-        "  cd /Users/hanyanggu/Personal_Files/Coding/Archetype_all/"
-        "Archetype_Core/Archetype_Backend && uv run python "
+        "  cd <your Archetype_Backend checkout> && uv run python "
         "<this-script> --user-id ...\n" % exc
     )
     sys.exit(2)
