@@ -98,8 +98,8 @@ so parse like one intelligent reader, not a regex. The output of intake is a
 
 **Goal vs preconditions.** Split the free text into the GOAL (the outcome the
 run evaluates) and PRECONDITIONS (context the tester carries on arrival).
-Canonical example: "test Relay with your own suite of endpoints" → the goal
-is evaluating Relay; the precondition is that the tester owns a suite of
+Canonical example: "test the API console with your own suite of endpoints" → the goal
+is evaluating the API console; the precondition is that the tester owns a suite of
 endpoints — something THEY know about even though the prompt doesn't say what
 the endpoints are. Preconditions pass to `start_run` verbatim (a list of
 strings); specifics a precondition implies but doesn't state are elaborated
@@ -206,7 +206,7 @@ For the confirmed run list (one run or many):
    build), check for a Playwright server the user registered themselves
    (`select:mcp__playwright__browser_navigate`) and tell those actors "Your
    browser is `playwright`". If neither is available, stop as above: the
-   plugin browsers need Node 18 or newer and Google Chrome, or Playwright's bundled Chromium (`npx playwright install chromium`). Never
+   plugin browsers need Node 18 or newer and Google Chrome, or Playwright's bundled Chromium (`npx playwright install chromium`, with `--with-deps` on Linux). Never
    install anything yourself and never switch browsers mid-list.
 3. Dispatch the chosen actor agent (`feature-validator`, or
    `feature-validator-headless` per the preflight) once per run object. The dispatch
@@ -220,11 +220,11 @@ For the confirmed run list (one run or many):
 
    **Labels in the URL must be opaque.** Pass the url exactly as the user
    gave it: query parameters can carry attribution the site under test or
-   a harness needs (for example `?twin_label=...`), so never strip or
+   a harness needs (for example `?label=...`), so never strip or
    rewrite them. But the actor reads that URL, so a parameter value that
-   describes the test gives the test away: in a 2026-09-24 stress run the
-   actor saw `twin_label=chaos-trickle-start` and concluded a stalled
-   backend was deliberate. When a query value reads like a description of
+   describes the test gives the test away: an actor that sees
+   `label=slow-backend` will treat a stalled page as deliberate instead of
+   reporting it. When a query value reads like a description of
    the test, its expected outcome or an injected fault (`chaos-...`,
    `slow-backend`, `expect-fail`, `bug-...`), say so once when you confirm
    the run list and suggest an opaque value such as a short random id; use
