@@ -380,6 +380,13 @@ def fake_browsers(tmp: Path, chrome: bool, revisions: tuple[int, ...]) -> dict:
     return {"ARCHETYPE_CHROME_PATHS": str(chrome_path), "PLAYWRIGHT_BROWSERS_PATH": str(cache)}
 
 
+def install_hint() -> str:
+    """The install command this platform's error should name."""
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import browser_engine
+    return browser_engine.INSTALL_HINT
+
+
 def pick_with(env: dict) -> dict:
     saved = {k: os.environ.get(k) for k in env}
     os.environ.update(env)
@@ -404,7 +411,7 @@ def case_engine_order(tmp: Path) -> None:
     expect(bundled["args"][:3] == ["--browser", "chromium", "--executable-path"]
            and bundled["args"][3].endswith("chromium-1300/chrome-linux64/chrome"), f"its binary: {bundled}")
     none = pick_with(fake_browsers(tmp / "c", chrome=False, revisions=()))
-    expect("npx playwright install chromium" in none.get("error", ""), f"install hint: {none}")
+    expect(install_hint() in none.get("error", ""), f"install hint: {none}")
 
 
 def case_proxy_falls_back_to_bundled_chromium(tmp: Path) -> None:
@@ -426,7 +433,7 @@ def case_proxy_without_a_browser_says_how_to_install(tmp: Path) -> None:
         handshake(proxy)
         answer = proxy.rpc("tools/call", {"name": "browser_navigate", "arguments": {"url": "https://example.com"}})
         message = answer.get("error", {}).get("message", "")
-        expect("archetype-browser-2: No browser" in message and "npx playwright install chromium" in message,
+        expect("archetype-browser-2: No browser" in message and install_hint() in message,
                f"clear error: {answer}")
         expect(proxy.child_events() == [], "no server started without a browser")
     finally:
