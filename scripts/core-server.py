@@ -51,6 +51,7 @@ import json
 import os
 import queue
 import re
+import socket
 import subprocess
 import sys
 import tempfile
@@ -62,6 +63,10 @@ import urllib.request
 import webbrowser
 from pathlib import Path
 from typing import Any, Callable
+
+# Python 3.9 (the python3 that ships with macOS) raises socket.timeout, which
+# only became an alias of TimeoutError in 3.10, for a read that times out.
+_NET_TIMEOUTS = (TimeoutError, socket.timeout)
 
 PROTOCOL_VERSION = "2025-06-18"
 SERVER_NAME = "archetype-core"
@@ -371,10 +376,10 @@ def _exchange(
     except urllib.error.HTTPError as exc:
         return exc.code, _parse_body(exc.read().decode())
     except urllib.error.URLError as exc:
-        if isinstance(exc.reason, TimeoutError):
+        if isinstance(exc.reason, _NET_TIMEOUTS):
             return 0, _deadline_body(req, timeout)
         return 0, {"error": "network_error", "message": str(exc.reason)}
-    except TimeoutError:
+    except _NET_TIMEOUTS:
         return 0, _deadline_body(req, timeout)
     except Exception as exc:  # pragma: no cover (defensive)
         return 0, {"error": "unexpected_error", "message": repr(exc)}
