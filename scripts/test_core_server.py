@@ -870,6 +870,12 @@ def fake_id_token(email: str, name: str) -> str:
     return f"{header}.{payload}.fakesig"
 
 
+def fake_jwt_sub(sub: str) -> str:
+    """JWT-shaped access token whose payload carries only sub."""
+    header = _b64url(json.dumps({"alg": "RS256", "typ": "JWT"}).encode())
+    return f"{header}.{_b64url(json.dumps({'sub': sub}).encode())}.sig"
+
+
 def write_auth_full(data_dir: Path, **extra) -> None:
     payload = {"access_token": "test-token-123"}
     payload.update(extra)
@@ -1819,6 +1825,18 @@ def case_22c_status_hides_runs_from_another_backend(srv: ServerProc, data_dir: P
     text = result_text(call_tool(srv, "status", {}))
     contains(text, "here-run", "a run on this backend is listed")
     expect("elsewhere-run" not in text, f"a run on another backend must be hidden, got {text!r}")
+
+
+def case_22d_status_hides_runs_from_another_account(srv: ServerProc, data_dir: Path) -> None:
+    write_auth_full(data_dir, access_token=fake_jwt_sub("auth0|me"))
+    here = f"http://127.0.0.1:{srv.port}"
+    (data_dir / "runs.json").write_text(json.dumps([
+        {"run_id": "their-run", "goal": "a colleague's run", "backend": here, "account": "auth0|them", "started_at": 1},
+        {"run_id": "my-run", "goal": "my run", "backend": here, "account": "auth0|me", "started_at": 2},
+    ]))
+    text = result_text(call_tool(srv, "status", {}))
+    contains(text, "my-run", "this account's run is listed")
+    expect("their-run" not in text, f"another account's run must be hidden, got {text!r}")
 
 
 def case_23_create_feature(srv: ServerProc, data_dir: Path) -> None:
@@ -3369,6 +3387,7 @@ CASES = [
     ("start_run aborts when backend ignores poolId", case_22_start_run_pool_not_honored),
     ("status tolerates legacy persona_id run-log entries", case_22b_status_tolerates_legacy_run_log),
     ("status hides runs recorded against another backend", case_22c_status_hides_runs_from_another_backend),
+    ("status hides runs another account made on this machine", case_22d_status_hides_runs_from_another_account),
     ("create_feature POSTs title+fields, returns id", case_23_create_feature),
     ("create_feature sends the test target", case_23b_create_feature_with_target),
     ("create_feature warns when the backend drops the target", case_23c_create_feature_old_backend_drops_target),
