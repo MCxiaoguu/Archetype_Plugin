@@ -21,6 +21,13 @@ every command in the guide against a fresh account.
 - A browser server gets 300 s to start (was 180 s), enough for a cold npx
   download on a slow network.
 - The Chromium install hint adds `--with-deps` on Linux.
+- A study no longer accepts the backend's suggested success check without
+  the user seeing it. The suggestion is a guess, and a text check that
+  names words the end page never shows marks every run as not completed
+  (a trial study reported 0 of 6 completed while every tester found the
+  answer). The plugin now says what the check needs, offers the tester's
+  own confirmation (`actor_confirms`) instead, and in unattended mode uses
+  that whenever the suggestion did not come from the user's own words.
 - The README's install command works in current Claude Code
   (`/plugin marketplace add`, then `/plugin install archetype@archetype`),
   and the requirements say Python 3.9 works and Chrome is optional.

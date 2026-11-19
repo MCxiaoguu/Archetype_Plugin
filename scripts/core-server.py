@@ -3373,9 +3373,16 @@ def _render_study(study: dict[str, Any], lead: str) -> str:
     lines.append(f"\n(studyId for tool calls: {sid})")
     if checks and success.get("checksConfirmed") is False:
         lines.append(
-            "The check above was suggested by the backend. Ask the user to "
-            "confirm it (create_study with study_id and confirm_checks: true) "
-            "or to give their own (success_checks)."
+            "The check above was suggested by the backend and is a guess. Ask "
+            "the user to confirm it (create_study with study_id and "
+            "confirm_checks: true) or to give their own (success_checks), and "
+            "say what it needs in plain words: a text check passes only when "
+            "those exact words appear on the page where the task ends, so a "
+            "wrong guess marks every run as not completed. When the success "
+            "sentence is something the person finds out or decides rather than "
+            "a page that says so, offer the tester's own confirmation instead "
+            "(success_checks: [{type: actor_confirms, value: <the success "
+            "sentence>}])."
         )
     return "\n".join(lines)
 

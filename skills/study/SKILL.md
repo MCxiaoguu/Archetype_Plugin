@@ -79,8 +79,14 @@ whole study by typing it, so this mode asks nothing and confirms nothing.
 
 - A missing goal, url, ICP or success criterion: stop with one line naming
   what is missing (nobody can answer a question). Never invent them.
-- Step 2: a suggested success check is accepted (`create_study` with
-  `study_id` and `confirm_checks: true`) unless `success_checks` were given.
+- Step 2: unless `success_checks` were given, accept a suggested check
+  (`create_study` with `study_id` and `confirm_checks: true`) only when it
+  comes from the user's own words: a URL or a quoted phrase in the goal,
+  the success criterion or the feature's milestone. Any other suggestion is
+  a guess at what the end page says, and a wrong guess marks every run as
+  not completed, so replace it with the tester's own confirmation
+  (`success_checks: [{"type": "actor_confirms", "value": "<the success
+  criterion>"}]`) and say so in the report.
 - Step 3: `factors=` is applied; otherwise the backend's selection stands.
 - Step 4: the archetypes stand. Steps 5 and 6: create the runs, then call
   `dispatch_study` once with `confirm: true`, `parallel` (default 2), and
@@ -103,8 +109,13 @@ Every other rule still holds: never invent factors, archetypes or results.
 Call `create_study` (snake_case arguments; the tool sends camelCase).
 Show the table it returns. If it says the success check was suggested and
 not confirmed, ask the user to confirm it or give their own in the same
-message as step 3's question, and apply the answer with `create_study`
-`study_id=<id>` plus `confirm_checks: true` or `success_checks`.
+message as step 3's question. Say in plain words what the suggestion needs
+(for a text check: those exact words on the page where the task ends) and
+offer the tester's own confirmation (`actor_confirms`) when the success
+criterion is something the person learns or decides. Apply the answer with
+`create_study` `study_id=<id>` plus `confirm_checks: true` or
+`success_checks`. If the user asked for no questions, follow the unattended
+rule above for the check rather than accepting the suggestion as it is.
 
 ## 3. Factors
 
