@@ -77,6 +77,8 @@ function Toast({ state, store }: { state: AppState; store: Store }) {
   const inline = state.screen === 'signin' || state.screen === 'settings' || (state.screen === 'new' && n?.kind === 'error');
   // The toast stays while the pointer or keyboard focus is on it, so there is time to read it.
   const [held, setHeld] = useState(false);
+  // A toast dismissed under the pointer never gets its mouseleave; the next one starts unheld.
+  useEffect(() => setHeld(false), [n]);
   useEffect(() => {
     if (!n || inline || held) return undefined;
     const id = setTimeout(() => store.dispatch({ type: 'notice', notice: null }), 5000);
