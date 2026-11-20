@@ -15,15 +15,20 @@ isolated browser, all at once.
 
 Inside Claude Code:
 
+In a terminal:
+
 ```
-/plugin marketplace add MCxiaoguu/Archetype_Plugin --sparse .claude-plugin
-/plugin install archetype@archetype
-/archetype:setup
+claude plugin marketplace add MCxiaoguu/Archetype_Plugin --sparse .claude-plugin
+claude plugin install archetype@archetype
 ```
 
-`--sparse .claude-plugin` keeps the marketplace copy to its catalog, and the
-plugin installs from the `release` branch, which holds only the files the
-plugin runs (a workflow refreshes it on every push to `main`).
+Then in Claude Code, `/archetype:setup` to log in. (Inside Claude Code,
+`/plugin marketplace add MCxiaoguu/Archetype_Plugin` and
+`/plugin install archetype@archetype` work too, without the sparse option.)
+
+The plugin installs from the `release` branch, which holds only the files the
+plugin runs; a workflow refreshes it from `main` on every push.
+`--sparse .claude-plugin` keeps the marketplace's own copy to its catalog.
 
 ## What you can ask
 
