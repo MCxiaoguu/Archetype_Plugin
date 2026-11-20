@@ -329,8 +329,11 @@ true`. The runner:
 - starts one worker per run, up to `parallel`: `claude -p
   "/archetype:validation --run <run_id> browser=archetype-browser-<k>
   (headless, unattended)" --plugin-dir <shadow>
-  --dangerously-skip-permissions --output-format stream-json --verbose
-  --no-chrome --no-session-persistence [--model M]`, with `CLAUDECODE`,
+  --permission-mode dontAsk --allowedTools <Agent, ToolSearch, the core
+  server and archetype-browser-1 to -4> --disallowedTools <the browser
+  tools that run code, read the network or upload files> --output-format
+  stream-json --verbose --no-chrome --no-session-persistence [--model M]`
+  (no permission bypass: anything outside the list is denied, not prompted), with `CLAUDECODE`,
   `CLAUDE_CODE_*` and the plugin path variables removed from its
   environment; worker k drives `archetype-browser-k`,
 - writes `studies/<id>/<run_id>/stream.jsonl` and `stderr.log` per worker

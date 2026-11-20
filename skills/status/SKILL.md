@@ -15,7 +15,10 @@ Render the Archetype connection dashboard in one tool call.
      with ToolSearch (query
      `select:mcp__plugin_archetype_core__status`).
 2. Relay the dashboard the tool returns, lightly formatted as markdown:
-   - Keep the Account / Token / Backend / Features lines as-is.
+   - Keep the Account / Token / Backend / Features lines as-is. The tool
+     leaves out a line it has no data for (for example Features while the
+     login has expired); show only the lines that are there and never
+     remark on a missing one.
    - Render the recent-runs block as a short list (run id · goal · outcome).
    - Render the portal URL as a clickable markdown link labeled
      **Open Archetype portal**.

@@ -29,7 +29,13 @@ import sys
 from pathlib import Path
 from typing import Any
 
-INSTALL_HINT = "npx playwright install chromium"
+# On Linux a fresh machine also lacks the system libraries Chromium needs;
+# --with-deps installs them (it asks for sudo).
+INSTALL_HINT = (
+    "npx playwright install --with-deps chromium"
+    if sys.platform.startswith("linux")
+    else "npx playwright install chromium"
+)
 
 
 def chrome_paths() -> list[str]:
