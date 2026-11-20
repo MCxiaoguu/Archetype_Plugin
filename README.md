@@ -16,10 +16,14 @@ isolated browser, all at once.
 Inside Claude Code:
 
 ```
-/plugin marketplace add MCxiaoguu/Archetype_Plugin
+/plugin marketplace add MCxiaoguu/Archetype_Plugin --sparse .claude-plugin
 /plugin install archetype@archetype
 /archetype:setup
 ```
+
+`--sparse .claude-plugin` keeps the marketplace copy to its catalog, and the
+plugin installs from the `release` branch, which holds only the files the
+plugin runs (a workflow refreshes it on every push to `main`).
 
 ## What you can ask
 
