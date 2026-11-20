@@ -22,8 +22,8 @@ finding its target, just re-run that block.
 Preamble for EVERY Bash invocation (real shell variables, not placeholders):
 
 ```bash
-PL=/Users/hanyanggu/Personal_Files/Coding/Archetype_all/Archetype_Plugins
-BE=/Users/hanyanggu/Personal_Files/Coding/Archetype_all/Archetype_Core/Archetype_Backend
+PL=${PL:-$PWD}                      # this plugin checkout
+BE=${BE:-$PL/../Archetype_Backend}  # the backend checkout
 . "$PL/e2e/tmux.sh"
 ```
 

@@ -1,7 +1,7 @@
 {
   "name": "archetype",
   "description": "Test your product as your customers would: persona runs and behavioral studies that find which kinds of users give up, where and why, in isolated browsers",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "author": {
     "name": "Synthetic Archetype"
   },

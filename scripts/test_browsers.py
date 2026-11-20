@@ -359,8 +359,20 @@ def case_runner_shadow_and_command(tmp: Path) -> None:
     args = runner.claude_args("claude", runner.worker_prompt("r-1", 3), shadow, "sonnet")
     expect(args[:3] == ["claude", "-p", "/archetype:validation --run r-1 browser=archetype-browser-3 (headless, unattended)"],
            f"prompt: {args[:3]}")
-    for flag in ("--dangerously-skip-permissions", "--no-chrome", "--no-session-persistence", "--verbose"):
+    for flag in ("--no-chrome", "--no-session-persistence", "--verbose"):
         expect(flag in args, f"{flag} set")
+    expect("--dangerously-skip-permissions" not in args, "workers never bypass permissions")
+    expect(runner.WORKER_ENV.get("CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS") == "0",
+           "workers wait for their actor instead of stopping it after 10 minutes")
+    kept = runner.clean_child_env({"CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS": "5"}, runner.WORKER_ENV)
+    expect(kept.get("CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS") == "0", f"the wait setting survives the scrub: {kept}")
+    expect(args[args.index("--permission-mode") + 1] == "dontAsk", "anything not allowed is denied, not prompted")
+    allowed = args[args.index("--allowedTools") + 1].split(",")
+    expect("mcp__plugin_archetype_core" in allowed and "Agent" in allowed
+           and "mcp__plugin_archetype_archetype-browser-4" in allowed, f"plugin tools allowed: {allowed}")
+    expect(not any(t.startswith(("Bash", "Edit", "Write", "Read")) for t in allowed), f"nothing else: {allowed}")
+    denied = args[args.index("--disallowedTools") + 1].split(",")
+    expect("mcp__plugin_archetype_archetype-browser-3__browser_run_code_unsafe" in denied, f"code tools denied: {denied[:2]}")
     expect(args[args.index("--output-format") + 1] == "stream-json" and args[-2:] == ["--model", "sonnet"], "stream and model")
     expect("--strict-mcp-config" not in args, "never strict MCP config (it drops the plugin servers)")
 
@@ -378,6 +390,13 @@ def fake_browsers(tmp: Path, chrome: bool, revisions: tuple[int, ...]) -> dict:
         binary.chmod(0o755)
     (cache / "chromium_headless_shell-9999").mkdir(parents=True, exist_ok=True)  # not a full Chromium
     return {"ARCHETYPE_CHROME_PATHS": str(chrome_path), "PLAYWRIGHT_BROWSERS_PATH": str(cache)}
+
+
+def install_hint() -> str:
+    """The install command this platform's error should name."""
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import browser_engine
+    return browser_engine.INSTALL_HINT
 
 
 def pick_with(env: dict) -> dict:
@@ -404,7 +423,7 @@ def case_engine_order(tmp: Path) -> None:
     expect(bundled["args"][:3] == ["--browser", "chromium", "--executable-path"]
            and bundled["args"][3].endswith("chromium-1300/chrome-linux64/chrome"), f"its binary: {bundled}")
     none = pick_with(fake_browsers(tmp / "c", chrome=False, revisions=()))
-    expect("npx playwright install chromium" in none.get("error", ""), f"install hint: {none}")
+    expect(install_hint() in none.get("error", ""), f"install hint: {none}")
 
 
 def case_proxy_falls_back_to_bundled_chromium(tmp: Path) -> None:
@@ -426,7 +445,7 @@ def case_proxy_without_a_browser_says_how_to_install(tmp: Path) -> None:
         handshake(proxy)
         answer = proxy.rpc("tools/call", {"name": "browser_navigate", "arguments": {"url": "https://example.com"}})
         message = answer.get("error", {}).get("message", "")
-        expect("archetype-browser-2: No browser" in message and "npx playwright install chromium" in message,
+        expect("archetype-browser-2: No browser" in message and install_hint() in message,
                f"clear error: {answer}")
         expect(proxy.child_events() == [], "no server started without a browser")
     finally:

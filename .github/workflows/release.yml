@@ -1,0 +1,43 @@
+name: release
+
+# Keeps the release branch equal to main's plugin files. The marketplace installs the plugin
+# from that branch, so customers get only what the plugin runs, not the repo's internal notes.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - name: Publish the plugin files to the release branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git ls-remote --exit-code origin refs/heads/release >/dev/null; then
+            git worktree add -B release ../release origin/release
+          else
+            git worktree add --orphan -b release ../release
+          fi
+          scripts/publish-release.sh ../release
+          cd ../release
+          git add -A
+          if git diff --cached --quiet; then
+            echo "release is already up to date"
+          else
+            version=$(python3 -c "import json; print(json.load(open('.claude-plugin/plugin.json'))['version'])")
+            git commit -m "Release ${version} from ${GITHUB_SHA::7}"
+            git push origin release
+          fi

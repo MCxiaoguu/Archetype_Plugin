@@ -3,6 +3,64 @@
 All notable changes to the Archetype plugin. Versions follow
 `.claude-plugin/plugin.json`.
 
+## 0.6.1: ready for the first customer
+
+From a full trial as a new customer: install from the marketplace, then
+every command in the guide against a fresh account.
+
+### Fixed
+
+- On Python 3.9 (the `python3` that comes with macOS) a backend read that
+  timed out raised `socket.timeout`, which the core server reported as a
+  network error. A timed out `report_result` then lost its "call get_run
+  before retrying" warning, which risked a duplicate ingest. CI now runs
+  on 3.9 as well.
+- The status dashboard lists only runs made against the current backend,
+  by the account that is signed in.
+- Unattended study workers (`study_runner.py`) no longer use
+  `--dangerously-skip-permissions`. They run with `--permission-mode
+  dontAsk` and allow only Agent, ToolSearch, the core server and the four
+  isolated browsers, minus the browser tools that run code, read the
+  network or upload files.
+- Unattended workers wait for their actor. `claude -p` stops background
+  subagents 10 minutes after its last turn, so a study run longer than
+  that was cut off and aborted.
+- A new account's first `start_run` can outlast the 100 s proxy while its
+  persona is generated (seen in a production trial as a Cloudflare timeout).
+  `start_run` now sends a `clientRequestId` and, after a proxy timeout or the
+  backend's `run_assembly_timeout`, waits 20 s and retries once with the same
+  id, which returns the run the first request made instead of a second one
+  (needs Archetype_Backend's `clientRequestId` support).
+- The session start hook downloads the pinned browser server once in the
+  background, so the first validation does not wait on npm.
+- Notes and e2e scripts no longer carry a developer's home folder paths
+  (every install clones the whole repo).
+- `/archetype:status` no longer tells the user a dashboard line is missing
+  when the login has expired.
+- A browser server gets 300 s to start (was 180 s), enough for a cold npx
+  download on a slow network.
+- The Chromium install hint adds `--with-deps` on Linux.
+- A study no longer accepts the backend's suggested success check without
+  the user seeing it. The suggestion is a guess, and a text check that
+  names words the end page never shows marks every run as not completed
+  (a trial study reported 0 of 6 completed while every tester found the
+  answer). The plugin now says what the check needs, offers the tester's
+  own confirmation (`actor_confirms`) instead, and in unattended mode uses
+  that whenever the suggestion did not come from the user's own words.
+- The README's install command works in current Claude Code
+  (`/plugin marketplace add`, then `/plugin install archetype@archetype`),
+  and the requirements say Python 3.9 works and Chrome is optional.
+
+### Added
+
+- An expired login renews itself with the saved refresh token (backend
+  `POST /api/oauth/refresh`), with no browser and no `/archetype:setup`,
+  including inside the subagents that run a study. A refresh token the
+  backend rejects is dropped and the next login uses the browser. The
+  session start nudge stays quiet while a refresh token is saved. Needs
+  the Auth0 API to allow offline access, or Auth0 issues no refresh token.
+- README: how to test a product behind a sign-in with a test account.
+
 ## Unreleased: Figma prototypes
 
 ### Added

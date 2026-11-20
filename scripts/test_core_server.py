@@ -334,6 +334,12 @@ DEVICE_TOKEN_RESPONSE = {
     "expires_in": 86400,
 }
 
+REFRESH_RESPONSE = {
+    "access_token": "renewed-token-789",
+    "token_type": "Bearer",
+    "expires_in": 86400,
+}
+
 VALIDATE_RESPONSE = {
     "valid": True,
     "user_id": "auth0|abc123",
@@ -547,6 +553,8 @@ class Handler(BaseHTTPRequestHandler):
             return 200, DEVICE_CODE_RESPONSE
         if path.startswith("/api/oauth/device/token"):
             return 200, DEVICE_TOKEN_RESPONSE
+        if path.startswith("/api/oauth/refresh"):
+            return 200, REFRESH_RESPONSE
         if path.startswith("/api/oauth/validate-token"):
             return 200, VALIDATE_RESPONSE
         if path.startswith("/api/persona/vibe"):
@@ -862,6 +870,12 @@ def fake_id_token(email: str, name: str) -> str:
     return f"{header}.{payload}.fakesig"
 
 
+def fake_jwt_sub(sub: str) -> str:
+    """JWT-shaped access token whose payload carries only sub."""
+    header = _b64url(json.dumps({"alg": "RS256", "typ": "JWT"}).encode())
+    return f"{header}.{_b64url(json.dumps({'sub': sub}).encode())}.sig"
+
+
 def write_auth_full(data_dir: Path, **extra) -> None:
     payload = {"access_token": "test-token-123"}
     payload.update(extra)
@@ -937,7 +951,9 @@ def case_2_start_run_happy(srv: ServerProc, data_dir: Path) -> None:
         req["headers"].get("Authorization") == "Bearer test-token-123",
         f"missing/incorrect bearer: {req['headers'].get('Authorization')}",
     )
-    body = req["body"]
+    body = dict(req["body"])
+    expect(re.fullmatch(r"[0-9a-f]{32}", str(body.pop("clientRequestId", ""))) is not None,
+           "every start_run carries a fresh clientRequestId (its retry key)")
     expect(body == {"goal": "test signup", "url": "http://localhost:8321"},
            f"body must be exactly camelCase goal+url, got {body}")
     assert_no_snake_case(body, "start_run body")
@@ -1369,7 +1385,7 @@ def case_8c_start_run_with_feature_only(srv: ServerProc, data_dir: Path) -> None
     write_auth(data_dir)
     result = call_tool(srv, "start_run", {"feature_id": "f-twin-3"})
     expect(not result.get("isError"), f"feature-only start_run errored: {result}")
-    body = STATE.last_for("/api/plugin/runs")["body"]
+    body = {k: v for k, v in STATE.last_for("/api/plugin/runs")["body"].items() if k != "clientRequestId"}
     expect(body == {"featureId": "f-twin-3"}, f"no url sent when none given, got {body}")
 
 
@@ -1799,6 +1815,54 @@ def case_22b_status_tolerates_legacy_run_log(srv: ServerProc, data_dir: Path) ->
     contains(text, "old persona run", "legacy entry goal still renders")
 
 
+def case_22c_status_hides_runs_from_another_backend(srv: ServerProc, data_dir: Path) -> None:
+    # A run recorded against another backend cannot be looked up from this one.
+    write_auth(data_dir)
+    (data_dir / "runs.json").write_text(json.dumps([
+        {"run_id": "elsewhere-run", "goal": "run on another backend",
+         "backend": "https://staging.example.com", "started_at": 1},
+        {"run_id": "here-run", "goal": "run on this backend",
+         "backend": f"http://127.0.0.1:{srv.port}", "started_at": 2},
+    ]))
+    text = result_text(call_tool(srv, "status", {}))
+    contains(text, "here-run", "a run on this backend is listed")
+    expect("elsewhere-run" not in text, f"a run on another backend must be hidden, got {text!r}")
+
+
+def case_22d_status_hides_runs_from_another_account(srv: ServerProc, data_dir: Path) -> None:
+    write_auth_full(data_dir, access_token=fake_jwt_sub("auth0|me"))
+    here = f"http://127.0.0.1:{srv.port}"
+    (data_dir / "runs.json").write_text(json.dumps([
+        {"run_id": "their-run", "goal": "a colleague's run", "backend": here, "account": "auth0|them", "started_at": 1},
+        {"run_id": "my-run", "goal": "my run", "backend": here, "account": "auth0|me", "started_at": 2},
+    ]))
+    text = result_text(call_tool(srv, "status", {}))
+    contains(text, "my-run", "this account's run is listed")
+    expect("their-run" not in text, f"another account's run must be hidden, got {text!r}")
+
+
+def case_10b_start_run_retries_once_after_a_proxy_timeout(srv: ServerProc, data_dir: Path) -> None:
+    """A first run that outlasts the proxy: one retry with the same request id."""
+    write_auth(data_dir)
+    STATE.once_overrides["/api/plugin/runs"] = (524, {"error": "invalid_response_body",
+                                                      "message": "A timeout occurred"})
+    result = call_tool(srv, "start_run", {"goal": "g", "url": "http://x"})
+    expect(not result.get("isError"), f"the retry should succeed, got {result_text(result)!r}")
+    posts = [r for r in STATE.requests if r["path"] == "/api/plugin/runs" and r["method"] == "POST"]
+    expect(len(posts) == 2, f"exactly one retry, got {len(posts)} posts")
+    keys = {p["body"].get("clientRequestId") for p in posts}
+    expect(len(keys) == 1 and None not in keys, f"both posts carry the same request id, got {keys}")
+
+
+def case_10c_start_run_does_not_retry_a_client_error(srv: ServerProc, data_dir: Path) -> None:
+    write_auth(data_dir)
+    STATE.error_overrides["/api/plugin/runs"] = (400, {"error": "bad_request", "message": "goal is required"})
+    result = call_tool(srv, "start_run", {"goal": "g", "url": "http://x"})
+    expect(result.get("isError") is True, "a 400 is an error")
+    posts = [r for r in STATE.requests if r["path"] == "/api/plugin/runs" and r["method"] == "POST"]
+    expect(len(posts) == 1, f"no retry for a client error, got {len(posts)} posts")
+
+
 def case_23_create_feature(srv: ServerProc, data_dir: Path) -> None:
     write_auth(data_dir)
     result = call_tool(
@@ -2057,6 +2121,36 @@ def case_34_login_modal_leads_with_code_and_url(srv: ServerProc, data_dir: Path)
         f"second modal line is the bare URL, got {lines[1]!r}",
     )
     expect(not (data_dir / "pending_login.json").exists(), "pending login cleared on success")
+
+
+def case_34b_expired_login_renews_with_refresh_token(srv: ServerProc, data_dir: Path) -> None:
+    """An expired token plus a saved refresh token: renewed with no modal and
+    no device code, keeping the refresh token when Auth0 does not rotate it."""
+    write_auth_full(data_dir, refresh_token="rt-1")
+    STATE.error_overrides["/api/oauth/validate-token"] = (401, {"valid": False, "error": "invalid_token"})
+    result = call_tool(srv, "login", {})
+    expect(not result.get("isError"), f"renewal should succeed, got {result_text(result)!r}")
+    contains(result_text(result), "login renewed", "says the login was renewed")
+    expect(not srv.elicitations, "no login modal")
+    expect(count_requests("/api/oauth/device/code") == 0, "no device code requested")
+    sent = STATE.last_for("/api/oauth/refresh")
+    expect(sent is not None and sent["body"].get("refresh_token") == "rt-1", f"refresh token sent, got {sent}")
+    saved = json.loads((data_dir / "auth.json").read_text())
+    expect(saved.get("access_token") == "renewed-token-789", f"new access token saved, got {saved}")
+    expect(saved.get("refresh_token") == "rt-1", "refresh token kept when not rotated")
+
+
+def case_34c_rejected_refresh_token_falls_back_to_browser(srv: ServerProc, data_dir: Path) -> None:
+    write_auth_full(data_dir, refresh_token="rt-revoked")
+    STATE.error_overrides["/api/oauth/validate-token"] = (401, {"valid": False, "error": "invalid_token"})
+    STATE.error_overrides["/api/oauth/refresh"] = (403, {"error": "invalid_grant"})
+    srv.elicit_action = "accept"
+    result = call_tool(srv, "login", {})
+    expect(not result.get("isError"), f"device login should succeed, got {result_text(result)!r}")
+    expect(count_requests("/api/oauth/device/code") == 1, "falls back to the device flow")
+    saved = json.loads((data_dir / "auth.json").read_text())
+    expect(saved.get("access_token") == "new-token-456", f"device token saved, got {saved}")
+    expect("refresh_token" not in saved, "the rejected refresh token is gone")
 
 
 def case_35_login_resumes_when_modal_unavailable(srv: ServerProc, data_dir: Path) -> None:
@@ -3253,7 +3347,9 @@ def case_71_dispatch_study_runs_the_swarm(srv: ServerProc, data_dir: Path) -> No
         expect(argv[0] == "-p" and argv[1].startswith("/archetype:validation --run r-base-1 browser=archetype-browser-"),
                f"worker prompt: {argv[:2]}")
         expect(Path(argv[argv.index("--plugin-dir") + 1]).resolve() == (folder / "plugin").resolve(), "the shadow plugin")
-        expect(first["nested"] == [], f"Claude Code markers removed: {first['nested']}")
+        # Only the runner's own setting may reach a worker (it waits for its actor).
+        expect(first["nested"] == ["CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS"],
+               f"Claude Code markers removed: {first['nested']}")
         expect(first["backend"] == f"http://127.0.0.1:{srv.port}", "backend passed to workers")
         expect(count_requests("/runs/next", "POST") >= 1, "asked for the next wave")
         shown = result_text(call_tool(own, "study_status", {"study_id": STUDY_ID}))
@@ -3316,6 +3412,11 @@ CASES = [
     ("start_run maps pool_id -> poolId + logs it", case_21_start_run_pool_id),
     ("start_run aborts when backend ignores poolId", case_22_start_run_pool_not_honored),
     ("status tolerates legacy persona_id run-log entries", case_22b_status_tolerates_legacy_run_log),
+    ("status hides runs recorded against another backend", case_22c_status_hides_runs_from_another_backend),
+    ("status hides runs another account made on this machine", case_22d_status_hides_runs_from_another_account),
+    ("start_run retries once after a proxy timeout", case_10b_start_run_retries_once_after_a_proxy_timeout,
+     {"ARCHETYPE_RUN_RETRY_WAIT": "0.1"}),
+    ("start_run does not retry a client error", case_10c_start_run_does_not_retry_a_client_error),
     ("create_feature POSTs title+fields, returns id", case_23_create_feature),
     ("create_feature sends the test target", case_23b_create_feature_with_target),
     ("create_feature warns when the backend drops the target", case_23c_create_feature_old_backend_drops_target),
@@ -3333,6 +3434,8 @@ CASES = [
     ("cancelled call sends no reply; ping works", case_32_cancelled_call_gets_no_reply),
     ("non-object JSON body is an error, not a crash", case_33_non_object_json_body),
     ("login modal leads with the code and the URL", case_34_login_modal_leads_with_code_and_url),
+    ("expired login renews with the refresh token", case_34b_expired_login_renews_with_refresh_token, LOGIN_FAST),
+    ("rejected refresh token falls back to the browser", case_34c_rejected_refresh_token_falls_back_to_browser, LOGIN_FAST),
     ("login resumes after a modal that could not render", case_35_login_resumes_when_modal_unavailable, LOGIN_FAST),
     ("login modal never answered: bounded, resumable", case_36_login_modal_never_answered, LOGIN_FAST),
     ("login accepted before approving: bounded, resumable", case_37_login_accepted_before_approving, LOGIN_FAST),

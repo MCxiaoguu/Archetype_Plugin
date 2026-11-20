@@ -11,8 +11,8 @@
 **Authoritative spec:** `docs/superpowers/specs/2026-07-22-plugin-backend-pipeline-design.md` (same repo). Section references (§) below point there. Subsystem maps with file:line references: `docs/notes/*.md`.
 
 **Repos & conventions:**
-- Backend work in `/Users/hanyanggu/Personal_Files/Coding/Archetype_all/Archetype_Core/Archetype_Backend` (`BE` below). Run tests from `BE` with `uv run python -m pytest _tests/<file> -v` (NEVER system python — Atlas TLS breaks). Tests hit real services (repo convention, no mocks): Mongo Atlas + Gemini keys already in `BE/.env` (auto-loaded via dotenv).
-- Plugin work in `/Users/hanyanggu/Personal_Files/Coding/Archetype_all/Archetype_Plugins` (`PL` below). Stdlib-only Python for the MCP server.
+- Backend work in `<workspace>/Archetype_Backend` (`BE` below). Run tests from `BE` with `uv run python -m pytest _tests/<file> -v` (NEVER system python — Atlas TLS breaks). Tests hit real services (repo convention, no mocks): Mongo Atlas + Gemini keys already in `BE/.env` (auto-loaded via dotenv).
+- Plugin work in `<workspace>/Archetype_Plugins` (`PL` below). Stdlib-only Python for the MCP server.
 - Both repos commit to `main`, small commits per task, message style: short imperative summary (see `git log`), trailer `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>`.
 - Endpoint tests use the dev auth bypass: env `DEV_MODE=1`, `FLASK_ENV` unset, identity via `X-User-Id` header (`infrastructure/auth/jwt_validator.py:25-43`).
 - Test user ids in Mongo-touching tests: prefix `plugintest-` + uuid, so cleanup is targeted; each test cleans up its own docs in teardown (delete by user_id).

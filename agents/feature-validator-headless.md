@@ -66,7 +66,7 @@ your only window onto the product.
    failed and its error. For a plugin server the usual causes are Node 18 or
    newer missing, no network access to npm, or no browser at all (the server
    uses Google Chrome, else Playwright's bundled Chromium; its error says so,
-   and `npx playwright install chromium` installs one). For a
+   and `npx playwright install chromium` installs one, with `--with-deps` on Linux). For a
    self-registered one: `claude mcp add playwright -- npx -y @playwright/mcp@0.0.84 --headless --isolated`
    and a session restart. There is no run yet, so there is nothing to report.
 3. **Start the run.** Claim mode (a `run_id` was given): call `start_run`
