@@ -1,0 +1,43 @@
+{
+  "name": "archetype",
+  "description": "Synthetic Archetype for Claude Code: test your product as if your customers were sitting beside you. Persona runs and behavioral studies in isolated browsers, with faithful, structured feedback.",
+  "owner": {
+    "name": "Synthetic Archetype",
+    "url": "https://www.syntheticarchetype.com"
+  },
+  "plugins": [
+    {
+      "name": "archetype",
+      "displayName": "Archetype",
+      "source": {
+        "source": "url",
+        "url": "https://github.com/MCxiaoguu/Archetype_Plugin.git"
+      },
+      "description": "Test your product with synthetic personas. Run one persona through a flow in a real browser, or run a behavioral study: the plugin picks the behavioral factors that matter for your users (patience, trust, familiarity and more), generates an archetype per factor plus a baseline and a stress case, runs them in parallel isolated headless browsers with a video per run, and reports completion per archetype, which factor made people give up, with what confidence, and what to change.",
+      "author": {
+        "name": "Synthetic Archetype",
+        "url": "https://www.syntheticarchetype.com"
+      },
+      "homepage": "https://www.syntheticarchetype.com",
+      "repository": "https://github.com/MCxiaoguu/Archetype_Plugin",
+      "category": "testing",
+      "keywords": [
+        "behavioral-studies",
+        "browser-automation",
+        "feedback",
+        "personas",
+        "playwright",
+        "testing",
+        "user-testing",
+        "ux",
+        "validation"
+      ],
+      "tags": [
+        "product-testing",
+        "synthetic-users",
+        "qa"
+      ],
+      "version": "0.6.0"
+    }
+  ]
+}

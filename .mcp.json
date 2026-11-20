@@ -1,0 +1,54 @@
+{
+  "mcpServers": {
+    "archetype-browser-1": {
+      "type": "stdio",
+      "command": "python3",
+      "args": [
+        "${CLAUDE_PLUGIN_ROOT}/scripts/browser-server.py",
+        "archetype-browser-1"
+      ]
+    },
+    "archetype-browser-2": {
+      "type": "stdio",
+      "command": "python3",
+      "args": [
+        "${CLAUDE_PLUGIN_ROOT}/scripts/browser-server.py",
+        "archetype-browser-2"
+      ]
+    },
+    "archetype-browser-3": {
+      "type": "stdio",
+      "command": "python3",
+      "args": [
+        "${CLAUDE_PLUGIN_ROOT}/scripts/browser-server.py",
+        "archetype-browser-3"
+      ]
+    },
+    "archetype-browser-4": {
+      "type": "stdio",
+      "command": "python3",
+      "args": [
+        "${CLAUDE_PLUGIN_ROOT}/scripts/browser-server.py",
+        "archetype-browser-4"
+      ]
+    },
+    "archetype-watch-1": {
+      "type": "stdio",
+      "command": "python3",
+      "args": [
+        "${CLAUDE_PLUGIN_ROOT}/scripts/browser-server.py",
+        "archetype-watch-1",
+        "--headed"
+      ]
+    },
+    "archetype-watch-2": {
+      "type": "stdio",
+      "command": "python3",
+      "args": [
+        "${CLAUDE_PLUGIN_ROOT}/scripts/browser-server.py",
+        "archetype-watch-2",
+        "--headed"
+      ]
+    }
+  }
+}

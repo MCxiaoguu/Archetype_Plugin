@@ -1,0 +1,86 @@
+---
+name: validate-feature
+description: Feature-first entry into an Archetype validation run. Use when the user asks to validate, test, or run validation on a specific saved feature by name (e.g. "validate the signup feature"). Resolves the feature via list_features, then runs the same actor loop as the validation skill with the feature's id attached.
+---
+
+# Validate Feature
+
+This is the **feature-first** doorway into a validation run. Instead of the
+user handing you a goal, they name a saved feature; you look it up, match it,
+and then run the standard actor loop with that feature's id set.
+
+The run loop itself is identical to the `validation` skill — do not duplicate
+it here. This skill only covers how to resolve the feature and the deltas.
+
+## Workflow
+
+### 1. Resolve the feature
+
+Call the `list_features` tool from the `core` MCP server. Pass
+`$ARGUMENTS` as the `query` (an optional case-insensitive title filter). The
+tool returns a list of features, each with an `_id`, `title`, and `updatedAt`.
+
+- **Exact/clear single match** → use that feature's `_id` as `feature_id`.
+- **Multiple plausible matches or ambiguous input** → show the candidates to
+  the user and ask which one they mean. Never guess.
+- **No match** → show what exists (or none), then offer to create it right
+  here: one confirmation, then `create_feature` with a title and one-line
+  description distilled from what they said (ask only for what you can't
+  infer), plus the `url` (and a `goal` if they stated one) so later runs
+  need no questions, and continue the run with the new feature's `_id`. Don't make the
+  user go elsewhere first.
+- Auth is self-healing: if the session isn't connected, the tool itself opens
+  the login modal and then completes the request — do not pre-call `login`.
+  A "Not connected" error only comes back if the user declined the login;
+  surface it and stop.
+
+### 2. Settle the target URL
+
+`list_features` prints a feature's saved test target under it (`url:`,
+`goal:`, `done when:`) when it has one.
+
+- **The feature has a saved url** → do not ask. Leave `url` out of
+  `start_run`; the backend opens the feature's own start page. If the user
+  gave a `url=<...>` token anyway, pass it: a bare site address (with any
+  query string, such as a run label) still lands on the feature's start
+  page, and a deeper path wins.
+- **No saved url** and no `url=<...>` token in `$ARGUMENTS` → ASK the user
+  for the product URL. Never guess a URL. When they answer, offer once to
+  save it on the feature for next time (`create_feature` is for new
+  features only; for an existing one, tell them they can set it in the web
+  app's feature page).
+
+### 3. Run the standard actor loop
+
+Now follow the **Validation run flow** from the `validation` skill, with these
+deltas:
+
+- When you call `start_run`, pass `feature_id` set to the resolved feature's
+  `_id`, and `url` only when step 2 settled one. The **goal is optional**:
+  the backend uses the feature's saved goal, else its description. Only
+  pass a `goal` if the user gave you extra free-text intent to layer on top.
+- Tester/persona intent in `$ARGUMENTS` (a `pool=<...>` token, a pool's
+  name, or a description) works here too — run the `validation` skill's pool
+  resolution (list_pools → match name case-insensitively, archetype-name
+  fallback → confirm; several matches → list candidates and ask, never
+  guess) and pass the confirmed id as `pool_id`. Warn at kickoff that
+  spinning off a fresh tester from the pool adds up to ~a minute before the
+  browser session starts.
+- Preconditions in `$ARGUMENTS` work here too — context the tester BEARS on
+  arrival (provisioned accounts/credentials, "your own X" phrasing, prior
+  knowledge or state), split from the goal per the `validation` skill's
+  goal-vs-preconditions guidance. Pass them to `start_run` verbatim as
+  `preconditions` (a list of strings); the persona elaborates unspecified
+  specifics in character — never asked back, never skipped.
+- Everything else is the same as the `validation` skill: the run executes in
+  a freshly launched `feature-validator` agent (dispatch prompt carries only
+  goal/url/`feature_id`/`pool_id` + the pool's display name +
+  `preconditions` — no dev context), and you relay its report (scenario
+  verdict table, findings by severity, persona quote, run id, and the
+  `/archetype:check-run-status <run_id>` follow-up).
+
+## Boundaries
+
+- Never invent feature ids — every id must come from `list_features`.
+- Never simulate the backend or fabricate steps/results. Runs come only from
+  `start_run`; results go only through `report_result`, exactly once.

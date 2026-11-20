@@ -1,0 +1,294 @@
+---
+name: validation
+description: The core Archetype actor loop. Use for the /archetype:validation command. With no arguments, connects the session to Archetype (login wizard). With arguments, parses the natural language into one or MORE run objects (goal, url, pool, feature, preconditions) — comparison phrasing like "as <pool A> and as <pool B>" fans out into multiple runs. Every run executes in a freshly launched feature-validator agent (zero dev context) and multi-run output is a cross-pool comparison report.
+---
+
+# Validation
+
+You are responding to the `/archetype:validation` command. This skill is the
+**actor** in the Archetype pipeline: the backend hands you a persona and a set
+of test scenarios, and you drive a real browser through the product under test
+*as that persona*, then report what happened. When a run targets a persona
+pool, the backend spins off one fresh tester from the pool's distribution and
+that member is the persona you become.
+
+Branch on `$ARGUMENTS`:
+
+- **Empty `$ARGUMENTS`** → run the **Login wizard** (below) and stop. (The
+  canonical onboarding command is `/archetype:setup`; this branch is kept so
+  a bare `/archetype:validation` still connects.)
+- **`$ARGUMENTS` carries `--run <run_id>`** → run the **Claim a study run**
+  flow (below): the run already exists, so there is no intake.
+- **Other non-empty `$ARGUMENTS`** → run the **Validation run flow** (below).
+
+Never simulate the backend, invent run/persona data, or fabricate steps and
+results. Everything you report must come from what you actually observed in the
+browser, and every run must be created by the `start_run` tool.
+
+---
+
+## Login wizard
+
+Invoke the `login` tool from the `core` MCP server (its full tool
+name in your tools list ends with `__login`). The tool encapsulates the entire
+connection flow — cached-token check, device-code request, browser launch,
+elicitation modal, polling, and the on-disk token save — in a single call.
+
+Steps for you (Claude):
+
+1. Locate the `login` tool from `core` in your available tools. The
+   `core` tools may be deferred; if so, load them first with
+   ToolSearch (query `select:mcp__plugin_archetype_core__login`).
+2. Call it with an empty arguments object — no parameters.
+3. **On success**: report the tool's response verbatim (it will say either
+   "already connected as X" or "connected and token saved at <path>").
+4. **On cancellation, timeout, or error**: surface the error verbatim and ask
+   whether the user wants to retry.
+
+Do not ask the user to paste anything in chat. Do not try to shortcut or
+simulate the device flow. The MCP elicitation modal + browser approval is the
+only authorized path.
+
+---
+
+## Claim a study run
+
+`/archetype:validation --run <run_id> [browser=<name>]` executes one run
+that a study created in advance (`/archetype:study`, or the swarm runner).
+The persona, scenarios, behavior rules and success criterion all come with
+the run when the actor claims it, so there is nothing to parse or confirm.
+
+1. Make sure the session is connected (call `status`; if it reports a
+   missing or expired token, run `login` here). In an unattended session
+   with no way to log in, report that and stop.
+2. Pick the actor from `browser=`: `chrome` → `feature-validator` (with the
+   Chrome preflight of step 2 below); any other value, or none →
+   `feature-validator-headless`. One run, one actor.
+3. Dispatch it with ONLY the run id and the browser name, for example:
+   "Claim and execute Archetype run `<run_id>`. Your browser is
+   `<name>`." Nothing about the product, the study or other runs: the actor
+   learns who it is from `start_run`.
+4. Relay its report (step 3 below, single run). If the actor says the run
+   could not be claimed, say so in one line and stop: another actor owns it
+   or it already ran. Never retry a claim on your own.
+
+---
+
+## Validation run flow
+
+Run this when `$ARGUMENTS` is non-empty. Follow the steps in order.
+
+### 1. Intake: parse `$ARGUMENTS` into a RUN LIST with judgment, then confirm
+
+`$ARGUMENTS` is natural language, not a token grammar — you are the parser,
+so parse like one intelligent reader, not a regex. The output of intake is a
+**list of run objects**, each:
+
+```jsonc
+{ "goal": "...", "url": "...", "pool": "<intent or null>", "feature": "<name or null>", "preconditions": ["<context the tester bears>", ...] }
+```
+
+| field | what to look for |
+| :-- | :-- |
+| `goal` | what to test — the free text minus everything captured below |
+| `url` | a `url=<...>` token or any URL in the text |
+| `pool` | ANY tester/persona intent: a `pool=<...>` token, a saved pool's name ("as <name>", "with <name>"), or a description ("as cautious non-technical first-timers", "from the perspective of ...") |
+| `feature` | a named saved feature (prefer the `validate-feature` skill when feature-first) |
+| `preconditions` | context the tester BEARS on arrival: provisioned accounts/credentials ("staging login: X/Y"), "your own X" phrasing ("with your own suite of endpoints"), prior knowledge or state. Not the goal. |
+
+**Goal vs preconditions.** Split the free text into the GOAL (the outcome the
+run evaluates) and PRECONDITIONS (context the tester carries on arrival).
+Canonical example: "test Relay with your own suite of endpoints" → the goal
+is evaluating Relay; the precondition is that the tester owns a suite of
+endpoints — something THEY know about even though the prompt doesn't say what
+the endpoints are. Preconditions pass to `start_run` verbatim (a list of
+strings); specifics a precondition implies but doesn't state are elaborated
+by the persona in-character during the run — never asked back to the user,
+never skipped.
+
+**One command can mean several runs.** Comparison or fan-out phrasing
+produces one object per combination the user actually means:
+
+- "as <name A> **and** as <name B>" / "compare <name A> vs <name B>" → 2 runs, same
+  goal+url, different pools.
+- "with each of my pools" / "with each of my personas" → resolve via
+  `list_pools`, one run per pool (confirm the count before starting).
+- "on staging and on prod" (two URLs) → one run per URL.
+- Unmentioned fields are SHARED: one url + two pools → both objects carry
+  that url. Comparison runs share `preconditions` too, unless the user gives
+  per-pool ones. Don't multiply dimensions the user didn't ask to cross.
+
+A single-intent command is simply a list of one — behavior unchanged.
+
+**Pool resolution** (for every distinct tester intent in the list — name
+OR description; call `list_pools` once and reuse it):
+
+1. Call `list_pools` so you know what actually exists.
+2. Match the intent against the real pools — case-insensitively on the
+   pool's name, falling back to its archetype name (the `archetype:` line
+   in the tool output, from `metadata.primary_archetype_name`), or best
+   description fit.
+3. Propose the match conversationally before using it: "I found
+   **<name>** (<one-line description>) — largely fits your description.
+   Test with a member of that pool, or create a new pool?" **Several pools
+   matching the same name → list the candidates (name · description ·
+   created) and ask the user to pick — never guess.**
+4. **None plausible → create from blank, right here.** One confirmation:
+   "No existing pool fits — create one from your description and run
+   with it?" On yes, call `create_pool` directly with their description
+   as the `vibe_prompt` (plus whatever controls their words imply, and a
+   short `name`) — skip previews unless they ask to see options — then
+   continue the run with the fresh pool's id. Never dead-end the user into
+   a separate command; `/archetype:persona` is for when they want the full
+   guided flow.
+5. Only a pool the user confirmed becomes `pool_id`. NEVER silently drop
+   tester intent into the goal text, and never guess between candidates.
+
+**Feature resolution**: a named feature that doesn't exist gets the same
+treatment — offer to create it on the spot (`create_feature` with a title
+and a one-line description distilled from their words; ask only for what
+you genuinely can't infer), then run with the new `feature_id`.
+
+**Confirm before starting**: present the run list as a table (one row per
+run: goal · url · pool · feature · preconditions). Single run with every field explicit
+and unambiguous → proceed straight away, stating the row as what you're
+about to do. Anything missing (a URL is required — never guess one),
+inferred, or fuzzy-matched → ask about exactly those fields first — one
+compact question, not an interrogation. **Multiple runs → always confirm the
+list once** (they each cost real minutes) before starting. When a run
+targets a pool, warn at kickoff that spinning off a fresh tester adds up to
+~a minute before the browser session starts.
+
+### 2. Execute every run in a FRESH agent
+
+The persona must be performed by a **newly launched agent with no dev
+context**. An actor that has read this session's code, plans, or prior
+findings cannot get lost the way a real user does — it "knows" where the
+buttons are and unconsciously routes around known bugs. Never run the actor
+loop in the main session (one exception below).
+
+For the confirmed run list (one run or many):
+
+1. Make sure the session is connected FIRST — subagents cannot render the
+   login modal. Pool/feature resolution during intake already self-heals
+   auth in the main session; if intake made NO authed call (e.g. a plain
+   goal+url run), call `status` now, and if it reports a missing or expired
+   token, run the `login` tool here in the main session before dispatching.
+2. **Browser preflight, before any run exists.** `start_run` creates a run
+   server-side and, for a pool run, spins a new tester into the pool. Doing
+   that for a session that cannot open a page wastes both, so prove the
+   browser works first: load the Claude-in-Chrome tools (ToolSearch, query
+   `claude-in-chrome`) and call `tabs_context_mcp` once. If the tools are
+   missing or the call reports no connected browser, STOP: dispatch nothing,
+   call `start_run` for nothing, and tell the user what to fix, in this order:
+   - Chrome is running with the Claude extension installed and signed in to
+     the same account as this session.
+   - Claude Code was started with `claude --chrome`, or `/chrome` shows the
+     browser as connected.
+   - The computer is unlocked. With the screen locked the extension
+     disconnects, and computer use cannot stand in for it: it can watch a
+     browser but not drive one.
+   Then offer to retry. One check covers the whole run list. When Chrome
+   is connected, say once, in one line, that the run uses the user's real
+   Chrome profile (their logins, cookies and extensions), so the tester
+   arrives as them rather than as a new visitor; `/archetype:study` runs
+   isolated headless browsers instead.
+
+   **Headless fallback.** Chrome is the default for ad hoc runs because the
+   user can watch it. When it is not available, or the user asked for a
+   headless or unattended run, use the plugin's own isolated browser
+   instead: ToolSearch
+   `select:mcp__plugin_archetype_archetype-browser-1__browser_navigate`. If it
+   is there, use the `feature-validator-headless` agent for every run in the
+   list, telling each one "Your browser is `archetype-browser-1`", and say so
+   in one line ("Chrome is not connected, running headless on an isolated
+   Playwright browser"). If the plugin browsers are missing (an older plugin
+   build), check for a Playwright server the user registered themselves
+   (`select:mcp__playwright__browser_navigate`) and tell those actors "Your
+   browser is `playwright`". If neither is available, stop as above: the
+   plugin browsers need Node 18 or newer and Google Chrome, or Playwright's bundled Chromium (`npx playwright install chromium`). Never
+   install anything yourself and never switch browsers mid-list.
+3. Dispatch the chosen actor agent (`feature-validator`, or
+   `feature-validator-headless` per the preflight) once per run object. The dispatch
+   prompt carries ONLY the run's resolved fields — goal, url, `feature_id`,
+   `pool_id` plus the pool's display name (for the agent's sanity check
+   against the brief), `preconditions` verbatim (the agent passes the
+   list unchanged to `start_run`), and for a headless actor the one line
+   naming its browser. Deliberately include nothing else: no product
+   background, no known issues, no prior run results — a clean actor is the
+   point.
+
+   **Labels in the URL must be opaque.** Pass the url exactly as the user
+   gave it: query parameters can carry attribution the site under test or
+   a harness needs (for example `?twin_label=...`), so never strip or
+   rewrite them. But the actor reads that URL, so a parameter value that
+   describes the test gives the test away: in a 2026-09-24 stress run the
+   actor saw `twin_label=chaos-trickle-start` and concluded a stalled
+   backend was deliberate. When a query value reads like a description of
+   the test, its expected outcome or an injected fault (`chaos-...`,
+   `slow-backend`, `expect-fail`, `bug-...`), say so once when you confirm
+   the run list and suggest an opaque value such as a short random id; use
+   whatever the user decides. In an unattended session, run it as given.
+   Never explain, paraphrase or comment on query parameters in the dispatch
+   prompt.
+4. Multiple runs execute **sequentially**: the agents share one Chrome;
+   parallel dispatch makes them fight over the browser.
+5. If a run comes back with the "backend did not honor the pool" error,
+   stop the remaining pool-selected runs (they will fail the same way)
+   and surface it once.
+6. If a run comes back with "did not finish answering" (the backend missed
+   its deadline), no run was created for this session. Tell the user and
+   offer one retry, but dispatch it only if the user says yes: never retry
+   on your own, and never ask the actor to retry `start_run` itself (the
+   actor stops after one deadline by design). For a pool run that times out
+   twice, offer to run without the pool instead of retrying again. In an
+   unattended session with nobody to answer, do not retry: report the
+   failure and stop.
+
+The full actor loop (become the persona, drive the browser, keep the step
+log, `report_result` exactly once) is defined in the `feature-validator`
+agent: that file is the single source of truth for run execution.
+`feature-validator-headless` is the same procedure on a different browser,
+and `scripts/test_agents_in_sync.py` keeps the two from drifting.
+
+**Watch-live exception**: only if the user explicitly asks to watch the
+persona act live, run the loop inline in the main session by following the
+`feature-validator` operating procedure verbatim — and tell the user the
+trade-off first: an in-session actor carries dev context and gives less
+faithful feedback.
+
+### 3. Render the report
+
+Relay the agent's report; don't re-investigate it. Single run:
+
+- A **scenario verdict table**: scenario id · title · status
+  (pass/fail/blocked) · actualResult (what actually happened, in a few
+  words).
+- **Findings by severity** (critical first), each with category and a
+  one-line description, plus its evidence quote when it has one.
+- The **persona quote** (`personaReaction`) as a pull-quote.
+- The **run id**, the **web app link** to the full report with screenshots,
+  and "Check status later with `/archetype:check-run-status <run_id>`."
+
+Multiple runs get a **comparison report**, not N stacked reports:
+
+- Header: one row per run — tester (and the pool they were spun from) ·
+  verdict · run id.
+- Scenario outcomes side by side where scenarios align.
+- Findings split into "hit by all testers" vs "only <name> hit this" (the
+  per-pool deltas are the interesting part).
+- Each tester's reaction quote.
+- Close with the web app link and `/archetype:check-run-status <run_id>` per
+  run.
+
+---
+
+## Boundaries (always)
+
+- Never simulate the backend or invent run data. Runs come only from
+  `start_run`; results go only through `report_result`.
+- Exactly one SUCCESSFUL `report_result` call per run: retry on error, never
+  re-send after a success confirmation.
+- The persona actor is always a freshly launched `feature-validator` agent —
+  inline execution only on the user's explicit ask to watch live.
+- Everything you report must reflect what you actually did in the browser.

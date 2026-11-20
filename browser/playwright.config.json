@@ -1,0 +1,15 @@
+{
+  "browser": {
+    "isolated": true,
+    "contextOptions": {
+      "recordVideo": {
+        "dir": "<set at launch: ${CLAUDE_PLUGIN_DATA}/browser/<server>/videos>",
+        "size": {
+          "width": 1280,
+          "height": 900
+        }
+      }
+    }
+  },
+  "webmcp": false
+}
