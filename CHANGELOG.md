@@ -25,6 +25,12 @@ every command in the guide against a fresh account.
 - Unattended workers wait for their actor. `claude -p` stops background
   subagents 10 minutes after its last turn, so a study run longer than
   that was cut off and aborted.
+- A new account's first `start_run` can outlast the 100 s proxy while its
+  persona is generated (seen in a production trial as a Cloudflare timeout).
+  `start_run` now sends a `clientRequestId` and, after a proxy timeout or the
+  backend's `run_assembly_timeout`, waits 20 s and retries once with the same
+  id, which returns the run the first request made instead of a second one
+  (needs Archetype_Backend's `clientRequestId` support).
 - The session start hook downloads the pinned browser server once in the
   background, so the first validation does not wait on npm.
 - Notes and e2e scripts no longer carry a developer's home folder paths

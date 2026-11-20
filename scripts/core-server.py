@@ -58,6 +58,7 @@ import tempfile
 import threading
 import time
 import urllib.error
+import uuid
 import urllib.parse
 import urllib.request
 import webbrowser
@@ -94,6 +95,13 @@ def _env_seconds(name: str, default: float) -> float:
 # The synchronous run-assembly endpoint runs the persona/scenario LLM chain,
 # which the MCP server tolerates for up to ~90 s; give it generous headroom.
 RUN_TIMEOUT = _env_seconds("ARCHETYPE_RUN_TIMEOUT", 180)
+# A new account's first run generates its persona, which can outlast the 100 s
+# proxy in front of the API. The backend keeps going and caches the persona, so
+# start_run waits this long and retries once with the same clientRequestId,
+# which returns the run the first request made rather than a second one.
+RUN_RETRY_WAIT = _env_seconds("ARCHETYPE_RUN_RETRY_WAIT", 20)
+# Proxy and gateway answers that mean "the backend did not answer in time".
+_RUN_RETRY_STATUSES = {502, 503, 504, 520, 522, 524}
 
 # Result ingestion can carry multi-MB screenshot payloads; the default 15 s
 # risks a client-side timeout after the server already stored the results,
@@ -1714,6 +1722,16 @@ def handle_claim_run(arguments: dict[str, Any], browser: dict[str, Any] | None) 
     return tool_text(_render_run(resp, _as_precondition_list(arguments.get("preconditions"))))
 
 
+def _run_create_timed_out(status: int, resp: dict[str, Any]) -> bool:
+    """True when the proxy or the backend gave up on creating the run, so
+    one retry with the same clientRequestId is safe. Not for the plugin's own
+    deadline: that already waited RUN_TIMEOUT, and its advice says what next."""
+    return (
+        status in _RUN_RETRY_STATUSES
+        or resp.get("error") == "run_assembly_timeout"
+    )
+
+
 def handle_start_run(arguments: dict[str, Any]) -> dict[str, Any]:
     name = arguments.get("browser")
     try:
@@ -1752,12 +1770,20 @@ def handle_start_run(arguments: dict[str, Any]) -> dict[str, Any]:
     body = {k: v for k, v in body.items() if v is not None}
     if preconditions:
         body["preconditions"] = preconditions
+    body["clientRequestId"] = uuid.uuid4().hex
 
-    result = authed_call(
-        lambda token: backend_post(
-            "/api/plugin/runs", body, auth_token=token, timeout=RUN_TIMEOUT
+    def create() -> tuple[int, dict[str, Any]] | str:
+        return authed_call(
+            lambda token: backend_post(
+                "/api/plugin/runs", body, auth_token=token, timeout=RUN_TIMEOUT
+            )
         )
-    )
+
+    result = create()
+    if not isinstance(result, str) and _run_create_timed_out(*result):
+        log(f"start_run: no answer in time ({result[0]}); retrying once in {RUN_RETRY_WAIT:g} s")
+        time.sleep(RUN_RETRY_WAIT)
+        result = create()
     if isinstance(result, str):
         return not_connected(result)
     status, resp = result

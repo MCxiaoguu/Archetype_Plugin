@@ -951,7 +951,9 @@ def case_2_start_run_happy(srv: ServerProc, data_dir: Path) -> None:
         req["headers"].get("Authorization") == "Bearer test-token-123",
         f"missing/incorrect bearer: {req['headers'].get('Authorization')}",
     )
-    body = req["body"]
+    body = dict(req["body"])
+    expect(re.fullmatch(r"[0-9a-f]{32}", str(body.pop("clientRequestId", ""))) is not None,
+           "every start_run carries a fresh clientRequestId (its retry key)")
     expect(body == {"goal": "test signup", "url": "http://localhost:8321"},
            f"body must be exactly camelCase goal+url, got {body}")
     assert_no_snake_case(body, "start_run body")
@@ -1383,7 +1385,7 @@ def case_8c_start_run_with_feature_only(srv: ServerProc, data_dir: Path) -> None
     write_auth(data_dir)
     result = call_tool(srv, "start_run", {"feature_id": "f-twin-3"})
     expect(not result.get("isError"), f"feature-only start_run errored: {result}")
-    body = STATE.last_for("/api/plugin/runs")["body"]
+    body = {k: v for k, v in STATE.last_for("/api/plugin/runs")["body"].items() if k != "clientRequestId"}
     expect(body == {"featureId": "f-twin-3"}, f"no url sent when none given, got {body}")
 
 
@@ -1837,6 +1839,28 @@ def case_22d_status_hides_runs_from_another_account(srv: ServerProc, data_dir: P
     text = result_text(call_tool(srv, "status", {}))
     contains(text, "my-run", "this account's run is listed")
     expect("their-run" not in text, f"another account's run must be hidden, got {text!r}")
+
+
+def case_10b_start_run_retries_once_after_a_proxy_timeout(srv: ServerProc, data_dir: Path) -> None:
+    """A first run that outlasts the proxy: one retry with the same request id."""
+    write_auth(data_dir)
+    STATE.once_overrides["/api/plugin/runs"] = (524, {"error": "invalid_response_body",
+                                                      "message": "A timeout occurred"})
+    result = call_tool(srv, "start_run", {"goal": "g", "url": "http://x"})
+    expect(not result.get("isError"), f"the retry should succeed, got {result_text(result)!r}")
+    posts = [r for r in STATE.requests if r["path"] == "/api/plugin/runs" and r["method"] == "POST"]
+    expect(len(posts) == 2, f"exactly one retry, got {len(posts)} posts")
+    keys = {p["body"].get("clientRequestId") for p in posts}
+    expect(len(keys) == 1 and None not in keys, f"both posts carry the same request id, got {keys}")
+
+
+def case_10c_start_run_does_not_retry_a_client_error(srv: ServerProc, data_dir: Path) -> None:
+    write_auth(data_dir)
+    STATE.error_overrides["/api/plugin/runs"] = (400, {"error": "bad_request", "message": "goal is required"})
+    result = call_tool(srv, "start_run", {"goal": "g", "url": "http://x"})
+    expect(result.get("isError") is True, "a 400 is an error")
+    posts = [r for r in STATE.requests if r["path"] == "/api/plugin/runs" and r["method"] == "POST"]
+    expect(len(posts) == 1, f"no retry for a client error, got {len(posts)} posts")
 
 
 def case_23_create_feature(srv: ServerProc, data_dir: Path) -> None:
@@ -3390,6 +3414,9 @@ CASES = [
     ("status tolerates legacy persona_id run-log entries", case_22b_status_tolerates_legacy_run_log),
     ("status hides runs recorded against another backend", case_22c_status_hides_runs_from_another_backend),
     ("status hides runs another account made on this machine", case_22d_status_hides_runs_from_another_account),
+    ("start_run retries once after a proxy timeout", case_10b_start_run_retries_once_after_a_proxy_timeout,
+     {"ARCHETYPE_RUN_RETRY_WAIT": "0.1"}),
+    ("start_run does not retry a client error", case_10c_start_run_does_not_retry_a_client_error),
     ("create_feature POSTs title+fields, returns id", case_23_create_feature),
     ("create_feature sends the test target", case_23b_create_feature_with_target),
     ("create_feature warns when the backend drops the target", case_23c_create_feature_old_backend_drops_target),
