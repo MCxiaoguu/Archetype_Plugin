@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'preact/hooks';
+import { useEffect, useRef, useState } from 'preact/hooks';
 import type { AppState, Screen } from '../lib/state';
 import { toMain } from './bridge';
 import type { Effects } from './effects';
@@ -75,14 +75,23 @@ function Header({ state, store, fx }: { state: AppState; store: Store; fx: Effec
 function Toast({ state, store }: { state: AppState; store: Store }) {
   const n = state.notice;
   const inline = state.screen === 'signin' || state.screen === 'settings' || (state.screen === 'new' && n?.kind === 'error');
+  // The toast stays while the pointer or keyboard focus is on it, so there is time to read it.
+  const [held, setHeld] = useState(false);
   useEffect(() => {
-    if (!n || inline) return undefined;
+    if (!n || inline || held) return undefined;
     const id = setTimeout(() => store.dispatch({ type: 'notice', notice: null }), 5000);
     return () => clearTimeout(id);
-  }, [n, inline, store]);
+  }, [n, inline, held, store]);
   if (!n || inline) return null;
   return (
-    <div class={`toast toast-${n.kind}`} role={n.kind === 'error' ? 'alert' : 'status'}>
+    <div
+      class={`toast toast-${n.kind}`}
+      role={n.kind === 'error' ? 'alert' : 'status'}
+      onMouseEnter={() => setHeld(true)}
+      onMouseLeave={() => setHeld(false)}
+      onFocusIn={() => setHeld(true)}
+      onFocusOut={() => setHeld(false)}
+    >
       <span>{n.text}</span>
       <button type="button" class="toast-x" aria-label="Dismiss" onClick={() => store.dispatch({ type: 'notice', notice: null })}>
         ×
