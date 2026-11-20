@@ -762,11 +762,26 @@ def _refresh_login(auth_path: Path) -> str | None:
         return body["access_token"]
     log(f"refresh failed (status={status}, error={body.get('error')})")
     if status in (400, 401, 403):
-        saved.pop("refresh_token", None)
+        # Study workers are separate processes sharing this file, so another
+        # one may have renewed the login while this request was out (with
+        # rotation on, that is exactly why this refresh token was refused).
+        # Read the file again: use the login it holds now, and drop only the
+        # refresh token that was refused, never a newer file.
         try:
-            _write_private(auth_path, json.dumps(saved, indent=2) + "\n")
-        except Exception as exc:
-            log(f"could not drop the rejected refresh token: {exc}")
+            now = json.loads(auth_path.read_text())
+        except Exception:
+            return None
+        if not isinstance(now, dict):
+            return None
+        if now.get("access_token") and now.get("access_token") != saved.get("access_token"):
+            log("another process renewed the login; using its token")
+            return now["access_token"]
+        if now.get("refresh_token") == refresh_token:
+            now.pop("refresh_token", None)
+            try:
+                _write_private(auth_path, json.dumps(now, indent=2) + "\n")
+            except Exception as exc:
+                log(f"could not drop the rejected refresh token: {exc}")
     return None
 
 

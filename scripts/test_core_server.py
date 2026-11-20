@@ -2153,6 +2153,28 @@ def case_34c_rejected_refresh_token_falls_back_to_browser(srv: ServerProc, data_
     expect("refresh_token" not in saved, "the rejected refresh token is gone")
 
 
+def case_34d_refresh_refused_after_another_worker_renewed(srv: ServerProc, data_dir: Path) -> None:
+    """Two study workers share auth.json. One renews first; the other's
+    refresh token is then refused. It must use the login now on disk, not
+    write its old copy back over it or ask for a browser approval."""
+    write_auth_full(data_dir, refresh_token="rt-1")
+    STATE.error_overrides["/api/oauth/validate-token"] = (401, {"valid": False, "error": "invalid_token"})
+    STATE.error_overrides["/api/oauth/refresh"] = (403, {"error": "invalid_grant"})
+    STATE.delays["/api/oauth/refresh"] = 1.0
+    other = {"access_token": "other-worker-token", "refresh_token": "rt-2"}
+    timer = threading.Timer(0.3, lambda: (data_dir / "auth.json").write_text(json.dumps(other)))
+    timer.start()
+    try:
+        result = call_tool(srv, "login", {})
+    finally:
+        timer.cancel()
+    expect(not result.get("isError"), f"login should succeed, got {result_text(result)!r}")
+    expect(not srv.elicitations, "no login modal")
+    expect(count_requests("/api/oauth/device/code") == 0, "no device code requested")
+    saved = json.loads((data_dir / "auth.json").read_text())
+    expect(saved == other, f"the other worker's login is left as it is, got {saved}")
+
+
 def case_35_login_resumes_when_modal_unavailable(srv: ServerProc, data_dir: Path) -> None:
     """No modal (headless client): the tool hands back URL + code, and the
     next login call picks up the browser approval with no new modal."""
@@ -3436,6 +3458,7 @@ CASES = [
     ("login modal leads with the code and the URL", case_34_login_modal_leads_with_code_and_url),
     ("expired login renews with the refresh token", case_34b_expired_login_renews_with_refresh_token, LOGIN_FAST),
     ("rejected refresh token falls back to the browser", case_34c_rejected_refresh_token_falls_back_to_browser, LOGIN_FAST),
+    ("refused refresh after another worker renewed uses its login", case_34d_refresh_refused_after_another_worker_renewed, LOGIN_FAST),
     ("login resumes after a modal that could not render", case_35_login_resumes_when_modal_unavailable, LOGIN_FAST),
     ("login modal never answered: bounded, resumable", case_36_login_modal_never_answered, LOGIN_FAST),
     ("login accepted before approving: bounded, resumable", case_37_login_accepted_before_approving, LOGIN_FAST),

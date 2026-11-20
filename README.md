@@ -217,7 +217,7 @@ own servers.
 ### Tests
 
 ```bash
-python3 scripts/test_core_server.py     # stdio harness, stub backend, 111 cases
+python3 scripts/test_core_server.py     # stdio harness, stub backend, 117 cases
 python3 scripts/test_action_hook.py     # raw action capture
 python3 scripts/test_browsers.py        # lazy proxy, permission hook, swarm runner
 python3 scripts/test_agents_in_sync.py  # the two actors share one procedure

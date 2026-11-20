@@ -59,6 +59,9 @@ every command in the guide against a fresh account.
   backend rejects is dropped and the next login uses the browser. The
   session start nudge stays quiet while a refresh token is saved. Needs
   the Auth0 API to allow offline access, or Auth0 issues no refresh token.
+  When study workers sharing one login renew at the same moment, a worker
+  whose refresh token is refused uses the login another worker just saved
+  instead of writing its old copy back over it.
 - README: how to test a product behind a sign-in with a test account.
 
 ## Unreleased: Figma prototypes
