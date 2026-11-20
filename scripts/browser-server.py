@@ -55,7 +55,7 @@ CONFIG_TEMPLATE = ROOT / "browser" / "playwright.config.json"
 # Makes Figma prototypes readable and clickable; a no-op on every other site.
 INIT_SCRIPT = ROOT / "browser" / "figma-proto-init.js"
 HANDSHAKE_ID = "archetype-browser-init"
-START_TIMEOUT = float(os.environ.get("ARCHETYPE_BROWSER_START_TIMEOUT", "180"))
+START_TIMEOUT = float(os.environ.get("ARCHETYPE_BROWSER_START_TIMEOUT", "300"))
 # How long Playwright gets to close the browser (and write the videos) after
 # its stdin closes, before its process group is terminated, then killed.
 STOP_TIMEOUT = float(os.environ.get("ARCHETYPE_BROWSER_STOP_TIMEOUT", "15"))

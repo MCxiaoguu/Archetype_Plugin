@@ -19,6 +19,7 @@ HOOK = Path(__file__).resolve().parent / "session-hook.py"
 
 def run_hook(data_dir: str | None) -> tuple[int, str]:
     env = {k: v for k, v in os.environ.items() if k != "CLAUDE_PLUGIN_DATA"}
+    env["ARCHETYPE_NO_PREWARM"] = "1"
     if data_dir is not None:
         env["CLAUDE_PLUGIN_DATA"] = data_dir
     proc = subprocess.run(
@@ -35,6 +36,8 @@ def main() -> int:
         ("no access token", {"token_type": "Bearer"}, "not connected"),
         ("expired", {"access_token": "t", "saved_at": now - 90000, "expires_in": 86400}, "has expired"),
         ("expiring soon", {"access_token": "t", "saved_at": now - 86000, "expires_in": 86400}, "expires in about"),
+        ("expired, renewable with a refresh token",
+         {"access_token": "t", "refresh_token": "r", "saved_at": now - 90000, "expires_in": 86400}, ""),
         ("valid", {"access_token": "t", "saved_at": now, "expires_in": 86400}, ""),
         ("valid, no lifetime recorded", {"access_token": "t"}, ""),
     ]
@@ -54,8 +57,29 @@ def main() -> int:
     failures += not ok
     print(f"{'PASS' if ok else 'FAIL'}  CLAUDE_PLUGIN_DATA unset is silent")
 
+    # Prewarm: a fake npx records its arguments; it runs once per package.
+    with tempfile.TemporaryDirectory() as tmp:
+        bin_dir, data = Path(tmp) / "bin", Path(tmp) / "data"
+        bin_dir.mkdir(); data.mkdir()
+        log = Path(tmp) / "npx.log"
+        (bin_dir / "npx").write_text(f"#!/bin/sh\necho \"$@\" >> '{log}'\n")
+        (bin_dir / "npx").chmod(0o755)
+        env = {k: v for k, v in os.environ.items() if k not in ("CLAUDE_PLUGIN_DATA", "ARCHETYPE_NO_PREWARM")}
+        env.update(CLAUDE_PLUGIN_DATA=str(data), PATH=f"{bin_dir}{os.pathsep}{env.get('PATH', '')}")
+        for _ in range(2):
+            subprocess.run([sys.executable, str(HOOK)], env=env, capture_output=True, timeout=10)
+        deadline = time.time() + 5
+        while time.time() < deadline and not log.exists():
+            time.sleep(0.1)
+        time.sleep(0.3)
+        calls = log.read_text().splitlines() if log.exists() else []
+        pinned = json.loads((HOOK.parent.parent / "browser" / "pinned.json").read_text())["package"]
+        ok = calls == [f"-y {pinned} --help"]
+        failures += not ok
+        print(f"{'PASS' if ok else 'FAIL'}  browser package prewarmed once" + ("" if ok else f"\n        calls={calls}"))
+
     print("-" * 60)
-    print(f"{failures} FAILED" if failures else f"ALL PASS ({len(cases) + 1}/{len(cases) + 1})")
+    print(f"{failures} FAILED" if failures else f"ALL PASS ({len(cases) + 2}/{len(cases) + 2})")
     return 1 if failures else 0
 
 

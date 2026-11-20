@@ -51,21 +51,27 @@ import json
 import os
 import queue
 import re
+import socket
 import subprocess
 import sys
 import tempfile
 import threading
 import time
 import urllib.error
+import uuid
 import urllib.parse
 import urllib.request
 import webbrowser
 from pathlib import Path
 from typing import Any, Callable
 
+# Python 3.9 (the python3 that ships with macOS) raises socket.timeout, which
+# only became an alias of TimeoutError in 3.10, for a read that times out.
+_NET_TIMEOUTS = (TimeoutError, socket.timeout)
+
 PROTOCOL_VERSION = "2025-06-18"
 SERVER_NAME = "archetype-core"
-SERVER_VERSION = "0.6.0"
+SERVER_VERSION = "0.6.1"
 
 
 
@@ -89,6 +95,13 @@ def _env_seconds(name: str, default: float) -> float:
 # The synchronous run-assembly endpoint runs the persona/scenario LLM chain,
 # which the MCP server tolerates for up to ~90 s; give it generous headroom.
 RUN_TIMEOUT = _env_seconds("ARCHETYPE_RUN_TIMEOUT", 180)
+# A new account's first run generates its persona, which can outlast the 100 s
+# proxy in front of the API. The backend keeps going and caches the persona, so
+# start_run waits this long and retries once with the same clientRequestId,
+# which returns the run the first request made rather than a second one.
+RUN_RETRY_WAIT = _env_seconds("ARCHETYPE_RUN_RETRY_WAIT", 20)
+# Proxy and gateway answers that mean "the backend did not answer in time".
+_RUN_RETRY_STATUSES = {502, 503, 504, 520, 522, 524}
 
 # Result ingestion can carry multi-MB screenshot payloads; the default 15 s
 # risks a client-side timeout after the server already stored the results,
@@ -371,10 +384,10 @@ def _exchange(
     except urllib.error.HTTPError as exc:
         return exc.code, _parse_body(exc.read().decode())
     except urllib.error.URLError as exc:
-        if isinstance(exc.reason, TimeoutError):
+        if isinstance(exc.reason, _NET_TIMEOUTS):
             return 0, _deadline_body(req, timeout)
         return 0, {"error": "network_error", "message": str(exc.reason)}
-    except TimeoutError:
+    except _NET_TIMEOUTS:
         return 0, _deadline_body(req, timeout)
     except Exception as exc:  # pragma: no cover (defensive)
         return 0, {"error": "unexpected_error", "message": repr(exc)}
@@ -725,6 +738,53 @@ def perform_device_login(stale_token: str | None = None) -> tuple[str | None, st
         return _device_login_locked()
 
 
+def _refresh_login(auth_path: Path) -> str | None:
+    """Renew the login with the saved refresh token, without a browser.
+
+    Returns the new access token, or None when there is no refresh token or
+    the backend would not renew it. A refresh token the backend rejects
+    (revoked, expired) is dropped so the next login goes straight to the
+    browser. Works in subagents, which cannot show the login prompt.
+    """
+    try:
+        saved = json.loads(auth_path.read_text())
+    except Exception:
+        return None
+    refresh_token = saved.get("refresh_token") if isinstance(saved, dict) else None
+    if not refresh_token:
+        return None
+    status, body = backend_post("/api/oauth/refresh", {"refresh_token": refresh_token})
+    if status == 200 and body.get("access_token"):
+        if not body.get("refresh_token"):
+            body = dict(body, refresh_token=refresh_token)  # no rotation: keep the old one
+        _save_token(auth_path, body)
+        log("renewed the login with the saved refresh token")
+        return body["access_token"]
+    log(f"refresh failed (status={status}, error={body.get('error')})")
+    if status in (400, 401, 403):
+        # Study workers are separate processes sharing this file, so another
+        # one may have renewed the login while this request was out (with
+        # rotation on, that is exactly why this refresh token was refused).
+        # Read the file again: use the login it holds now, and drop only the
+        # refresh token that was refused, never a newer file.
+        try:
+            now = json.loads(auth_path.read_text())
+        except Exception:
+            return None
+        if not isinstance(now, dict):
+            return None
+        if now.get("access_token") and now.get("access_token") != saved.get("access_token"):
+            log("another process renewed the login; using its token")
+            return now["access_token"]
+        if now.get("refresh_token") == refresh_token:
+            now.pop("refresh_token", None)
+            try:
+                _write_private(auth_path, json.dumps(now, indent=2) + "\n")
+            except Exception as exc:
+                log(f"could not drop the rejected refresh token: {exc}")
+    return None
+
+
 def _device_login_locked() -> tuple[str | None, str]:
     if not BACKEND_IS_SAFE:
         # The flow sends no bearer token, but its last answer is the token.
@@ -735,6 +795,9 @@ def _device_login_locked() -> tuple[str | None, str]:
             "CLAUDE_PLUGIN_DATA is not set; cannot determine where to store credentials."
         )
     auth_path = Path(plugin_data) / "auth.json"
+    renewed = _refresh_login(auth_path)
+    if renewed:
+        return renewed, f"Connected to Archetype (login renewed). Token saved to {auth_path}."
     connected = (
         f"Connected to Archetype. Access token saved to {auth_path} (mode 0600).\n"
         "Next: /archetype:persona to meet your persona pools, or "
@@ -948,6 +1011,13 @@ def _save_run_log(entries: list[dict[str, Any]]) -> None:
 _run_log_lock = threading.Lock()
 
 
+def _current_account() -> str | None:
+    """The signed in account's id (the token's sub), read locally to keep one
+    account's run history off another's dashboard on a shared machine."""
+    token = load_token()
+    return _decode_jwt_claims(token).get("sub") if token else None
+
+
 def record_run_start(run_body: dict[str, Any], arguments: dict[str, Any]) -> None:
     entry = {
         "run_id": run_body.get("runId"),
@@ -956,6 +1026,8 @@ def record_run_start(run_body: dict[str, Any], arguments: dict[str, Any]) -> Non
         "url": arguments.get("url"),
         "feature_id": arguments.get("feature_id"),
         "pool_id": arguments.get("pool_id"),
+        "backend": BACKEND_BASE,
+        "account": _current_account(),
         "started_at": int(time.time()),
     }
     with _run_log_lock:
@@ -1665,6 +1737,16 @@ def handle_claim_run(arguments: dict[str, Any], browser: dict[str, Any] | None) 
     return tool_text(_render_run(resp, _as_precondition_list(arguments.get("preconditions"))))
 
 
+def _run_create_timed_out(status: int, resp: dict[str, Any]) -> bool:
+    """True when the proxy or the backend gave up on creating the run, so
+    one retry with the same clientRequestId is safe. Not for the plugin's own
+    deadline: that already waited RUN_TIMEOUT, and its advice says what next."""
+    return (
+        status in _RUN_RETRY_STATUSES
+        or resp.get("error") == "run_assembly_timeout"
+    )
+
+
 def handle_start_run(arguments: dict[str, Any]) -> dict[str, Any]:
     name = arguments.get("browser")
     try:
@@ -1703,12 +1785,20 @@ def handle_start_run(arguments: dict[str, Any]) -> dict[str, Any]:
     body = {k: v for k, v in body.items() if v is not None}
     if preconditions:
         body["preconditions"] = preconditions
+    body["clientRequestId"] = uuid.uuid4().hex
 
-    result = authed_call(
-        lambda token: backend_post(
-            "/api/plugin/runs", body, auth_token=token, timeout=RUN_TIMEOUT
+    def create() -> tuple[int, dict[str, Any]] | str:
+        return authed_call(
+            lambda token: backend_post(
+                "/api/plugin/runs", body, auth_token=token, timeout=RUN_TIMEOUT
+            )
         )
-    )
+
+    result = create()
+    if not isinstance(result, str) and _run_create_timed_out(*result):
+        log(f"start_run: no answer in time ({result[0]}); retrying once in {RUN_RETRY_WAIT:g} s")
+        time.sleep(RUN_RETRY_WAIT)
+        result = create()
     if isinstance(result, str):
         return not_connected(result)
     status, resp = result
@@ -3367,9 +3457,16 @@ def _render_study(study: dict[str, Any], lead: str) -> str:
     lines.append(f"\n(studyId for tool calls: {sid})")
     if checks and success.get("checksConfirmed") is False:
         lines.append(
-            "The check above was suggested by the backend. Ask the user to "
-            "confirm it (create_study with study_id and confirm_checks: true) "
-            "or to give their own (success_checks)."
+            "The check above was suggested by the backend and is a guess. Ask "
+            "the user to confirm it (create_study with study_id and "
+            "confirm_checks: true) or to give their own (success_checks), and "
+            "say what it needs in plain words: a text check passes only when "
+            "those exact words appear on the page where the task ends, so a "
+            "wrong guess marks every run as not completed. When the success "
+            "sentence is something the person finds out or decides rather than "
+            "a page that says so, offer the tester's own confirmation instead "
+            "(success_checks: [{type: actor_confirms, value: <the success "
+            "sentence>}])."
         )
     return "\n".join(lines)
 
@@ -4191,7 +4288,15 @@ def _token_expiry_line(auth: dict[str, Any]) -> str | None:
 
 
 def _recent_runs_lines() -> list[str]:
-    entries = load_run_log()
+    # Leave out runs recorded against another backend (a local one, staging),
+    # whose ids cannot be looked up from here, and runs another account made
+    # on this machine. Entries from before 0.6.1 record neither and still show.
+    account = _current_account()
+    entries = [
+        e for e in load_run_log()
+        if e.get("backend", BACKEND_BASE) == BACKEND_BASE
+        and (account is None or e.get("account", account) == account)
+    ]
     if not entries:
         return ["Recent runs (this machine): none recorded yet"]
     lines = ["Recent runs (this machine):"]
@@ -4364,8 +4469,8 @@ TOOLS: dict[str, dict[str, Any]] = {
                         "or state. Specifics a precondition implies but "
                         "doesn't state are invented by the persona in "
                         "character, never asked, never skipped. Example: "
-                        "'test Relay with your own suite of endpoints': the "
-                        "goal is evaluating Relay; the precondition is that "
+                        "'test the API console with your own suite of endpoints': "
+                        "the goal is evaluating the API console; the precondition is that "
                         "the tester owns endpoints, which THEY know even "
                         "though the prompt doesn't say what they are."
                     ),
